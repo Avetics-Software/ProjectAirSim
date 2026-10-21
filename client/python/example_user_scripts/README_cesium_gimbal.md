@@ -48,12 +48,16 @@ These are handled by `run_cesium_sim.sh`; everything else goes to
 | Option | Default | Meaning |
 |---|---|---|
 | `--vehicle quad\|vtol` | quad | Airframe. VTOL is not available with PX4 yet |
-| `--px4-params FILE` | | PX4 parameters applied at boot. Accepts `NAME VALUE` lines (like ArduPilot `.parm` files, `#` comments allowed) or a QGC `.params` export. Repeatable; later files win |
+| `--px4-params FILE` | | Extra PX4 parameters applied at boot, after `px4_params.parm`. Accepts `NAME VALUE` lines (like ArduPilot `.parm` files, `#` comments allowed) or a QGC `.params` export. Repeatable; later files win |
 | `--pi-ip IP` | | Also send MAVLink to a companion computer at `IP`, and announce the video at `rtsp://<this laptop's LAN IP>:8554/gimbal` |
 | `--pi-ports P1,P2` | 15540,15541 | Companion-computer MAVLink UDP ports (as `--serial1/2` in the old ArduPilot scripts) |
 
 The sim also sets `NAV_RCL_ACT`, `NAV_DLL_ACT` and `COM_OBL_RC_ACT` after PX4
 connects (no RC in simulation), so those three override your file.
+
+`px4_params.parm` (next to the launcher) is always applied first. It raises
+PX4's speed limits (18 m/s horizontal, 15 m/s cruise, faster climb and
+acceleration); edit it to taste.
 
 ## Script options
 
@@ -107,6 +111,8 @@ While the sim runs, type these in the terminal:
 | `reload` | Delete all and respawn from the YAML file (edit it first) |
 | `assets [REGEX]` | List built-in assets |
 | `goto LAT LON [HEADING]` | Move the drone to a new place without restarting Unreal (`--qgc` mode) |
+| `gimbal PITCH YAW` | Point the gimbal (degrees; yaw relative to the drone) |
+| `zoom PERCENT` | Set the zoom (0 = widest, 100 = longest focal length) |
 
 ## Changing location
 
@@ -151,9 +157,13 @@ vibration aren't simulated yet; the script warns if they're enabled.
 | C | Centre (level, straight ahead) |
 | X | Look straight down |
 
-**Video stream:** `rtsp://127.0.0.1:8554/gimbal` (H.264 at the camera's resolution, 30 fps). Any
-player or model can read it, for example
-`cv2.VideoCapture("rtsp://127.0.0.1:8554/gimbal")`.
+**Video stream:** the GimbalCam is published once and served two ways:
+
+- **WebRTC** (lowest latency, always the newest frame): open
+  `http://127.0.0.1:8889/gimbal` in a browser.
+- **RTSP**: `rtsp://127.0.0.1:8554/gimbal` (H.264 at the camera's resolution),
+  for QGC, the Pi or `cv2.VideoCapture("rtsp://127.0.0.1:8554/gimbal")`. In
+  QGC, turn on *Low Latency Mode* under Application Settings → Video.
 
 **QGroundControl:** add a manual link under Application Settings → Comm Links:
 type UDP, port 14550, server `127.0.0.1:18570`, then Connect. The script
@@ -175,6 +185,11 @@ window to place a walking human in the world:
 - **Speed** sets walking speed; **Save position as point** appends the current
   spot to the YAML file.
 - The status line shows its position and distance to the drone.
+
+The **Spotter POV** window is the spotter's own eyes. Click it to capture the
+mouse and look around (Esc releases it), W/S walk forward/back, A/D step
+sideways, hold Shift to run. The view comes from an invisible camera robot
+(`PovCam`) kept at eye height.
 
 ## Raspberry Pi (companion computer)
 
@@ -202,7 +217,9 @@ Allow UDP 15540-15541 and TCP 8554 through any firewall between the two.
 
 - Sim, PX4 and RTSP server logs: `/tmp/projectairsim-run/`, overwritten each run
 - PX4 flight logs: `~/Documents/PX4-Autopilot/build/px4_sitl_default/rootfs/log/`,
-  about 20 MB per run and never cleaned up. Delete old date folders when needed
+  20–60 MB per PX4 run. Only the newest 5 are kept: older ones are deleted each
+  time PX4 starts (launch and `goto`). Set `PX4_KEEP_LOGS` to change the count;
+  copy out any log you want to keep for good
 - Cesium tile cache: `unreal/Blocks/cesium-request-cache.sqlite`, capped at 4096 tiles
 
 ## Troubleshooting
@@ -211,6 +228,10 @@ Allow UDP 15540-15541 and TCP 8554 through any firewall between the two.
   Run again (tiles are cached now) or raise `--tile-wait`.
 - **Spotter "no skeletal object … or no animation":** run
   `./install_spotter_assets.sh` and restart the simulator.
+- **Camera windows, video or the spotter POV freeze:** the sim sends camera
+  frames to a single client. Don't run other Project AirSim scripts with
+  `client.connect()` alongside this one; use `client.connect_services()` for
+  extra scripts (requests only).
 - **"Port … is in use":** a previous simulator or PX4 is still running. Close it,
   or run `pkill -x px4; pkill -x UnrealEditor`.
 - **PX4 "Arming denied" at startup:** normal for a few seconds while its estimator

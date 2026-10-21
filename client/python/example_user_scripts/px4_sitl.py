@@ -11,8 +11,10 @@ Settings come from the environment (set by run_cesium_sim.sh):
   PX4_PARAM_<NAME>=value   parameters PX4 applies at boot
   PI_IP, PI_PORTS          optional companion-computer MAVLink links
   LOG_DIR                  where px4.log and px4.pid go
+  PX4_KEEP_LOGS            PX4 flight logs (.ulg) to keep, counting the new one [5]
 """
 
+import glob
 import os
 import subprocess
 import threading
@@ -29,11 +31,13 @@ class Px4Sitl:
         self.pi_ports = [p for p in os.environ.get("PI_PORTS", "15540,15541").split(",") if p]
         self.log_dir = os.environ.get("LOG_DIR", "/tmp/projectairsim-run")
         self.rootfs = os.path.join(self.px4_dir, "build", "px4_sitl_default", "rootfs")
+        self.keep_logs = int(os.environ.get("PX4_KEEP_LOGS", "5"))
         self.log_path = os.path.join(self.log_dir, "px4.log")
         self.proc = None
 
     def start(self, timeout=30):
         """Start PX4 and wait until it is trying to reach the simulator."""
+        self.prune_flight_logs(self.keep_logs - 1)  # PX4 starts a new one
         os.makedirs(self.log_dir, exist_ok=True)
         log = open(self.log_path, "w")
         env = dict(os.environ, PX4_SIM_MODEL=self.model)
@@ -55,6 +59,28 @@ class Px4Sitl:
 
         if self.pi_ip:
             threading.Thread(target=self._add_companion_links, daemon=True).start()
+
+    def prune_flight_logs(self, keep):
+        """Delete all but the newest `keep` PX4 flight logs (rootfs/log/<date>/*.ulg)."""
+        log_root = os.path.join(self.rootfs, "log")
+        if not os.path.isdir(log_root):
+            return
+        logs = sorted(glob.glob(os.path.join(log_root, "*", "*.ulg")),
+                      key=os.path.getmtime, reverse=True)
+        old = logs[max(keep, 0):]
+        freed = 0
+        for path in old:
+            freed += os.path.getsize(path)
+            os.remove(path)
+        for day in os.listdir(log_root):
+            day_dir = os.path.join(log_root, day)
+            if os.path.isdir(day_dir) and not os.listdir(day_dir):
+                os.rmdir(day_dir)
+        if old:
+            projectairsim_log().info(
+                f"Removed {len(old)} old PX4 flight logs ({freed / 1e6:.0f} MB); "
+                f"keeping the newest {self.keep_logs}"
+            )
 
     def stop(self):
         if self.proc and self.proc.poll() is None:

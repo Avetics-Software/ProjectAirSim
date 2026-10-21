@@ -5,6 +5,7 @@
 
 #include "WorldSimApi.h"
 
+#include "Animation/AnimSequence.h"
 #include "Animation/AnimSequenceBase.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -700,6 +701,16 @@ bool WorldSimApi::setObjectAnimation(const std::string& object_name,
           if (anim_data.AssetName != wanted) continue;
           UAnimSequenceBase* anim = Cast<UAnimSequenceBase>(anim_data.GetAsset());
           if (!anim) break;
+#if WITH_EDITOR
+          // Running from the editor binary, an animation that hasn't finished
+          // compressing is evaluated from its raw data model. For animations
+          // authored with Control Rig that path can crash on the parallel
+          // animation thread, so compress it now and play the compressed data.
+          if (UAnimSequence* sequence = Cast<UAnimSequence>(anim)) {
+            sequence->CacheDerivedDataForCurrentPlatform();
+            sequence->WaitOnExistingCompression(true);
+          }
+#endif
           mesh->PlayAnimation(anim, loop);
           mesh->SetPlayRate(play_rate);
           played = true;
