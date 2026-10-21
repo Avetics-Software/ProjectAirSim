@@ -69,6 +69,7 @@ acceleration); edit it to taste.
 | `--spawn-height` | 15 | The drone starts this high above `--ground-alt` and settles onto the real surface |
 | `--geoid` | 8.1 | Geoid height (m); about 8 across Singapore |
 | `--objects FILE` | `config_spawned_objects.yml` | Objects to place in the world; `''` for none |
+| `--actors FILE` | `config_moving_actors.yml` | People and vehicles moving along paths; `''` for none |
 | `--camera-props FILE` | `camera_properties.json` | GimbalCam resolution, sensor and zoom lens |
 | `--spotter` | off | Open the spotter window |
 | `--qgc` | off | Manual mode instead of the scripted demo |
@@ -113,6 +114,46 @@ While the sim runs, type these in the terminal:
 | `goto LAT LON [HEADING]` | Move the drone to a new place without restarting Unreal (`--qgc` mode) |
 | `gimbal PITCH YAW` | Point the gimbal (degrees; yaw relative to the drone) |
 | `zoom PERCENT` | Set the zoom (0 = widest, 100 = longest focal length) |
+
+## Moving people and vehicles
+
+`config_moving_actors.yml` defines actors that walk or drive along paths. The
+sim moves them every frame, keeps them on the ground, plays walk animations and
+pauses them with the sim, so dozens can move at once. Each path is one of:
+
+```yaml
+actors:
+  - name: Person1
+    kind: person                    # person or vehicle: picks the defaults
+    waypoints: [[1.413416, 103.865262], [1.413642, 103.865409]]
+    mode: loop                      # loop, pingpong or once
+  - name: Courier
+    kind: vehicle
+    route: {from: [1.41660, 103.86180], to: [1.40780, 103.86330]}
+  - name: Traffic                   # Traffic_1 .. Traffic_4
+    kind: vehicle
+    count: 4
+    speed: 12
+    random_route: {length_m: 1500}
+```
+
+`route` and `random_route` follow OpenStreetMap roads (vehicles keep left) or
+footpaths (people). The map data is downloaded once into `osm_cache/` and needs
+internet the first time. Preview routes without the sim:
+`python road_routes.py --kind vehicle --random 1500 --count 5 --geojson routes.geojson`,
+then drop the file onto https://geojson.io.
+
+| Command | Effect |
+|---|---|
+| `actors [list]` | Show moving actors |
+| `actors pause` / `actors resume` | Stop or restart all of them |
+| `actors reload` | Delete and respawn from the YAML file |
+| `actors delete NAME` | Remove one |
+
+Where every actor is gets logged about 5 times a second to
+`/tmp/projectairsim-run/ground_truth_<time>.csv` (sim time, name, kind, lat,
+lon, alt, heading), as ground truth for detection and re-identification. The
+newest 5 logs are kept. geojson.io can show the CSV on a map.
 
 ## Changing location
 

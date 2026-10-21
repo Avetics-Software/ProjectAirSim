@@ -142,13 +142,21 @@ class ObjectSpawner:
         bottom = box["center"]["z"] + box["size"]["z"] / 2.0  # NED: +z is down
         pose = self.world.get_object_pose(name)
         pose["translation"]["z"] += ground_down - bottom
-        self.world.set_object_pose(name, pose, True)
+        self._set_pose(name, pose)
 
     def _set_heading(self, name, heading):
         w, x, y, z = rpy_to_quaternion(0.0, 0.0, math.radians(heading))
         pose = self.world.get_object_pose(name)
         pose["rotation"] = Quaternion({"w": w, "x": x, "y": y, "z": z})
-        self.world.set_object_pose(name, pose, True)
+        self._set_pose(name, pose)
+
+    def _set_pose(self, name, pose):
+        try:
+            self.world.set_object_pose(name, pose, True)
+        except RuntimeError as err:
+            # The sim reports setting an unchanged pose as a failure; ignore that
+            if "Unable to move" not in str(err):
+                raise
 
     def delete(self, name):
         if name == "all":

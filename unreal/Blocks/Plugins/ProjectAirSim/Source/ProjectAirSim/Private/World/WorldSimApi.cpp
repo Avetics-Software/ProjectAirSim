@@ -16,6 +16,7 @@
 #include "Renderers/ProcMeshActor.h"
 #include "Runtime/Core/Public/Async/ParallelFor.h"
 #include "WeatherLib.h"
+#include "World/PathFollowerComponent.h"
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
 #include "core_sim/actor/env_actor.hpp"
@@ -110,6 +111,29 @@ void WorldSimApi::RegisterServiceMethods() {
       &WorldSimApi::setObjectAnimation, *this);
   sim_scene_->RegisterServiceMethod(set_object_animation,
                                     set_object_animation_handler);
+
+  auto set_object_path = projectairsim::ServiceMethod(
+      "SetObjectPath",
+      {"object_name", "points", "speed", "mode", "yaw_offset",
+       "align_to_ground", "walk_animation", "idle_animation",
+       "animation_speed", "start_delay"});
+  auto set_object_path_handler =
+      set_object_path.CreateMethodHandler(&WorldSimApi::setObjectPath, *this);
+  sim_scene_->RegisterServiceMethod(set_object_path, set_object_path_handler);
+
+  auto clear_object_path =
+      projectairsim::ServiceMethod("ClearObjectPath", {"object_name"});
+  auto clear_object_path_handler = clear_object_path.CreateMethodHandler(
+      &WorldSimApi::clearObjectPath, *this);
+  sim_scene_->RegisterServiceMethod(clear_object_path,
+                                    clear_object_path_handler);
+
+  auto pause_object_paths =
+      projectairsim::ServiceMethod("PauseObjectPaths", {"paused"});
+  auto pause_object_paths_handler = pause_object_paths.CreateMethodHandler(
+      &WorldSimApi::pauseObjectPaths, *this);
+  sim_scene_->RegisterServiceMethod(pause_object_paths,
+                                    pause_object_paths_handler);
 
   auto spawn_object_from_file_geo = projectairsim::ServiceMethod(
       "spawnObjectFromFileAtGeo",
@@ -679,6 +703,21 @@ std::string WorldSimApi::spawnObjectFromFileAtGeoServiceMethod(
                                   enable_physics);
 }
 
+UAnimSequenceBase* WorldSimApi::findAnimation(const std::string& name) {
+  if (name.empty()) return nullptr;
+  // Look the animation up by asset name, like spawned meshes are
+  TArray<FAssetData> anims;
+  IAssetRegistry::Get()->GetAssetsByClass(
+      UAnimSequenceBase::StaticClass()->GetClassPathName(), anims, true);
+  const FName wanted(name.c_str());
+  for (const FAssetData& anim_data : anims) {
+    if (anim_data.AssetName == wanted) {
+      return Cast<UAnimSequenceBase>(anim_data.GetAsset());
+    }
+  }
+  return nullptr;
+}
+
 bool WorldSimApi::setObjectAnimation(const std::string& object_name,
                                      const std::string& animation_name,
                                      bool loop, float play_rate) {
@@ -690,32 +729,10 @@ bool WorldSimApi::setObjectAnimation(const std::string& object_name,
         if (!actor) return;
         USkeletalMeshComponent* mesh =
             actor->FindComponentByClass<USkeletalMeshComponent>();
-        if (!mesh) return;
-
-        // Look the animation up by asset name, like spawned meshes are
-        TArray<FAssetData> anims;
-        IAssetRegistry::Get()->GetAssetsByClass(
-            UAnimSequenceBase::StaticClass()->GetClassPathName(), anims, true);
-        const FName wanted(animation_name.c_str());
-        for (const FAssetData& anim_data : anims) {
-          if (anim_data.AssetName != wanted) continue;
-          UAnimSequenceBase* anim = Cast<UAnimSequenceBase>(anim_data.GetAsset());
-          if (!anim) break;
-#if WITH_EDITOR
-          // Running from the editor binary, an animation that hasn't finished
-          // compressing is evaluated from its raw data model. For animations
-          // authored with Control Rig that path can crash on the parallel
-          // animation thread, so compress it now and play the compressed data.
-          if (UAnimSequence* sequence = Cast<UAnimSequence>(anim)) {
-            sequence->CacheDerivedDataForCurrentPlatform();
-            sequence->WaitOnExistingCompression(true);
-          }
-#endif
-          mesh->PlayAnimation(anim, loop);
-          mesh->SetPlayRate(play_rate);
-          played = true;
-          break;
-        }
+        UAnimSequenceBase* anim = findAnimation(animation_name);
+        if (!mesh || !anim) return;
+        UPathFollowerComponent::PlayAnim(mesh, anim, play_rate, loop);
+        played = true;
       },
       true);
 
@@ -727,6 +744,105 @@ bool WorldSimApi::setObjectAnimation(const std::string& object_name,
     throw projectairsim::Error(status_msg.c_str());
   }
   return played;
+}
+
+bool WorldSimApi::setObjectPath(const std::string& object_name,
+                                const std::vector<std::vector<float>>& points,
+                                float speed, const std::string& mode,
+                                float yaw_offset, bool align_to_ground,
+                                const std::string& walk_animation,
+                                const std::string& idle_animation,
+                                float animation_speed, float start_delay) {
+  if (points.size() < 2) {
+    throw projectairsim::Error("SetObjectPath needs at least 2 points");
+  }
+  EPathFollowMode follow_mode;
+  if (mode == "once") {
+    follow_mode = EPathFollowMode::Once;
+  } else if (mode == "loop") {
+    follow_mode = EPathFollowMode::Loop;
+  } else if (mode == "pingpong") {
+    follow_mode = EPathFollowMode::PingPong;
+  } else {
+    throw projectairsim::Error("SetObjectPath mode must be once, loop or "
+                               "pingpong, not " + mode);
+  }
+
+  std::string error;
+  UnrealHelpers::RunCommandOnGameThread(
+      [&]() {
+        AActor* actor = UnrealHelpers::FindActor<AActor>(
+            unreal_world_, FString(object_name.c_str()), &scene_object_map_);
+        if (!actor) {
+          error = "SetObjectPath failed: no object " + object_name;
+          return;
+        }
+        UAnimSequenceBase* walk = findAnimation(walk_animation);
+        UAnimSequenceBase* idle = findAnimation(idle_animation);
+        if ((!walk_animation.empty() && !walk) ||
+            (!idle_animation.empty() && !idle)) {
+          error = "SetObjectPath failed: animation " + walk_animation + " or " +
+                  idle_animation + " not found";
+          return;
+        }
+
+        TArray<FVector> path;
+        for (const auto& point : points) {
+          if (point.size() < 2) continue;
+          path.Add(UnrealTransform::NedToUnrealLinear(
+              projectairsim::Vector3(point[0], point[1], 0.0f)));
+        }
+
+        UPathFollowerComponent* follower =
+            actor->FindComponentByClass<UPathFollowerComponent>();
+        if (!follower) {
+          follower = NewObject<UPathFollowerComponent>(actor);
+          follower->RegisterComponent();
+        }
+        follower->Start(path, speed, follow_mode, yaw_offset, align_to_ground,
+                        walk, idle, animation_speed, start_delay);
+      },
+      true);
+
+  if (!error.empty()) {
+    UnrealLogger::Log(projectairsim::LogLevel::kError, TEXT("%hs"),
+                      error.c_str());
+    throw projectairsim::Error(error);
+  }
+  return true;
+}
+
+bool WorldSimApi::clearObjectPath(const std::string& object_name) {
+  bool found = false;
+  UnrealHelpers::RunCommandOnGameThread(
+      [&]() {
+        AActor* actor = UnrealHelpers::FindActor<AActor>(
+            unreal_world_, FString(object_name.c_str()), &scene_object_map_);
+        if (!actor) return;
+        found = true;
+        if (UPathFollowerComponent* follower =
+                actor->FindComponentByClass<UPathFollowerComponent>()) {
+          follower->Stop();
+          follower->DestroyComponent();
+        }
+      },
+      true);
+  return found;
+}
+
+bool WorldSimApi::pauseObjectPaths(bool paused) {
+  UnrealHelpers::RunCommandOnGameThread(
+      [&]() {
+        for (auto& object : scene_spawned_object_map_) {
+          if (!IsValid(object.Value)) continue;
+          if (UPathFollowerComponent* follower =
+                  object.Value->FindComponentByClass<UPathFollowerComponent>()) {
+            follower->SetPaused(paused);
+          }
+        }
+      },
+      true);
+  return true;
 }
 
 bool WorldSimApi::destroyObject(const std::string& object_name) {
@@ -779,12 +895,25 @@ WorldSimApi::Pose WorldSimApi::getObjectPose(const std::string& object_name) {
 
 std::vector<WorldSimApi::Pose> WorldSimApi::getObjectPoses(
     const std::vector<std::string>& object_names) {
-  std::vector<WorldSimApi::Pose> results;
+  WorldSimApi::Pose missing;
+  missing.translation_ = projectairsim::Vector3(nan, nan, nan);
+  std::vector<WorldSimApi::Pose> results(object_names.size(), missing);
 
-  for (const std::string& obj_name : object_names) {
-    WorldSimApi::Pose obj_pose = getObjectPose(obj_name);
-    results.push_back(obj_pose);
-  }
+  // One trip to the game thread for all objects, so polling many moving
+  // objects doesn't take a frame per object
+  UnrealHelpers::RunCommandOnGameThread(
+      [this, &object_names, &results]() {
+        for (size_t i = 0; i < object_names.size(); ++i) {
+          AActor* actor = UnrealHelpers::FindActor<AActor>(
+              unreal_world_, FString(object_names[i].c_str()),
+              &scene_object_map_);
+          if (actor) {
+            results[i] = UnrealTransform::ToGlobalNed(FTransform(
+                actor->GetActorRotation(), actor->GetActorLocation()));
+          }
+        }
+      },
+      true);
 
   return results;
 }

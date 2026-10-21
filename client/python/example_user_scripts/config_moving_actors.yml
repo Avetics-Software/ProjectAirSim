@@ -1,0 +1,106 @@
+# People and vehicles that move around the Cesium world along paths.
+#
+# Each actor is spawned on the ground at the start of its path, then moved by
+# the sim every frame (it pauses with the sim). Fields:
+#   name:       unique name in the sim; also its identity in the ground-truth log
+#   kind:       person or vehicle; picks the defaults below
+#   a path, one of:
+#     waypoints:    [[lat, lon], ...] at least two points to walk/drive along
+#     route:        {from: [lat, lon], to: [lat, lon]} shortest way between two
+#                   points along OpenStreetMap roads (vehicles) or footpaths
+#                   (people); vehicles keep left
+#     random_route: {length_m: 1000, start: [lat, lon], start_radius_m: 400,
+#                   seed: 0} a random drive/walk along OpenStreetMap roads or
+#                   footpaths, from `start` or from somewhere within
+#                   start_radius_m of the drone's home. All fields optional;
+#                   the same name and seed always give the same route.
+#   count:      with random_route, spawn this many (named NAME_1, NAME_2, ...)
+#   mode:       loop (back to the first point), pingpong (back and forth) or
+#               once (stop at the end)    [default loop for waypoints, pingpong
+#               for road routes, which loop only if they end where they start]
+#   speed:      m/s
+#   start_delay: seconds to stand still before setting off        [default 0]
+#   asset:      Unreal asset to spawn (type `assets` in the run console to list)
+#   length:     scale so the longest horizontal side is this many metres
+#   scale:      [x, y, z] scale instead of length
+#   file:       your own .glb/.gltf model instead of asset (static, no animation)
+#   yaw_offset: degrees between the mesh's forward and the direction of travel
+#   align_to_ground: tilt with the slope (vehicles)
+#   walk_animation, idle_animation, animation_speed: for skeletal meshes; the
+#               walk animation plays at speed / animation_speed
+# Anything left out comes from `defaults` for the actor's kind.
+#
+# Edit this file while the sim is running and type `actors reload` to apply it.
+
+defaults:
+  person:
+    asset: SKM_Manny_Simple
+    speed: 1.4
+    yaw_offset: -90          # the UE Mannequin faces along its +Y axis
+    walk_animation: MF_Unarmed_Walk_Fwd
+    idle_animation: MM_Idle
+    animation_speed: 1.6     # m/s the walk animation is authored at
+  vehicle:
+    asset: SKM_SportsCar
+    length: 4.5
+    speed: 10
+    align_to_ground: true
+
+actors:
+  # A person walking a rectangle beside the runway, right of the default spawn
+  - name: Person1
+    kind: person
+    waypoints:
+      - [1.413416, 103.865262]
+      - [1.413642, 103.865409]
+      - [1.413568, 103.865522]
+      - [1.413342, 103.865375]
+
+  # A person walking back and forth on the grass left of the runway
+  - name: Person2
+    kind: person
+    speed: 1.2
+    mode: pingpong
+    waypoints:
+      - [1.414024, 103.865068]
+      - [1.414274, 103.865177]
+      - [1.414476, 103.865361]
+
+  # A car driving up and down the runway
+  - name: Vehicle1
+    kind: vehicle
+    speed: 15
+    mode: pingpong
+    waypoints:
+      - [1.413936, 103.865203]
+      - [1.418004, 103.867846]
+
+  # A car lapping the runway, setting off after 10 s
+  - name: Vehicle2
+    kind: vehicle
+    speed: 12
+    start_delay: 10
+    waypoints:
+      - [1.413969, 103.865482]
+      - [1.417133, 103.867537]
+      - [1.417251, 103.867357]
+      - [1.414086, 103.865301]
+
+  # Traffic on the roads west of the runway (OpenStreetMap, downloaded once
+  # into osm_cache/)
+  - name: Traffic
+    kind: vehicle
+    count: 4
+    speed: 12
+    random_route: {length_m: 1500}
+
+  # People on the footpaths and minor roads nearby
+  - name: Walker
+    kind: person
+    count: 3
+    random_route: {length_m: 500}
+
+  # A car between two places, by the shortest road route:
+  # - name: Courier
+  #   kind: vehicle
+  #   route: {from: [1.41660, 103.86180], to: [1.40780, 103.86330]}

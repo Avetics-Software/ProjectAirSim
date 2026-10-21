@@ -706,6 +706,79 @@ class World(object):
         }
         return self.client.request(set_animation_req)
 
+    def set_object_path(
+        self,
+        object_name: str,
+        points: List[List[float]],
+        speed: float,
+        mode: str = "loop",
+        yaw_offset: float = 0.0,
+        align_to_ground: bool = False,
+        walk_animation: str = "",
+        idle_animation: str = "",
+        animation_speed: float = 0.0,
+        start_delay: float = 0.0,
+    ) -> bool:
+        """Move a spawned object along a path inside the sim, staying on the ground
+
+        The object keeps the height above ground it had when this is called and
+        moves every frame without further requests. It stands still while the
+        sim is paused. Calling this again replaces the path.
+
+        Args:
+            object_name (str): the name of a spawned object
+            points (List[List[float]]): at least two [north, east] NED points (m)
+            speed (float): speed along the path (m/s)
+            mode (str): "once" (stop at the end), "loop" (back to the first
+                point) or "pingpong" (back and forth)
+            yaw_offset (float): degrees added to the direction of travel so the
+                mesh faces forward (-90 for the UE Mannequin)
+            align_to_ground (bool): tilt the object with the slope (vehicles)
+            walk_animation (str): animation played while moving (optional)
+            idle_animation (str): animation played while stopped (optional)
+            animation_speed (float): speed (m/s) at which the walk animation
+                plays at 1x; 0 plays it at 1x always
+            start_delay (float): seconds to wait before moving
+
+        Returns:
+            bool: True if the object started following the path
+        """
+        set_path_req: Dict = {
+            "method": f"{self.parent_topic}/SetObjectPath",
+            "params": {
+                "object_name": object_name,
+                "points": [[float(v) for v in p[:2]] for p in points],
+                "speed": float(speed),
+                "mode": mode,
+                "yaw_offset": float(yaw_offset),
+                "align_to_ground": align_to_ground,
+                "walk_animation": walk_animation,
+                "idle_animation": idle_animation,
+                "animation_speed": float(animation_speed),
+                "start_delay": float(start_delay),
+            },
+            "version": 1.0,
+        }
+        return self.client.request(set_path_req)
+
+    def clear_object_path(self, object_name: str) -> bool:
+        """Stop an object following its path, leaving it where it is"""
+        clear_path_req: Dict = {
+            "method": f"{self.parent_topic}/ClearObjectPath",
+            "params": {"object_name": object_name},
+            "version": 1.0,
+        }
+        return self.client.request(clear_path_req)
+
+    def pause_object_paths(self, paused: bool = True) -> bool:
+        """Pause (or resume) every object following a path"""
+        pause_paths_req: Dict = {
+            "method": f"{self.parent_topic}/PauseObjectPaths",
+            "params": {"paused": paused},
+            "version": 1.0,
+        }
+        return self.client.request(pause_paths_req)
+
     def destroy_object(self, object_name: str) -> str:
         """Destroy an object in the scene
 

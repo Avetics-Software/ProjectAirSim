@@ -61,6 +61,7 @@ from payload_mavlink import PayloadLink
 from payload_video import CameraWindows, RtspStreamer, image_to_bgr
 from px4_sitl import Px4Sitl
 from shared_frame import SharedFrameWriter
+from moving_actors import ACTORS_HELP, MovingActorManager
 from spawned_objects import CONSOLE_HELP, ObjectSpawner
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -111,6 +112,11 @@ def parse_args():
         "--objects",
         default=os.path.join(SCRIPT_DIR, "config_spawned_objects.yml"),
         help="YAML file of objects to place in the world ('' for none)",
+    )
+    parser.add_argument(
+        "--actors",
+        default=os.path.join(SCRIPT_DIR, "config_moving_actors.yml"),
+        help="YAML file of people and vehicles moving along paths ('' for none)",
     )
     parser.add_argument(
         "--camera-props",
@@ -366,7 +372,7 @@ async def run_console(session):
         loop.call_soon_threadsafe(lines.put_nowait, None)
 
     threading.Thread(target=read_stdin, daemon=True).start()
-    print(CONSOLE_HELP + "\n" + GOTO_HELP)
+    print(CONSOLE_HELP + "\n" + ACTORS_HELP + "\n" + GOTO_HELP)
     while True:
         line = await lines.get()
         if line is None:  # stdin closed
@@ -394,6 +400,9 @@ async def run_console(session):
                 continue
             session.payload.windows.pitch, session.payload.windows.yaw = pitch, yaw
             session.payload.steer(pitch, yaw)
+        elif parts and parts[0].lower() == "actors":
+            if session.actors:
+                session.actors.run_command(parts[1:])
         elif parts and parts[0].lower() == "zoom" and len(parts) == 2:
             try:
                 session.payload.zoom_percent = max(0.0, min(100.0, float(parts[1])))
@@ -401,6 +410,17 @@ async def run_console(session):
                 print("Usage: zoom PERCENT")
         else:
             session.spawner.run_command(line)
+
+
+async def run_ground_truth(session):
+    """Log where the moving actors are, for scoring detection and ReID."""
+    while True:
+        if not session.loading and session.actors:
+            try:
+                session.actors.log_ground_truth()
+            except Exception as err:  # e.g. the scene is reloading under us
+                projectairsim_log().debug(f"Ground-truth log skipped: {err}")
+        await asyncio.sleep(0.05)
 
 
 async def wait_for_ground(world, max_wait, min_wait=10.0, stable_reads=3):
@@ -504,6 +524,7 @@ class Session:
         self.world = None
         self.drone = None
         self.spawner = None
+        self.actors = None
         self.spotter = None
         self.loading = False
         # The spotter window runs in its own process, which can't receive camera
@@ -523,6 +544,9 @@ class Session:
         self.loading = True
         try:
             self._stop_spotter()
+            if self.actors:
+                self.actors.close()
+                self.actors = None
             # Load the scene first: it drops the old PX4's connection cleanly.
             # Then start a fresh PX4, which connects to the new scene.
             if self.world is None:
@@ -573,6 +597,11 @@ class Session:
             # Ground lookups only see Cesium's collision once the sim is running
             self.spawner = ObjectSpawner(self.world, args.objects)
             self.spawner.spawn_from_config()
+            if args.actors:
+                self.actors = MovingActorManager(
+                    self.world, args.actors, os.environ.get("LOG_DIR", "/tmp/projectairsim-run")
+                )
+                self.actors.spawn_from_config()
 
             if args.spotter:
                 self.spotter = subprocess.Popen(
@@ -590,6 +619,8 @@ class Session:
 
     def close(self):
         self._stop_spotter()
+        if self.actors:
+            self.actors.close()
         self.px4.stop()
         if self.pov_frames:
             self.pov_frames.close()
@@ -619,6 +650,7 @@ async def main():
         session = Session(args, client, camera, payload, link)
         await session.load()
         tasks.append(asyncio.create_task(run_console(session)))
+        tasks.append(asyncio.create_task(run_ground_truth(session)))
 
         if args.qgc:
             projectairsim_log().info(
