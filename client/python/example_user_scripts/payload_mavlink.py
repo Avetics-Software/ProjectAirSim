@@ -52,6 +52,10 @@ PX4_AUTO_MODES = {1: "READY", 2: "TAKEOFF", 3: "HOLD", 4: "MISSION", 5: "RTL", 6
                   8: "FOLLOW", 9: "PRECLAND"}
 
 
+def wrap_180(deg):
+    return (deg + 180.0) % 360.0 - 180.0
+
+
 def px4_mode_name(custom_mode):
     main = (custom_mode >> 16) & 0xFF
     sub = (custom_mode >> 24) & 0xFF
@@ -82,8 +86,13 @@ class PayloadLink:
         self.armed = False
         self.mode = "?"
         self.position = None  # (lat, lon, alt AMSL m, alt above home m)
+        self.velocity = (0.0, 0.0, 0.0)  # north, east, down m/s
+        self.position_time = 0.0  # time.monotonic() of the last position
+        self.position_count = 0  # positions received, to measure the rate
         self.landed = True
         self.status_text = ""
+        self.mission_seq = -1  # PX4's current mission item
+        self.mission_reached = -1  # the last mission item PX4 reached
 
         self._mav = mavutil.mavlink_connection(
             f"udpin:0.0.0.0:{self.port}", source_system=self.sysid,
@@ -91,6 +100,8 @@ class PayloadLink:
         )
         self._send_lock = threading.Lock()
         self._acks = queue.Queue()
+        self._mission_items = []  # being uploaded; PX4 requests them one by one
+        self._mission_ack = queue.Queue()
         self._boot = time.monotonic()
         self._stop = threading.Event()
         self._px4_seen = threading.Event()
@@ -198,8 +209,9 @@ class PayloadLink:
         return self.command(M.MAV_CMD_NAV_TAKEOFF, -1, 0, 0, math.nan, math.nan, math.nan,
                             amsl - rel + alt_m)
 
-    def fly_to(self, lat, lon, alt_m, speed_mps=-1.0):
-        """Fly to lat/lon at alt_m above home and hover there (PX4 Hold)."""
+    def fly_to(self, lat, lon, alt_m, speed_mps=-1.0, heading_deg=None):
+        """Fly to lat/lon at alt_m above home and hover there (PX4 Hold), facing
+        heading_deg (degrees from north) if given, else keeping its heading."""
         if self.position is None:
             return None
         _, _, amsl, rel = self.position
@@ -209,10 +221,19 @@ class PayloadLink:
             self._mav.mav.srcComponent = TRACKER_COMPID
             self._mav.mav.command_int_send(
                 self.sysid, PX4_COMPID, M.MAV_FRAME_GLOBAL, M.MAV_CMD_DO_REPOSITION, 0, 0,
-                -1, M.MAV_DO_REPOSITION_FLAGS_CHANGE_MODE, 0, math.nan,
+                # PX4 reads the yaw (param 4) in radians
+                -1, M.MAV_DO_REPOSITION_FLAGS_CHANGE_MODE, 0,
+                math.nan if heading_deg is None else math.radians(wrap_180(heading_deg)),
                 int(lat * 1e7), int(lon * 1e7), amsl - rel + alt_m,
             )
         return M.MAV_RESULT_ACCEPTED
+
+    def turn_to(self, heading_deg):
+        """Turn in place to face heading_deg (degrees from north)."""
+        if self.position is None:
+            return None
+        lat, lon, _, rel = self.position
+        return self.fly_to(lat, lon, rel, heading_deg=heading_deg)
 
     def hold(self):
         # PX4 custom mode: AUTO (4) / LOITER (3)
@@ -223,6 +244,58 @@ class PayloadLink:
 
     def return_home(self):
         return self.command(M.MAV_CMD_NAV_RETURN_TO_LAUNCH)
+
+    # ------------------------------------------------------------------
+    # Missions
+
+    def upload_mission(self, waypoints, alt_m, takeoff=False, speed_mps=None, timeout=15.0):
+        """Upload a PX4 mission: an optional takeoff, an optional speed, then the
+        [(lat, lon), ...] waypoints at alt_m above home. Returns the index of
+        the first waypoint item; raises if PX4 rejects it."""
+        F_REL, F_MISSION = M.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT, M.MAV_FRAME_MISSION
+        items = []  # (frame, command, params 1-4, lat, lon, alt)
+        if takeoff and self.position:
+            lat, lon = self.position[:2]
+            items.append((F_REL, M.MAV_CMD_NAV_TAKEOFF, (0, 0, 0, math.nan), lat, lon, alt_m))
+        if speed_mps:
+            items.append((F_MISSION, M.MAV_CMD_DO_CHANGE_SPEED, (1, speed_mps, -1, 0), 0, 0, 0))
+        first_waypoint = len(items)
+        for lat, lon in waypoints:
+            # param2: acceptance radius (m)
+            items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (0, 3.0, 0, math.nan), lat, lon, alt_m))
+        self._mission_items = items
+        while not self._mission_ack.empty():
+            self._mission_ack.get_nowait()
+        self._send_as(
+            TRACKER_COMPID,
+            lambda mav: mav.mission_count_send(self.sysid, PX4_COMPID, len(items), 0),
+        )
+        try:
+            result = self._mission_ack.get(timeout=timeout)
+        except queue.Empty:
+            raise RuntimeError("PX4 didn't confirm the mission upload")
+        if result != M.MAV_MISSION_ACCEPTED:
+            raise RuntimeError(f"PX4 rejected the mission (MAV_MISSION_RESULT {result})")
+        self.mission_seq = self.mission_reached = -1
+        return first_waypoint, len(items)
+
+    def _send_mission_item(self, seq):
+        frame, command, (p1, p2, p3, p4), lat, lon, alt = self._mission_items[seq]
+        self._send_as(
+            TRACKER_COMPID,
+            lambda mav: mav.mission_item_int_send(
+                self.sysid, PX4_COMPID, seq, frame, command, 0, 1, p1, p2, p3, p4,
+                int(lat * 1e7), int(lon * 1e7), alt, 0,
+            ),
+        )
+
+    def start_mission(self):
+        """Fly the uploaded mission from its start (arm first if on the ground)."""
+        return self.command(M.MAV_CMD_MISSION_START, 0, 0)
+
+    def resume_mission(self):
+        """Continue the mission from where it was interrupted (PX4 Mission mode)."""
+        return self.command(M.MAV_CMD_DO_SET_MODE, M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 4, 4)
 
     def distance_to(self, lat, lon):
         """Horizontal distance (m) from the drone to lat/lon, or None."""
@@ -287,6 +360,9 @@ class PayloadLink:
             elif msg_type == "GLOBAL_POSITION_INT" and from_px4:
                 self.position = (msg.lat / 1e7, msg.lon / 1e7, msg.alt / 1000.0,
                                  msg.relative_alt / 1000.0)
+                self.velocity = (msg.vx / 100.0, msg.vy / 100.0, msg.vz / 100.0)
+                self.position_time = time.monotonic()
+                self.position_count += 1
             elif msg_type == "EXTENDED_SYS_STATE" and from_px4:
                 self.landed = msg.landed_state in (M.MAV_LANDED_STATE_ON_GROUND,
                                                    M.MAV_LANDED_STATE_UNDEFINED)
@@ -294,6 +370,16 @@ class PayloadLink:
                 self.status_text = msg.text
             elif msg_type == "COMMAND_ACK" and from_px4:
                 self._acks.put((msg.command, msg.result))
+            elif msg_type in ("MISSION_REQUEST_INT", "MISSION_REQUEST") and from_px4:
+                if getattr(msg, "mission_type", 0) == 0 and msg.seq < len(self._mission_items):
+                    self._send_mission_item(msg.seq)
+            elif msg_type == "MISSION_ACK" and from_px4:
+                if getattr(msg, "mission_type", 0) == 0:
+                    self._mission_ack.put(msg.type)
+            elif msg_type == "MISSION_CURRENT" and from_px4:
+                self.mission_seq = msg.seq
+            elif msg_type == "MISSION_ITEM_REACHED" and from_px4:
+                self.mission_reached = msg.seq
             elif msg_type == "COMMAND_LONG" and msg.target_component == CAMERA_COMPID:
                 self._handle_camera_command(msg)
 

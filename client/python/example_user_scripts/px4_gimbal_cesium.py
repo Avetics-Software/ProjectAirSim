@@ -136,6 +136,13 @@ def parse_args():
         help="metres between the drones at the spawn, in a line to the right (default 8)",
     )
     parser.add_argument(
+        "--layer-step",
+        type=float,
+        default=5.0,
+        help="drone N flies (N-1) x this many metres above the height asked for, so "
+        "drones whose paths cross pass at different heights (default 5; 0 = off)",
+    )
+    parser.add_argument(
         "--actors",
         default=os.path.join(SCRIPT_DIR, "config_moving_actors.yml"),
         help="YAML file of people and vehicles moving along paths ('' for none)",
@@ -600,8 +607,14 @@ def update_minimap(session):
             f"speed {math.hypot(v['x'], v['y']):4.1f} m/s"
         )
     windows.minimap.update(centre, objects, selected_name=f"Drone{selected + 1}")
+    swarm = session.swarm
     windows.minimap.set_heading_to(
-        {f"Drone{i + 1}": dest for i, dest in session.swarm.destinations.items()}
+        {f"Drone{i + 1}": dest for i, dest in swarm.destinations.items() if dest}
+    )
+    windows.minimap.set_routes({f"Drone{i + 1}": swarm.route(i) for i in swarm.plans})
+    windows.minimap.set_crossings(swarm.crossings)
+    windows.minimap.set_heading_goals(
+        {f"Drone{i + 1}": h for i, h in swarm.headings.items() if h is not None}
     )
 
     ports = ", ".join(f"{18570 + i}" for i in range(len(session.drones)))
@@ -713,7 +726,7 @@ class Session:
         self.camera = camera
         self.payloads = payloads  # PayloadGroup
         self.links = links  # PayloadLink per drone
-        self.swarm = SwarmControl(links)
+        self.swarm = SwarmControl(links, args.layer_step)
         self.commands = asyncio.Queue()  # (line, from the dashboard?)
         self.px4s = [Px4Sitl(i) for i in range(len(links))]
         self.robot_configs = (
@@ -800,6 +813,7 @@ class Session:
 
             for link in self.links:
                 link.wait_for_px4()
+            self.swarm.start()
 
             # Ground lookups only see Cesium's collision once the sim is running
             self.spawner = ObjectSpawner(self.world, args.objects)
@@ -830,6 +844,8 @@ class Session:
         minimap.picked.clear()
         self.payloads.windows.targets.clear()
         self.swarm.destinations.clear()
+        self.swarm.plans.clear()
+        self.swarm.crossings.clear()
         minimap.set_roads([])
         try:
             manager = self.actors or MovingActorManager(self.world, None)
@@ -843,6 +859,7 @@ class Session:
             self.spotter = None
 
     def close(self):
+        self.swarm.stop()
         self._stop_spotter()
         if self.actors:
             self.actors.close()

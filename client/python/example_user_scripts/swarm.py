@@ -2,29 +2,51 @@
 Copyright (C) 2025 IAMAI CONSULTING CORP
 MIT License.
 
-Flies several PX4 drones as a swarm from the run console. Commands go to each
-drone's PX4 over its MAVLink payload link (payload_mavlink.PayloadLink), the
-way a companion computer would send them, so QGroundControl shows what the
-drones are doing and can take over at any time.
+Flies several PX4 drones as a swarm from the run console or the dashboard.
+Commands go to each drone's PX4 over its MAVLink payload link
+(payload_mavlink.PayloadLink), the way a companion computer would send them, so
+QGroundControl shows what the drones are doing and can take over at any time.
 
 Commands name the drones first: a number, a list like 1,3, or all.
-  all takeoff 30                         arm and climb to 30 m above home
-  2 goto 1.4150 103.8660 40              fly drone 2 there, 40 m above home
+  all takeoff 30                         arm and climb (each to its own height)
+  2 goto 1.4150 103.8660 40 [HEADING]    fly drone 2 there and hover; with HEADING
+                                         (degrees from north) it turns to face that
+                                         way once it arrives
+  2 heading 90                           turn drone 2 in place to face east
   all goto 1.4150 103.8660 40            fly there in a line, 15 m apart
   1,3 hold | land | rtl                  hover / land here / return home and land
+  1,3 searcharea ALT SPACING LAT,LON;LAT,LON;...
+                                         grid-search a polygon: its passes are
+                                         split between the drones and each gets
+                                         a PX4 mission
   all search LAT1 LON1 LAT2 LON2 [ALT] [SPACING]
-                                         split the box into strips and sweep
-                                         it, one strip per drone
+                                         the same for a lat/lon box
   status                                 each drone's mode, height and position
 A new command for a drone replaces what it was doing.
+
+Deconfliction:
+  - Height layers: drone N flies at the height asked for + (N - 1) x the layer
+    step (5 m by default), so drones whose paths cross pass at different heights.
+  - Every new path is checked against the other drones' paths; crossings closer
+    than SEPARATION_H_M are reported (and drawn on the map), with whether the
+    height layers keep them apart.
+  - A separation monitor watches every pair of airborne drones and predicts,
+    from their positions and velocities, how close they will get in the next
+    LOOKAHEAD_S seconds. If they would come within SEPARATION_H_M horizontally
+    and SEPARATION_V_M vertically, the higher-numbered drone gives way: it
+    holds and climbs, and resumes once the other is CLEAR_H_M away and no longer
+    closing. This also covers flights commanded from QGC.
 """
 
 import asyncio
+import itertools
 import math
+import time
 
 from projectairsim.utils import projectairsim_log
 
 from payload_mavlink import M
+from search_planner import find_crossings, plan_area_search
 
 EARTH_M_PER_DEG = 111_320.0
 DEFAULT_ALT_M = 30.0
@@ -32,15 +54,26 @@ FORMATION_SPACING_M = 15.0
 SEARCH_SPACING_M = 40.0
 ARRIVE_M = 4.0
 WAYPOINT_TIMEOUT_S = 180.0
+SEPARATION_H_M = 6.0  # closer than this horizontally...
+SEPARATION_V_M = 3.0  # ...and this vertically is a conflict
+CLEAR_H_M = 10.0  # a drone giving way resumes once this far away and not closing
+LOOKAHEAD_S = 6.0  # predict conflicts this far ahead from the drones' velocities
+GIVE_WAY_CLIMB_M = 6.0
+MONITOR_PERIOD_S = 0.25
 
 SWARM_HELP = """Swarm (name drones first: 2, 1,3 or all):
   all takeoff [ALT]                     arm and climb to ALT m above home [30]
-  N goto LAT LON [ALT]                  fly there; several drones form a line 15 m apart
+  N goto LAT LON [ALT] [HEADING]        fly there; on arrival turn to HEADING deg from
+                                        north if given; several drones form a line
+  N heading DEG                         turn in place to face DEG from north
   N hold | land | rtl                   hover / land here / return home and land
+  N searcharea ALT SPACING LAT,LON;LAT,LON;...
+                                        grid-search a polygon, passes split between drones
   N search LAT1 LON1 LAT2 LON2 [ALT] [SPACING]
-                                        sweep the box, one strip per drone
+                                        the same for a box
   select N                              show drone N in the dashboard (or keys 1-9)
-  status                                every drone's mode, height and position"""
+  status                                every drone's mode, height and position
+  Drone N flies (N-1) x the layer step higher than the height asked for."""
 
 
 def offset_geo(lat, lon, north_m, east_m):
@@ -48,26 +81,45 @@ def offset_geo(lat, lon, north_m, east_m):
             lon + east_m / (EARTH_M_PER_DEG * math.cos(math.radians(lat))))
 
 
-def lawnmower(lat1, lon1, lat2, lon2, spacing_m):
-    """Back-and-forth north/south passes over a lat/lon box, spacing_m apart."""
-    south, north = sorted((lat1, lat2))
-    west, east = sorted((lon1, lon2))
-    width_m = (east - west) * EARTH_M_PER_DEG * math.cos(math.radians(south))
-    passes = max(1, math.ceil(width_m / spacing_m))
-    step = (east - west) / passes
-    points = []
-    for k in range(passes):
-        lon = west + (k + 0.5) * step
-        ends = [(south, lon), (north, lon)]
-        points += ends if k % 2 == 0 else ends[::-1]
-    return points
+def horizontal_m(a, b):
+    return math.hypot((b[0] - a[0]) * EARTH_M_PER_DEG,
+                      (b[1] - a[1]) * EARTH_M_PER_DEG * math.cos(math.radians(a[0])))
 
 
 class SwarmControl:
-    def __init__(self, links):
+    def __init__(self, links, layer_step_m=5.0):
         self.links = links  # PayloadLink per drone, drone N = links[N - 1]
+        self.layer_step = layer_step_m
         self.tasks = {}  # drone index -> asyncio task running its command
-        self.destinations = {}  # drone index -> (lat, lon) it was last sent to
+        # What each drone is doing, for the map and deconfliction:
+        self.destinations = {}  # index -> (lat, lon) it is flying to now
+        self.plans = {}  # index -> [(lat, lon), ...] its remaining route
+        self.plan_alts = {}  # index -> height (m above home) of that route
+        self.crossings = []  # [(lat, lon, text, safe)] predicted crossings
+        self.giving_way = {}  # index -> what to resume once clear
+        self.headings = {}  # index -> heading asked for with its last goto
+        self._monitor = None
+        self._rate_mark = (time.monotonic(), [0] * len(links))  # position rate
+
+    def start(self):
+        """Start the separation monitor (needs the running event loop)."""
+        if self._monitor is None or self._monitor.done():
+            self._monitor = asyncio.create_task(self._separation_monitor())
+
+    def stop(self):
+        if self._monitor:
+            self._monitor.cancel()
+
+    def current_alt(self, i):
+        """Drone i's height if airborne, else its layer's default height."""
+        pos = self.links[i].position
+        if pos and pos[3] > 2.0 and self.links[i].armed:
+            return pos[3]
+        return self.layered(i, DEFAULT_ALT_M)
+
+    def layered(self, i, alt):
+        """Drone i's height for a requested height: its own layer."""
+        return alt + i * self.layer_step
 
     # ------------------------------------------------------------------
     # Console
@@ -98,39 +150,61 @@ class SwarmControl:
             if action == "takeoff":
                 alt = float(args[0]) if args else DEFAULT_ALT_M
                 for i in targets:
-                    self._start(i, self._takeoff(i, alt))
+                    self._start(i, self._takeoff(i, self.layered(i, alt)))
+            elif action == "heading" and len(args) == 1:
+                heading = float(args[0]) % 360.0
+                for i in targets:
+                    self._start(i, self._turn(i, heading))
             elif action == "goto" and len(args) >= 2:
                 lat, lon = float(args[0]), float(args[1])
-                alt = float(args[2]) if len(args) > 2 else None
+                alt = float(args[2]) if len(args) > 2 and args[2] != "-" else None
+                heading = float(args[3]) % 360.0 if len(args) > 3 else None
                 for k, i in enumerate(targets):
                     east = (k - (len(targets) - 1) / 2) * FORMATION_SPACING_M
-                    self._start(i, self._fly_to(i, *offset_geo(lat, lon, 0.0, east), alt))
+                    point = offset_geo(lat, lon, 0.0, east)
+                    drone_alt = self.layered(i, alt) if alt is not None else self.current_alt(i)
+                    self._set_plan(i, [point], drone_alt)
+                    self._start(i, self._fly_to(i, *point, drone_alt, heading=heading))
+                self.check_crossings(targets)
             elif action in ("hold", "land", "rtl"):
                 for i in targets:
                     self._start(i, self._simple(i, action))
+            elif action == "searcharea" and len(args) >= 3:
+                alt, spacing = float(args[0]), float(args[1])
+                polygon = [tuple(float(v) for v in p.split(",")) for p in
+                           " ".join(args[2:]).replace(" ", "").split(";") if p]
+                self.search_area(targets, polygon, alt, spacing)
             elif action == "search" and len(args) >= 4:
-                box = [float(a) for a in args[:4]]
+                lat1, lon1, lat2, lon2 = (float(a) for a in args[:4])
                 alt = float(args[4]) if len(args) > 4 else DEFAULT_ALT_M
                 spacing = float(args[5]) if len(args) > 5 else SEARCH_SPACING_M
-                self.search(targets, box, alt, spacing)
+                box = [(lat1, lon1), (lat1, lon2), (lat2, lon2), (lat2, lon1)]
+                self.search_area(targets, box, alt, spacing)
             else:
                 print(SWARM_HELP)
-        except ValueError:
-            print(SWARM_HELP)
+        except ValueError as err:
+            print(f"{err}\n{SWARM_HELP}" if str(err) else SWARM_HELP)
         return True
 
     def status_lines(self):
+        now = time.monotonic()
+        then, counts = self._rate_mark
+        rates = [(link.position_count - c) / max(now - then, 1e-3)
+                 for link, c in zip(self.links, counts)]
+        self._rate_mark = (now, [link.position_count for link in self.links])
         lines = []
         for i, link in enumerate(self.links):
             task = self.tasks.get(i)
             doing = task.get_name() if task and not task.done() else ""
+            if i in self.giving_way:
+                doing += " (giving way)"
             if link.position:
                 lat, lon, _, rel = link.position
                 where = f"{rel:5.1f} m  {lat:.6f}, {lon:.6f}"
             else:
                 where = "no position yet"
             lines.append(f"Drone{i + 1}  {link.mode:<8} {'armed' if link.armed else 'disarmed':<8} "
-                         f"{where}  {doing}")
+                         f"{where}  position {rates[i]:.0f}/s  {doing}")
         return lines
 
     # ------------------------------------------------------------------
@@ -140,6 +214,7 @@ class SwarmControl:
         old = self.tasks.get(i)
         if old and not old.done():
             old.cancel()
+        self.giving_way.pop(i, None)
         task = asyncio.create_task(self._report(i, coro))
         task.set_name(coro.__name__.strip("_"))
         self.tasks[i] = task
@@ -156,16 +231,35 @@ class SwarmControl:
         # Link calls wait for PX4's acknowledgement, so keep them off the UI loop
         return await asyncio.to_thread(func, *args)
 
-    async def _takeoff(self, i, alt):
+    def _set_plan(self, i, points, alt):
+        self.plans[i] = list(points)
+        self.plan_alts[i] = alt
+        self.destinations[i] = points[0] if points else None
+
+    def _clear_plan(self, i):
+        self.plans.pop(i, None)
+        self.plan_alts.pop(i, None)
+        self.destinations.pop(i, None)
+
+    async def _arm_and(self, i, action, *args):
+        """Retry an action that needs PX4 armed and its estimator settled."""
         link = self.links[i]
-        # PX4 refuses to arm until its estimator has converged
-        for attempt in range(60):
-            result = await self._call(link.takeoff, alt)
+        for _ in range(60):
+            if not link.armed:
+                # PX4 won't arm in a manual mode without a radio; it can boot
+                # into one when its position estimate isn't ready yet
+                if link.mode in ("MANUAL", "STABILIZED", "ALTCTL", "POSCTL", "ACRO", "?"):
+                    await self._call(link.hold)
+                await self._call(link.arm)
+            result = await self._call(action, *args)
             if result == M.MAV_RESULT_ACCEPTED:
-                projectairsim_log().info(f"Drone{i + 1}: takeoff to {alt:.0f} m")
                 return
             await asyncio.sleep(1.0)
-        raise RuntimeError(f"PX4 would not take off ({link.status_text or 'no reason given'})")
+        raise RuntimeError(f"PX4 refused ({link.status_text or 'no reason given'})")
+
+    async def _takeoff(self, i, alt):
+        await self._arm_and(i, self.links[i].takeoff, alt)
+        projectairsim_log().info(f"Drone{i + 1}: takeoff to {alt:.0f} m")
 
     async def _ensure_airborne(self, i, alt):
         link = self.links[i]
@@ -175,49 +269,81 @@ class SwarmControl:
         while not link.position or link.position[3] < alt - 2.0:
             await asyncio.sleep(0.5)
 
-    async def _fly_to(self, i, lat, lon, alt=None, wait=False):
+    async def _turn(self, i, heading):
+        link = self.links[i]
+        if not (link.position and link.position[3] > 2.0 and link.armed):
+            raise RuntimeError("take off before turning")
+        await self._call(link.turn_to, heading)
+        self.headings[i] = heading
+        projectairsim_log().info(f"Drone{i + 1}: turning to {heading:.0f} deg")
+
+    async def _fly_to(self, i, lat, lon, alt=None, wait=False, heading=None):
         link = self.links[i]
         if alt is None:
             alt = max(link.position[3], DEFAULT_ALT_M) if link.position else DEFAULT_ALT_M
+            self.plan_alts[i] = alt
         await self._ensure_airborne(i, alt)
+        # Fly there keeping the current heading; a heading asked for is only
+        # applied on arrival
         await self._call(link.fly_to, lat, lon, alt)
         self.destinations[i] = (lat, lon)
-        if wait:
+        self.headings[i] = heading
+        if wait or heading is not None:
             loop = asyncio.get_running_loop()
-            deadline = loop.time() + WAYPOINT_TIMEOUT_S
-            while (link.distance_to(lat, lon) or 1e9) > ARRIVE_M:
+            distance = link.distance_to(lat, lon) or 0.0
+            deadline = loop.time() + WAYPOINT_TIMEOUT_S + distance / 2.0
+            while (link.distance_to(lat, lon) or 1e9) > ARRIVE_M or i in self.giving_way:
                 if loop.time() > deadline:
                     raise RuntimeError(f"didn't reach {lat:.6f}, {lon:.6f}")
                 await asyncio.sleep(0.5)
+        if heading is not None:
+            await self._call(link.fly_to, lat, lon, alt, -1.0, heading)
+            projectairsim_log().info(f"Drone{i + 1}: arrived; turning to {heading:.0f} deg")
 
     async def _simple(self, i, action):
         link = self.links[i]
         func = {"hold": link.hold, "land": link.land, "rtl": link.return_home}[action]
-        self.destinations.pop(i, None)
+        self._clear_plan(i)
         result = await self._call(func)
         if result not in (None, M.MAV_RESULT_ACCEPTED):
             raise RuntimeError(f"PX4 refused {action} (result {result})")
 
     # ------------------------------------------------------------------
-    # Search
+    # Area search (PX4 missions)
 
-    def search(self, targets, box, alt, spacing):
-        """Split the box into one strip per drone (west to east) and sweep each."""
-        lat1, lon1, lat2, lon2 = box
-        west, east = sorted((lon1, lon2))
-        width = (east - west) / len(targets)
-        for k, i in enumerate(targets):
-            strip = (lat1, west + k * width, lat2, west + (k + 1) * width)
-            self._start(i, self._sweep(i, strip, alt, spacing))
-        print(f"Searching with {len(targets)} drones at {alt:.0f} m, passes {spacing:.0f} m apart")
+    def search_area(self, targets, polygon, alt, spacing):
+        """Grid-search a [(lat, lon), ...] polygon with the target drones."""
+        paths, heading = plan_area_search(polygon, len(targets), spacing)
+        used = 0
+        for i, path in zip(targets, paths):
+            if not path:
+                projectairsim_log().info(f"Drone{i + 1}: area too small to need it")
+                continue
+            used += 1
+            drone_alt = self.layered(i, alt)
+            self._set_plan(i, path, drone_alt)
+            self._start(i, self._fly_mission(i, path, drone_alt))
+        projectairsim_log().info(
+            f"Searching the area with {used} drone{'s' if used != 1 else ''}: passes "
+            f"{spacing:.0f} m apart, heading {heading:.0f} deg"
+        )
+        self.check_crossings(targets)
 
-    async def _sweep(self, i, strip, alt, spacing):
-        points = lawnmower(*strip, spacing)
-        for n, (lat, lon) in enumerate(points):
-            await self._fly_to(i, lat, lon, alt, wait=True)
-            projectairsim_log().debug(f"Drone{i + 1}: search waypoint {n + 1}/{len(points)}")
-        projectairsim_log().info(f"Drone{i + 1}: search strip done; holding")
-        await self._simple(i, "hold")
+    async def _fly_mission(self, i, path, alt):
+        link = self.links[i]
+        airborne = bool(link.position and link.position[3] > 2.0 and link.armed)
+        first, count = await self._call(link.upload_mission, path, alt, not airborne)
+        projectairsim_log().info(f"Drone{i + 1}: mission of {len(path)} waypoints uploaded")
+        await self._arm_and(i, link.start_mission)
+        # Follow progress for the map until the last waypoint is reached
+        while link.mission_reached < count - 1:
+            k = link.mission_seq - first
+            if 0 <= k < len(path):
+                self.plans[i] = path[k:]
+                self.destinations[i] = path[k]
+            await asyncio.sleep(0.5)
+        self._clear_plan(i)
+        projectairsim_log().info(f"Drone{i + 1}: search done; holding at the last waypoint")
 
     async def wait_idle(self):
         """Wait until every drone has finished its command."""
@@ -225,21 +351,138 @@ class SwarmControl:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    # ------------------------------------------------------------------
+    # Deconfliction
+
+    def route(self, i):
+        """Drone i's remaining route from where it is now, or []."""
+        plan = self.plans.get(i)
+        link = self.links[i]
+        if not plan or not link.position:
+            return []
+        return [link.position[:2]] + list(plan)
+
+    def check_crossings(self, changed):
+        """Report where the changed drones' routes come close to other drones'
+        routes, and whether the height layers keep them apart."""
+        crossings = []
+        for i, j in itertools.combinations(range(len(self.links)), 2):
+            if i not in changed and j not in changed:
+                continue
+            a, b = self.route(i), self.route(j)
+            found = []  # one report per place where the paths meet
+            for lat, lon, d in find_crossings(a, b, SEPARATION_H_M):
+                if all(horizontal_m((lat, lon), f) > 20.0 for f in found):
+                    found.append((lat, lon))
+            for lat, lon in found[:3]:
+                alt_i, alt_j = self.plan_alts.get(i), self.plan_alts.get(j)
+                gap = abs(alt_i - alt_j) if alt_i is not None and alt_j is not None else 0.0
+                safe = gap >= SEPARATION_V_M
+                text = (f"Drone{i + 1} and Drone{j + 1} paths cross at {lat:.6f}, {lon:.6f}: "
+                        + (f"{gap:.0f} m apart in height, OK" if safe else
+                           "same height; the separation monitor will make one give way"))
+                crossings.append((lat, lon, f"{i + 1}x{j + 1}", safe))
+                (projectairsim_log().info if safe else projectairsim_log().warning)(text)
+        # Keep crossings involving drones that didn't change
+        self.crossings = [c for c in self.crossings
+                          if not any(str(k + 1) in c[2].split("x") for k in changed)] + crossings
+
+    async def _separation_monitor(self):
+        while True:
+            await asyncio.sleep(MONITOR_PERIOD_S)
+            try:
+                await self._check_separation()
+            except Exception as err:
+                projectairsim_log().debug(f"Separation check skipped: {err}")
+
+    def _state(self, i, now):
+        """Drone i's (north, east, up) metres from a common origin and velocity,
+        extrapolated to now."""
+        link = self.links[i]
+        lat, lon, amsl, _ = link.position
+        vn, ve, vd = link.velocity
+        dt = max(0.0, min(1.0, now - link.position_time))
+        north = (lat - self.links[0].position[0]) * EARTH_M_PER_DEG + vn * dt
+        east = ((lon - self.links[0].position[1]) * EARTH_M_PER_DEG
+                * math.cos(math.radians(lat)) + ve * dt)
+        return (north, east, amsl - vd * dt), (vn, ve, -vd)
+
+    def predict(self, i, j, now):
+        """Closest approach of drones i and j within LOOKAHEAD_S, assuming they
+        keep their velocities: (horizontal m, vertical m, seconds from now)."""
+        (pi, vi), (pj, vj) = self._state(i, now), self._state(j, now)
+        r = [b - a for a, b in zip(pi, pj)]
+        v = [b - a for a, b in zip(vi, vj)]
+        vv = v[0] ** 2 + v[1] ** 2
+        t = 0.0 if vv < 1e-6 else max(0.0, min(LOOKAHEAD_S, -(r[0] * v[0] + r[1] * v[1]) / vv))
+        dh = math.hypot(r[0] + v[0] * t, r[1] + v[1] * t)
+        dv = abs(r[2] + v[2] * t)
+        return dh, dv, t
+
+    async def _check_separation(self):
+        if not self.links[0].position:
+            return
+        now = time.monotonic()
+        airborne = [i for i, link in enumerate(self.links)
+                    if link.position and link.position[3] > 2.0 and link.armed]
+        for i, j in itertools.combinations(airborne, 2):
+            dh, dv, t = self.predict(i, j, now)
+            if dh < SEPARATION_H_M and dv < SEPARATION_V_M and j not in self.giving_way \
+                    and i not in self.giving_way:
+                await self._give_way(j, i, dh, dv, t)
+        # Resume drones that are clear of everyone again
+        for j, state in list(self.giving_way.items()):
+            pj = self.links[j].position
+            if not pj:
+                continue
+            clear = True
+            for k in airborne:
+                if k == j:
+                    continue
+                dh_now = horizontal_m(pj[:2], self.links[k].position[:2])
+                dh, dv, _ = self.predict(j, k, now)
+                if dh_now < CLEAR_H_M or (dh < SEPARATION_H_M and dv < SEPARATION_V_M + 2):
+                    clear = False
+            if clear:
+                del self.giving_way[j]
+                await self._resume(j, state)
+
+    async def _give_way(self, j, i, dh, dv, t):
+        link = self.links[j]
+        lat, lon, _, rel = link.position
+        state = {"mode": link.mode, "destination": self.destinations.get(j),
+                 "alt": self.plan_alts.get(j, rel), "heading": self.headings.get(j)}
+        self.giving_way[j] = state
+        when = "now" if t < 0.5 else f"in {t:.1f} s"
+        projectairsim_log().warning(
+            f"Drone{j + 1} would pass {dh:.1f} m from Drone{i + 1} ({dv:.1f} m in height) "
+            f"{when}: giving way, climbing {GIVE_WAY_CLIMB_M:.0f} m"
+        )
+        await self._call(link.fly_to, lat, lon, rel + GIVE_WAY_CLIMB_M)
+
+    async def _resume(self, j, state):
+        link = self.links[j]
+        projectairsim_log().info(f"Drone{j + 1}: clear again, resuming")
+        if state["mode"] == "MISSION":
+            await self._call(link.resume_mission)
+        elif state["destination"]:
+            # A heading asked for is applied by the goto itself, on arrival
+            await self._call(link.fly_to, *state["destination"], state["alt"])
+        else:
+            await self._call(link.hold)
+
 
 async def search_demo(swarm, home_lat, home_lon, heading_deg, alt=DEFAULT_ALT_M):
-    """Hands-off check that the swarm flies: take off together, sweep a box
-    ahead of the spawn point, then return home and land."""
+    """Hands-off check that the swarm flies: search a box ahead of the spawn
+    point together, then return home and land."""
     h = math.radians(heading_deg)
     centre = offset_geo(home_lat, home_lon, 150.0 * math.cos(h), 150.0 * math.sin(h))
     lat1, lon1 = offset_geo(*centre, -100.0, -60.0 * len(swarm.links))
     lat2, lon2 = offset_geo(*centre, 100.0, 60.0 * len(swarm.links))
     targets = list(range(len(swarm.links)))
-    projectairsim_log().info("Swarm demo: takeoff")
-    for i in targets:
-        swarm._start(i, swarm._ensure_airborne(i, alt))
-    await swarm.wait_idle()
     projectairsim_log().info("Swarm demo: searching")
-    swarm.search(targets, (lat1, lon1, lat2, lon2), alt, SEARCH_SPACING_M)
+    box = [(lat1, lon1), (lat1, lon2), (lat2, lon2), (lat2, lon1)]
+    swarm.search_area(targets, box, alt, SEARCH_SPACING_M)
     await swarm.wait_idle()
     projectairsim_log().info("Swarm demo: return home")
     for i in targets:

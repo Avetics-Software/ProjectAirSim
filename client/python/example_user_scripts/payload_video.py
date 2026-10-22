@@ -120,7 +120,8 @@ class CameraWindows:
       + / -          zoom the camera         [ / ]   zoom the map out / in
       C              centre (level, ahead)   X       look straight down
       V or click the small camera            swap the two cameras
-      click the map  set the selected drone's target for "Go to target"
+      click the map  set the selected drone's target for "Go to target", or
+                     with "Draw area" on, add a corner of the search area
       L              map labels on/off       1-9     show and steer that drone
 
     It is a Tk window: OpenCV's Qt windows zoom the whole image on the mouse
@@ -162,6 +163,7 @@ class CameraWindows:
         self.chase_zoom = 1.0  # digital zoom of the ChaseCam
         self.selected = 1  # drone number shown and steered
         self.targets = {}  # drone number -> (lat, lon) clicked on the map
+        self.area = []  # corners (lat, lon) of the search area being drawn
         self._frames = {}
         self._lock = threading.Lock()
         self._messages = collections.deque()  # log lines waiting to be shown
@@ -196,7 +198,7 @@ class CameraWindows:
         """Add the control bar: drone and camera choice, flight buttons for the
         selected drone or all of them, a command box and recent messages."""
         self.on_command = on_command
-        self.root.geometry(f"{self.SIZE[0]}x{self.SIZE[1] + 190}")
+        self.root.geometry(f"{self.SIZE[0]}x{self.SIZE[1] + 222}")
         bar = tk.Frame(self.root, bg=self.BG)
         bar.pack(side=tk.BOTTOM, fill=tk.X, before=self.label)
 
@@ -241,7 +243,12 @@ class CameraWindows:
         self._alt_var = tk.StringVar(value=f"{default_alt:g}")
         tk.Entry(row, textvariable=self._alt_var, width=5, bg=self.FIELD, fg=self.FG,
                  insertbackground=self.FG, relief=tk.FLAT).pack(side=tk.LEFT, padx=(4, 10))
+        label(row, "Heading (deg)").pack(side=tk.LEFT)
+        self._heading_var = tk.StringVar(value="")
+        tk.Entry(row, textvariable=self._heading_var, width=5, bg=self.FIELD, fg=self.FG,
+                 insertbackground=self.FG, relief=tk.FLAT).pack(side=tk.LEFT, padx=(4, 10))
         for text, action in (("Take off", "takeoff"), ("Go to target", "goto"),
+                             ("Set heading", "heading"),
                              ("Hold", "hold"), ("Land", "land"), ("Return home", "rtl")):
             button(row, text, lambda a=action: self._fly(a)).pack(side=tk.LEFT, padx=2)
         self._target_text = tk.StringVar()
@@ -249,7 +256,30 @@ class CameraWindows:
         tk.Label(row, textvariable=self._target_text, bg=self.BG, fg="#ff8080").pack(side=tk.LEFT)
         self._show_target()
 
-        # Row 3: command box, same commands as the terminal
+        # Row 3: grid search of an area drawn on the map
+        row = tk.Frame(bar, bg=self.BG)
+        row.pack(fill=tk.X, padx=8, pady=2)
+        label(row, "Search area").pack(side=tk.LEFT)
+        self._drawing = tk.BooleanVar(value=False)
+        tk.Checkbutton(row, text="Draw area (click corners on the map)", variable=self._drawing,
+                       indicatoron=False, bg=self.FIELD, fg=self.FG, selectcolor=self.ACCENT,
+                       activebackground=self.ACCENT, relief=tk.FLAT, padx=10, pady=3,
+                       highlightthickness=0).pack(side=tk.LEFT, padx=(6, 2))
+        button(row, "Undo corner", self._undo_corner).pack(side=tk.LEFT, padx=2)
+        button(row, "Clear area", self._clear_area).pack(side=tk.LEFT, padx=2)
+        label(row, "  Pass spacing (m)").pack(side=tk.LEFT)
+        self._spacing_var = tk.StringVar(value="40")
+        tk.Entry(row, textvariable=self._spacing_var, width=5, bg=self.FIELD, fg=self.FG,
+                 insertbackground=self.FG, relief=tk.FLAT).pack(side=tk.LEFT, padx=4)
+        label(row, "Drones").pack(side=tk.LEFT)
+        self._search_drones = tk.StringVar(value="all")
+        tk.Entry(row, textvariable=self._search_drones, width=8, bg=self.FIELD, fg=self.FG,
+                 insertbackground=self.FG, relief=tk.FLAT).pack(side=tk.LEFT, padx=4)
+        button(row, "Search area", self._search_area).pack(side=tk.LEFT, padx=6)
+        self._area_text = tk.StringVar(value="no area")
+        tk.Label(row, textvariable=self._area_text, bg=self.BG, fg="#e0e070").pack(side=tk.LEFT)
+
+        # Row 4: command box, same commands as the terminal
         row = tk.Frame(bar, bg=self.BG)
         row.pack(fill=tk.X, padx=8, pady=2)
         label(row, "Command").pack(side=tk.LEFT)
@@ -263,7 +293,7 @@ class CameraWindows:
         button(row, "Send", self._send_entry).pack(side=tk.LEFT)
         button(row, "Help", lambda: self.on_command("help")).pack(side=tk.LEFT, padx=2)
 
-        # Row 4: recent messages
+        # Row 5: recent messages
         self._log = tk.Text(bar, height=5, bg="#141517", fg="#c8c8c8", relief=tk.FLAT,
                             font=("DejaVu Sans Mono", 9), state=tk.DISABLED, takefocus=False)
         self._log.pack(fill=tk.X, padx=8, pady=(2, 8))
@@ -304,9 +334,44 @@ class CameraWindows:
             if not target:
                 self.log(f"Click the map to set {self.drone_name(self.selected)}'s target first")
                 return
-            self.on_command(f"{who} goto {target[0]:.6f} {target[1]:.6f} {alt}")
+            heading = self._heading_var.get().strip()  # blank: keep the heading
+            self.on_command(f"{who} goto {target[0]:.6f} {target[1]:.6f} {alt} {heading}".strip())
+        elif action == "heading":
+            heading = self._heading_var.get().strip()
+            if not heading:
+                self.log("Type a heading in degrees from north (0 = N, 90 = E) first")
+                return
+            self.on_command(f"{who} heading {heading}")
         else:
             self.on_command(f"{who} {action}")
+
+    def _update_area(self):
+        if self.minimap:
+            self.minimap.set_area(self.area)
+        n = len(self.area)
+        self._area_text.set("no area" if n == 0 else f"{n} corner{'s' if n != 1 else ''}"
+                            + ("" if n >= 3 else " (need 3)"))
+        self._seq += 1
+
+    def _undo_corner(self):
+        if self.area:
+            self.area.pop()
+            self._update_area()
+
+    def _clear_area(self):
+        self.area.clear()
+        self._update_area()
+
+    def _search_area(self):
+        if len(self.area) < 3:
+            self.log("Draw the search area first: turn on Draw area and click 3+ corners")
+            return
+        drones = self._search_drones.get().strip().replace(" ", "") or "all"
+        alt = self._alt_var.get().strip() or "30"
+        spacing = self._spacing_var.get().strip() or "40"
+        corners = ";".join(f"{lat:.6f},{lon:.6f}" for lat, lon in self.area)
+        self._drawing.set(False)
+        self.on_command(f"{drones} searcharea {alt} {spacing} {corners}")
 
     def _send_entry(self):
         line = self._entry.get().strip()
@@ -380,7 +445,10 @@ class CameraWindows:
         elif pane == "Minimap" and self.minimap:
             px, py, pw, ph = self.PANES["Minimap"]
             geo = self.minimap.pixel_to_geo(x - px, y - py, pw, ph)
-            if geo:
+            if geo and hasattr(self, "_drawing") and self._drawing.get():
+                self.area.append(geo)
+                self._update_area()
+            elif geo:
                 self.targets[self.selected] = geo
                 self.minimap.set_picked(self.drone_name(self.selected), geo)
                 self._show_target()

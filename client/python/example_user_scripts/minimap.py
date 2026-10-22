@@ -26,6 +26,8 @@ KIND_COLOURS = {
     "drone": (235, 170, 60),  # other drones of a swarm (blue)
 }
 TARGET = (60, 60, 255)
+AREA = (200, 200, 0)  # search area being drawn
+SAFE, UNSAFE = (120, 220, 120), (40, 40, 255)  # path crossings
 MIN_M_PER_PX, MAX_M_PER_PX = 0.25, 16.0
 EARTH_M_PER_DEG = 111_320.0
 
@@ -43,6 +45,10 @@ class MiniMap:
         self.picked = {}
         self.heading_to = {}
         self.selected_name = None  # the drone at the centre
+        self.routes = {}  # drone name -> [(north, east)] its remaining route
+        self.area = []  # [(north, east)] corners of the search area being drawn
+        self.crossings = []  # [(north, east, label, safe)]
+        self.heading_goals = {}  # drone name -> heading (deg) it was told to face
         self._lock = threading.Lock()
         self._cache = None
         self._cache_key = None
@@ -102,6 +108,37 @@ class MiniMap:
             self.heading_to = {name: self._to_ned(*ll) for name, ll in destinations.items()}
             self._cache_key = None
 
+    def set_routes(self, routes):
+        """Each drone's remaining route: {name: [(lat, lon), ...]}."""
+        if not self.home:
+            return
+        with self._lock:
+            self.routes = {n: [self._to_ned(*p[:2]) for p in r] for n, r in routes.items()}
+            self._cache_key = None
+
+    def set_area(self, corners):
+        """Corners [(lat, lon), ...] of the search area being drawn."""
+        if not self.home:
+            return
+        with self._lock:
+            self.area = [self._to_ned(*p) for p in corners]
+            self._cache_key = None
+
+    def set_crossings(self, crossings):
+        """Predicted path crossings [(lat, lon, label, safe)]."""
+        if not self.home:
+            return
+        with self._lock:
+            self.crossings = [(*self._to_ned(lat, lon), label, safe)
+                              for lat, lon, label, safe in crossings]
+            self._cache_key = None
+
+    def set_heading_goals(self, goals):
+        """Headings the drones were told to face: {name: degrees from north}."""
+        with self._lock:
+            self.heading_goals = dict(goals)
+            self._cache_key = None
+
     def select(self, name):
         with self._lock:
             self.selected_name = name
@@ -149,13 +186,80 @@ class MiniMap:
                 cv2.putText(img, name, (x + 6, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
                             colour, 1, cv2.LINE_AA)
 
+        self._draw_area(img, px)
+        self._draw_routes(img, px)
         self._draw_targets(img, px, drone, objects)
+        self._draw_crossings(img, px)
         if drone:
             self._draw_drone(img, width // 2, height // 2, drone[2])
+            self._draw_compass(img, width, height, drone[2])
         self._draw_legend(img, width, height, visible, len(objects))
         with self._lock:
             self._cache, self._cache_key = img, key
         return img
+
+    def _draw_compass(self, img, width, height, heading):
+        """The selected drone's heading against North, bottom right."""
+        r = 38
+        cx, cy = width - r - 14, height - r - 34
+        cv2.circle(img, (cx, cy), r + 4, (20, 20, 20), -1, cv2.LINE_AA)
+        cv2.circle(img, (cx, cy), r, (110, 110, 110), 1, cv2.LINE_AA)
+        for deg in range(0, 360, 30):
+            a = math.radians(deg)
+            inner = r - (7 if deg % 90 == 0 else 4)
+            cv2.line(img, (int(cx + inner * math.sin(a)), int(cy - inner * math.cos(a))),
+                     (int(cx + r * math.sin(a)), int(cy - r * math.cos(a))), (150, 150, 150), 1,
+                     cv2.LINE_AA)
+        for text, deg in (("N", 0), ("E", 90), ("S", 180), ("W", 270)):
+            a = math.radians(deg)
+            tx, ty = cx + (r - 15) * math.sin(a), cy - (r - 15) * math.cos(a)
+            colour = (60, 60, 255) if text == "N" else TEXT
+            cv2.putText(img, text, (int(tx - 4), int(ty + 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
+                        colour, 1, cv2.LINE_AA)
+        goal = self.heading_goals.get(self.selected_name)
+        if goal is not None:
+            a = math.radians(goal)
+            cv2.line(img, (int(cx + (r - 9) * math.sin(a)), int(cy - (r - 9) * math.cos(a))),
+                     (int(cx + (r + 4) * math.sin(a)), int(cy - (r + 4) * math.cos(a))),
+                     TARGET, 3, cv2.LINE_AA)
+        a = math.radians(heading)
+        tip = (int(cx + (r - 6) * math.sin(a)), int(cy - (r - 6) * math.cos(a)))
+        tail = (int(cx - 10 * math.sin(a)), int(cy + 10 * math.cos(a)))
+        cv2.arrowedLine(img, tail, tip, DRONE, 2, cv2.LINE_AA, tipLength=0.3)
+        label = f"{self.selected_name or ''} {heading % 360:03.0f} deg"
+        (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        cv2.putText(img, label, (cx - tw // 2, cy + r + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    TEXT, 1, cv2.LINE_AA)
+
+    def _draw_area(self, img, px):
+        if not self.area:
+            return
+        pts = np.array([px(*p) for p in self.area], np.int32)
+        if len(pts) >= 3:
+            overlay = img.copy()
+            cv2.fillPoly(overlay, [pts], AREA)
+            cv2.addWeighted(overlay, 0.18, img, 0.82, 0, img)
+        cv2.polylines(img, [pts], len(pts) >= 3, AREA, 1, cv2.LINE_AA)
+        for p in pts:
+            cv2.circle(img, tuple(int(v) for v in p), 3, AREA, -1, cv2.LINE_AA)
+
+    def _draw_routes(self, img, px):
+        """Each drone's remaining route, thin, in its colour."""
+        for name, route in self.routes.items():
+            if len(route) < 2:
+                continue
+            colour = TARGET if name == self.selected_name else KIND_COLOURS["drone"]
+            pts = np.array([px(*p) for p in route], np.int32)
+            cv2.polylines(img, [pts], False, colour, 1, cv2.LINE_AA)
+
+    def _draw_crossings(self, img, px):
+        for north, east, label, safe in self.crossings:
+            x, y = px(north, east)
+            colour = SAFE if safe else UNSAFE
+            cv2.line(img, (x - 6, y - 6), (x + 6, y + 6), colour, 2, cv2.LINE_AA)
+            cv2.line(img, (x - 6, y + 6), (x + 6, y - 6), colour, 2, cv2.LINE_AA)
+            cv2.putText(img, label, (x + 8, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.35, colour, 1,
+                        cv2.LINE_AA)
 
     def _draw_targets(self, img, px, drone, objects):
         """Each drone's target: where it is flying (a line from the drone) or,

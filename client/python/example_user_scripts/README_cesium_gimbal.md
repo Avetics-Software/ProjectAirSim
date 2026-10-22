@@ -70,6 +70,7 @@ acceleration); edit it to taste.
 | `--geoid` | 8.1 | Geoid height (m); about 8 across Singapore |
 | `--drones N` | 1 | Fly a swarm of N PX4 drones (see [Swarm](#swarm)) |
 | `--drone-spacing M` | 8 | Metres between the drones at the spawn, in a line to the right |
+| `--layer-step M` | 5 | Drone N flies (N-1) x M metres above the height asked for (0 = off) |
 | `--objects FILE` | `config_spawned_objects.yml` | Objects to place in the world; `''` for none |
 | `--actors FILE` | `config_moving_actors.yml` | People and vehicles moving along paths; `''` for none |
 | `--camera-props FILE` | `camera_properties.json` | GimbalCam resolution, sensor and zoom lens |
@@ -237,9 +238,11 @@ the Fly view's multi-vehicle list to command them all.
 | Command | Effect |
 |---|---|
 | `all takeoff [ALT]` | Arm and climb to ALT m above home (default 30) |
-| `2 goto LAT LON [ALT]` | Fly drone 2 there and hover; several drones form a line 15 m apart |
+| `2 goto LAT LON [ALT] [HEADING]` | Fly drone 2 there and hover; several drones form a line 15 m apart. With HEADING (degrees from north: 0 N, 90 E) it flies there with its heading unchanged and turns to face HEADING once it arrives (within 4 m); without, it keeps its heading. Use `-` for ALT to keep the height, e.g. `2 goto 1.4150 103.8660 - 180` |
+| `2 heading DEG` | Turn drone 2 in place to face DEG from north |
 | `1,3 hold` / `land` / `rtl` | Hover / land where they are / return home and land |
-| `all search LAT1 LON1 LAT2 LON2 [ALT] [SPACING]` | Split the box into one strip per drone and sweep it in passes SPACING m apart (default 40) |
+| `1,3 searcharea ALT SPACING LAT,LON;LAT,LON;...` | Grid-search a polygon: passes SPACING m apart are split between the drones and each gets a PX4 mission (QGC shows it) |
+| `all search LAT1 LON1 LAT2 LON2 [ALT] [SPACING]` | The same for a box (default spacing 40) |
 | `status` | Each drone's flight mode, armed state, height and position |
 | `select N` | Show and steer drone N in the dashboard (or press 1-9 there) |
 | `gimbal PITCH YAW [N]`, `zoom PERCENT [N]` | Point / zoom drone N's camera (default: the selected one) |
@@ -248,9 +251,39 @@ The commands go to each drone's PX4 over MAVLink, like a companion computer's,
 so QGC shows what the drones are doing and can take over at any time. A new
 command for a drone replaces what it was doing.
 
+**From the dashboard:** the control bar under the dashboard does the same
+without typing (see [Camera and gimbal](#camera-and-gimbal)): pick a drone,
+click the minimap to set its target, and use *Go to target*, *Set heading*,
+*Take off*, *Hold*, *Land* or *Return home*. Tick *Buttons command all
+drones* to command the whole swarm.
+
+**Area search from the dashboard:** turn on *Draw area*, click the corners
+on the minimap, set the height, pass spacing and drones (`all` or e.g. `1,3`)
+and press *Search area*. The passes run along the area's longest edge and are
+split so each drone's share is about as long; concave areas work. Each drone's
+remaining route is drawn on the minimap.
+
+**Deconfliction.** Drones don't avoid each other on their own (PX4 knows
+nothing about the other drones), so the swarm does it in three layers:
+
+1. *Height layers:* drone N flies (N-1) x 5 m above the height asked for
+   (`--layer-step`), so routes that cross pass at different heights.
+2. *Crossing check:* every new route is compared with the other drones'
+   routes. Places where they come within 6 m are reported in the messages and
+   marked on the minimap: green if the heights keep them 3 m or more apart,
+   red if not.
+3. *Separation monitor:* from each drone's position and velocity, the swarm
+   predicts how close every pair will get in the next 6 s. If two would pass
+   within 6 m horizontally and 3 m vertically, the higher-numbered drone gives
+   way: it stops and climbs 6 m, then resumes its mission or flight once the
+   other is 10 m away. This also covers drones flown from QGC. PX4 reports
+   positions about 4-5 times a second, which is why it predicts rather than
+   waiting until they are close.
+
 The dashboard shows the selected drone's cameras; the minimap shows all drones
-(the selected one yellow, the others blue) and the status panel lists each
-drone's mode and height. Every camera of the swarm renders, so frame rates drop
+(the selected one yellow, the others blue), where each is heading and its
+remaining route, and a compass with the selected drone's heading. The status
+panel lists each drone's mode and height. Every camera of the swarm renders, so frame rates drop
 (about 12 fps per camera with 3 drones on an RTX 3070 laptop, against 22 with
 one); drones 2 and up have a smaller chase camera and no down camera.
 
@@ -287,34 +320,65 @@ vibration aren't simulated yet; the script warns if they're enabled.
 
 ## Camera and gimbal
 
-**Dashboard window** ("ProjectAirSim"): one window, tiled like tmux panes:
+**Dashboard window** ("ProjectAirSim"): one window, tiled like tmux panes,
+with a control bar underneath:
 
 ```
 +----------------------------+-------------+
-|                            |  ChaseCam   |
-|         GimbalCam          +-------------+
-|                            |             |
+|                            | small camera|
+|  main camera (GimbalCam    +-------------+
+|  or ChaseCam)              |             |
 +----------------------------+   Minimap   |
-|  Status (position, counts) |             |
+|  Status (drones, counts)   |             |
 +----------------------------+-------------+
+| Drone: [Drone1] [Drone2] ...   View: [GimbalCam] [ChaseCam]  [ ] all drones |
+| Height [30]  Heading [  ]  Take off  Go to target  Set heading  Hold ...    |
+| Search area: Draw area  Undo corner  Clear area  Spacing [40]  Drones [all] |
+| Command [ ...the terminal's commands... ]                                   |
+| messages                                                                    |
 ```
 
-The **minimap** is north-up and centred on the drone (yellow arrow). It shows
-OpenStreetMap roads, moving vehicles and people (dots with a heading tick) and
-static objects (grey squares). Positions refresh every second. It starts at
+**Control bar:**
+
+- *Drone* buttons (or keys 1-9) pick the drone whose cameras are shown and
+  whose gimbal the keys steer. *View* puts the GimbalCam or the ChaseCam in the
+  big pane (or press V, or click the small camera).
+- Flight buttons command the selected drone, or every drone with *Buttons
+  command all drones* ticked. *Height* is metres above home; *Heading* is
+  degrees from north (0 N, 90 E, 180 S, 270 W), used by *Set heading* (turn in
+  place now) and *Go to target* (turn on arrival; blank keeps the heading).
+- Click the minimap to set the selected drone's target (red cross). Each drone
+  keeps its own target: switch drones to see theirs. Once a drone is flying
+  somewhere, a line runs from it to its destination.
+- *Search area*: see [Swarm](#swarm).
+- *Command*: any terminal command (↑/↓ for history); replies and drone
+  messages appear below it. Debug messages go to `projectairsim_client.log`
+  only (add `--verbose` to see them in the terminal too).
+
+The **minimap** is north-up and centred on the selected drone (yellow arrow;
+other drones blue). It shows OpenStreetMap roads, moving vehicles and people
+(dots with a heading tick), static objects (grey squares), targets, routes,
+predicted path crossings and the search area being drawn. The **compass** in
+its bottom-right corner shows the selected drone's heading against North in
+degrees, with a red tick at the heading it was told to face. Positions refresh
+every second. It starts at
 2 m per pixel (about 1 km across) and zooms from 0.25 to 16 m per pixel. Roads
 cover 1.5 km around the spawn point; objects show wherever they are.
 
 Each pane zooms on its own: the mouse wheel acts on the pane under the pointer.
 
-Click the window first so it has keyboard focus:
+Click the cameras or map first so they have keyboard focus (typing in the
+control bar's boxes doesn't steer the gimbal):
 
 | Input | Action |
 |---|---|
 | W / S | Tilt the gimbal up / down |
 | A / D | Pan left / right |
-| Mouse wheel over GimbalCam, + / - | Optical zoom along the lens's focal-length range |
-| Mouse wheel over ChaseCam | Digital zoom (1–8x) |
+| Mouse wheel over the GimbalCam, + / - | Optical zoom along the lens's focal-length range |
+| Mouse wheel over the ChaseCam | Digital zoom (1–8x) |
+| V, or click the small camera | Swap the two cameras |
+| 1-9 | Show and steer that drone |
+| Click the minimap | Set the selected drone's target (or, in *Draw area* mode, add a corner) |
 | C | Centre (level, straight ahead) |
 | X | Look straight down |
 | Mouse wheel over the minimap, [ / ] | Zoom the map out / in |
