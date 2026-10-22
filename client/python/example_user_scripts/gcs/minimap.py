@@ -3,8 +3,8 @@ Copyright (C) 2025 IAMAI CONSULTING CORP
 MIT License.
 
 A top-down map of the area around the drone: OpenStreetMap roads, the drone
-(yellow; other drones of a swarm in blue) and every spawned or moving object,
-north up. Positions are pushed in by the
+(yellow; other drones of a swarm in blue) and any other objects (in the sim,
+every spawned or moving object), north up. Positions are pushed in by the
 caller (about once a second); the map is drawn into a pane of the dashboard.
 """
 
@@ -84,7 +84,8 @@ class MiniMap:
         lon = self.home[1] + east / (EARTH_M_PER_DEG * math.cos(math.radians(self.home[0])))
         return lat, lon
 
-    def _to_ned(self, lat, lon):
+    def to_ned(self, lat, lon):
+        """Metres north and east of home."""
         north = (lat - self.home[0]) * EARTH_M_PER_DEG
         east = (lon - self.home[1]) * EARTH_M_PER_DEG * math.cos(math.radians(self.home[0]))
         return north, east
@@ -95,7 +96,7 @@ class MiniMap:
             return
         with self._lock:
             if lat_lon:
-                self.picked[name] = self._to_ned(*lat_lon)
+                self.picked[name] = self.to_ned(*lat_lon)
             else:
                 self.picked.pop(name, None)
             self._cache_key = None
@@ -105,7 +106,7 @@ class MiniMap:
         if not self.home:
             return
         with self._lock:
-            self.heading_to = {name: self._to_ned(*ll) for name, ll in destinations.items()}
+            self.heading_to = {name: self.to_ned(*ll) for name, ll in destinations.items()}
             self._cache_key = None
 
     def set_routes(self, routes):
@@ -113,7 +114,7 @@ class MiniMap:
         if not self.home:
             return
         with self._lock:
-            self.routes = {n: [self._to_ned(*p[:2]) for p in r] for n, r in routes.items()}
+            self.routes = {n: [self.to_ned(*p[:2]) for p in r] for n, r in routes.items()}
             self._cache_key = None
 
     def set_area(self, corners):
@@ -121,7 +122,7 @@ class MiniMap:
         if not self.home:
             return
         with self._lock:
-            self.area = [self._to_ned(*p) for p in corners]
+            self.area = [self.to_ned(*p) for p in corners]
             self._cache_key = None
 
     def set_crossings(self, crossings):
@@ -129,7 +130,7 @@ class MiniMap:
         if not self.home:
             return
         with self._lock:
-            self.crossings = [(*self._to_ned(lat, lon), label, safe)
+            self.crossings = [(*self.to_ned(lat, lon), label, safe)
                               for lat, lon, label, safe in crossings]
             self._cache_key = None
 

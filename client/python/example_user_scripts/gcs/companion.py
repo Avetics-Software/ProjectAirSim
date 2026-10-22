@@ -3,11 +3,11 @@ Copyright (C) 2025 IAMAI CONSULTING CORP
 MIT License.
 
 Link to a companion computer running the X vision pipeline (A5X_RPI_Release,
-e.g. a Radxa with the rknn-sim profile) on one of the sim's drones.
+e.g. a Radxa) on one of the drones: in the sim the rknn-sim profile, on a real
+drone its flight profile.
 
-The companion reads the drone's GimbalCam over RTSP and its PX4 over MAVLink
-(run_cesium_sim.sh --pi-ip), detects and tracks targets, and steers the
-gimbal itself. This side does what X's ground station
+The companion reads the drone's gimbal camera and its PX4 over MAVLink,
+detects and tracks targets, and steers the gimbal itself. This side does what X's ground station
 (map-plot/laptop_client.py) does, over the same UDP text protocol:
 
   - shows the companion's annotated video (rtsp://<ip>:8554/tracker)
@@ -18,14 +18,12 @@ gimbal itself. This side does what X's ground station
   - HEARTBEAT every 0.2 s, so the companion knows a ground station is up
 """
 
-import os
 import socket
 import threading
 import time
 
-import cv2
-
-from projectairsim.utils import projectairsim_log
+from .log import log
+from .video import VideoStream
 
 COMMAND_PORT = 5556  # X's GCS_INPUT_PORT: tracking, control and heartbeat
 TRACKER_PORT = 8554  # the companion's MediaMTX
@@ -40,19 +38,13 @@ class CompanionLink:
         self.addr = (ip, port)
         self.tracker_url = f"rtsp://{ip}:{TRACKER_PORT}/tracker"
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.frame = None  # newest tracker frame (BGR)
-        self.frame_time = 0.0
+        self.video = VideoStream(self.tracker_url, f"{name} tracker")
         self.tracking = False  # a target has been sent and not cancelled
         self.track_point = None  # (x, y) in tracker pixels
         self._stop = threading.Event()
         self._zoom_timer = None
-        self._threads = [
-            threading.Thread(target=self._heartbeat_loop, daemon=True),
-            threading.Thread(target=self._video_loop, daemon=True),
-        ]
-        for t in self._threads:
-            t.start()
-        projectairsim_log().info(f"{name}: X pipeline at {ip}, video {self.tracker_url}")
+        threading.Thread(target=self._heartbeat_loop, daemon=True).start()
+        log.info(f"{name}: X pipeline at {ip}, video {self.tracker_url}")
 
     # ------------------------------------------------------------------
     # Commands
@@ -61,7 +53,7 @@ class CompanionLink:
         try:
             self.sock.sendto(text.encode(), self.addr)
         except OSError as err:
-            projectairsim_log().debug(f"{self.name}: send {text!r} failed: {err}")
+            log.debug(f"{self.name}: send {text!r} failed: {err}")
 
     def click(self, x, y):
         self.send(f"CLICK:{int(x)},{int(y)}")
@@ -109,31 +101,19 @@ class CompanionLink:
         while not self._stop.wait(HEARTBEAT_PERIOD_S):
             self.send(f"HEARTBEAT:{int(time.time_ns() / 1e7)}")
 
-    def _video_loop(self):
-        # Newest frame only: TCP, no buffering, no reordering delay
-        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS",
-                              "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|"
-                              "max_delay;0|reorder_queue_size;0")
-        while not self._stop.is_set():
-            cap = cv2.VideoCapture(self.tracker_url, cv2.CAP_FFMPEG)
-            if not cap.isOpened():
-                self._stop.wait(2.0)
-                continue
-            projectairsim_log().info(f"{self.name}: receiving the tracker video")
-            while not self._stop.is_set():
-                ok, frame = cap.read()
-                if not ok:
-                    break
-                self.frame, self.frame_time = frame, time.monotonic()
-            cap.release()
-            if not self._stop.is_set():
-                projectairsim_log().warning(f"{self.name}: tracker video lost; retrying")
-                self._stop.wait(2.0)
+    @property
+    def frame(self):
+        return self.video.frame
+
+    @property
+    def frame_time(self):
+        return self.video.frame_time
 
     @property
     def video_ok(self):
-        return self.frame is not None and time.monotonic() - self.frame_time < 2.0
+        return self.video.ok
 
     def close(self):
         self._stop.set()
+        self.video.close()
         self.sock.close()

@@ -1,0 +1,7 @@
+# The ground station on its own (python -m gcs). Tk comes with Python
+# (on Debian/Ubuntu: apt install python3-tk).
+numpy
+opencv-python
+pillow
+pymavlink
+PyYAML

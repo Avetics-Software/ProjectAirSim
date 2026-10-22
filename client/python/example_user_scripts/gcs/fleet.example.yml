@@ -1,0 +1,37 @@
+# The drones the ground station flies, and how to reach each one.
+#
+# Real drones:   python -m gcs --fleet my_fleet.yml
+# The sim:       ./run_cesium_sim.sh --qgc --fleet my_fleet.yml
+#                The sim reads only how many drones there are and each one's
+#                companion; it makes one PX4 per drone (Drone1, Drone2, ...) and
+#                sets their MAVLink, system ids and video itself (drone N: PX4
+#                instance N-1, system id N, rtsp://<laptop>:8554/gimbalN, with
+#                /gimbal for drone 1).
+
+# MAVLink link that carries every drone (each with its own system id): a
+# telemetry radio, a mesh, or mavlink-router. Any pymavlink connection string,
+# e.g. udpin:0.0.0.0:14550, udpout:192.168.1.10:14550, /dev/ttyUSB0,57600.
+mavlink: udpin:0.0.0.0:14550
+
+# Our MAVLink ids on that link. Not 255, QGC's, so QGC can share it.
+gcs_sysid: 245
+gcs_compid: 190
+
+# Map origin (lat, lon). Leave out to use the first drone's first position.
+# home: [1.413425, 103.865000]
+
+# Drone N flies (N - 1) x this many metres above the height asked for, so
+# drones whose paths cross pass at different heights. 0 turns it off.
+layer_step: 5
+
+drones:
+  - name: Drone1
+    sysid: 1                                   # its PX4's MAV_SYS_ID
+    video: rtsp://192.168.144.25:8554/main     # gimbal camera (optional)
+    companion: 192.168.199.99                  # Radxa running X (optional)
+
+  - name: Drone2
+    sysid: 2
+    # mavlink: udpin:0.0.0.0:14560             # this drone on its own link instead
+    # chase_video: rtsp://...                  # a second camera, shown as the ChaseCam
+    companion: 192.168.199.100

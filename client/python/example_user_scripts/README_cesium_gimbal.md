@@ -51,6 +51,7 @@ These are handled by `run_cesium_sim.sh`; everything else goes to
 | `--px4-params FILE` | | Extra PX4 parameters applied at boot, after `px4_params.parm`. Accepts `NAME VALUE` lines (like ArduPilot `.parm` files, `#` comments allowed) or a QGC `.params` export. Repeatable; later files win |
 | `--pi-ip IP` | | Also send MAVLink to a companion computer at `IP`, and announce the video at `rtsp://<this laptop's LAN IP>:8554/gimbal` |
 | `--pi-ports P1,P2` | 15540,15541 | Companion-computer MAVLink UDP ports (as `--serial1/2` in the old ArduPilot scripts) |
+| `--fleet FILE` | | The drones and each one's companion computer, from the same fleet file the real-drone ground station uses (see [Companions on several drones](#companions-on-several-drones)). Replaces `--drones` and `--pi-ip` |
 
 The sim also sets `NAV_RCL_ACT`, `NAV_DLL_ACT` and `COM_OBL_RC_ACT` after PX4
 connects (no RC in simulation), so those three override your file.
@@ -280,6 +281,10 @@ nothing about the other drones), so the swarm does it in three layers:
    positions about 4-5 times a second, which is why it predicts rather than
    waiting until they are close.
 
+The dashboard, swarm control and deconfliction are the ground station in
+`gcs/`, which flies real PX4 drones with the same code; see
+[gcs/README.md](gcs/README.md).
+
 The dashboard shows the selected drone's cameras; the minimap shows all drones
 (the selected one yellow, the others blue), where each is heading and its
 remaining route, and a compass with the selected drone's heading. The status
@@ -475,6 +480,28 @@ the tracker video is arriving. `--companion IP` sets the companion without
 `--pi-ip`. Drone control (strike) is off in `rknn-sim` for now; fly the drone
 from the dashboard or QGC.
 
+### Companions on several drones
+
+Give each drone its own companion computer with a fleet file
+(`gcs/fleet.example.yml`):
+
+```yaml
+drones:
+  - companion: 192.168.199.99     # Drone1
+  - companion: 192.168.199.100    # Drone2
+  - {}                            # Drone3: no companion
+```
+
+```bash
+./run_cesium_sim.sh --qgc --fleet my_fleet.yml
+```
+
+Drone N's PX4 sends MAVLink to its companion on UDP 15540 and 15541, and its
+video is `rtsp://<laptop>:8554/gimbalN` (`/gimbal` for Drone1), so each Radxa's
+`INPUT_RTSP` must name its own drone's stream. The dashboard shows the selected
+drone's Tracker (keys 1-9 pick the drone). The sim reads only how many drones
+there are and their companions; the rest of the file is for real drones.
+
 ## Ports
 
 | Port | Used by |
@@ -482,7 +509,8 @@ from the dashboard or QGC.
 | UDP 14550 ← 18570 (+N) | PX4 ↔ QGroundControl (drone N+1 of a swarm) |
 | UDP 14030 ← 14280 (+N) | PX4 ↔ this script (gimbal, MAVLink camera, swarm commands) |
 | TCP 4560 (+N) | PX4 ↔ simulator |
-| UDP 15540, 15541 ← 14590, 14591 | PX4 ↔ Raspberry Pi (with `--pi-ip`) |
+| UDP 15540, 15541 ← 14590, 14591 (+10N) | PX4 ↔ companion computer (with `--pi-ip` or `--fleet`) |
+| UDP 5556, TCP 8554 on the companion | Dashboard → X commands, X's tracker video |
 | TCP 8554 | RTSP video |
 | TCP 8989 / 8990 | Simulator API |
 

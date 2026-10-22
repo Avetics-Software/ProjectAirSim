@@ -10,6 +10,7 @@
 #   ./run_cesium_sim.sh --qgc --spotter                   # fly from QGC, with a spotter
 #   ./run_cesium_sim.sh --qgc --drones 3                  # a swarm of 3 PX4 drones
 #   ./run_cesium_sim.sh --px4-params my.params --pi-ip 192.168.199.73 --qgc
+#   ./run_cesium_sim.sh --qgc --fleet my_fleet.yml        # drones and companions from a file
 #
 # Launcher options (everything else goes to px4_gimbal_cesium.py, see --help):
 #   --vehicle quad|vtol    airframe (default quad; vtol is not available yet)
@@ -21,6 +22,9 @@
 #                          UDP ports --pi-ports (default 15540,15541), and
 #                          announce the video at rtsp://<this laptop>:8554/gimbal
 #   --pi-ports P1[,P2...]  companion-computer MAVLink ports
+#   --fleet FILE           the drones and each one's companion computer, as for
+#                          the real-drone ground station (gcs/fleet.example.yml);
+#                          replaces --drones and --pi-ip
 #   --edit-actors          first open the map editor for the moving actors
 #                          (actor_editor.py) in the browser; the sim starts
 #                          after you press "Save & start"
@@ -58,6 +62,7 @@ main() {
     [ -f "$SCRIPT_DIR/px4_params.parm" ] && PX4_PARAM_FILES+=("$SCRIPT_DIR/px4_params.parm")
     PI_IP=""
     PI_PORTS="15540,15541"
+    FLEET=""
     EDIT_ACTORS=0
     SCRIPT_ARGS=()
     while [ $# -gt 0 ]; do
@@ -66,6 +71,7 @@ main() {
             --px4-params) PX4_PARAM_FILES+=("$(realpath "$2")"); shift 2 ;;
             --pi-ip) PI_IP="$2"; shift 2 ;;
             --pi-ports) PI_PORTS="$2"; shift 2 ;;
+            --fleet) FLEET="$(realpath "$2")"; SCRIPT_ARGS+=(--fleet "$FLEET"); shift 2 ;;
             --edit-actors) EDIT_ACTORS=1; shift ;;
             *) SCRIPT_ARGS+=("$1"); shift ;;
         esac
@@ -129,6 +135,17 @@ main() {
         [ "${SCRIPT_ARGS[$i]}" = "--drones" ] && DRONES="${SCRIPT_ARGS[$((i + 1))]}"
         i=$((i + 1))
     done
+    COMPANIONS="$PI_IP"
+    if [ -n "$FLEET" ]; then
+        # The fleet file sets the drones and their companion computers
+        read -r DRONES COMPANIONS < <(cd "$SCRIPT_DIR" && "$PYTHON" -c '
+import sys
+from gcs.fleet import load_fleet
+fleet = load_fleet(sys.argv[1])
+print(len(fleet.drones), ",".join(d.companion or "-" for d in fleet.drones))
+' "$FLEET")
+        PI_IP=""
+    fi
     PORTS="8989 8990"
     for ((n = 0; n < DRONES; n++)); do PORTS="$PORTS $((4560 + n))"; done
     for port in $PORTS; do
@@ -171,11 +188,17 @@ main() {
         SCRIPT_ARGS=(--no-rtsp ${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"})
     fi
 
-    if [ -n "$PI_IP" ]; then
-        # Announce the stream on the address the companion computer can reach
-        LAN_IP="$(ip route get "$PI_IP" | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')"
+    FIRST_COMPANION="$(tr ',' '\n' <<< "$COMPANIONS" | grep -v '^-$' | grep -m1 . || true)"
+    if [ -n "$FIRST_COMPANION" ]; then
+        # Announce the streams on the address the companion computers can reach
+        LAN_IP="$(ip route get "$FIRST_COMPANION" | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')"
         SCRIPT_ARGS=(--rtsp-advertise-url "rtsp://$LAN_IP:8554/gimbal" ${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"})
-        echo "Companion computer $PI_IP: MAVLink on UDP $PI_PORTS, video at rtsp://$LAN_IP:8554/gimbal"
+        n=1
+        for ip in ${COMPANIONS//,/ }; do
+            suffix=$([ $n -gt 1 ] && echo $n || true)
+            [ "$ip" != "-" ] && echo "Drone$n companion computer $ip: MAVLink on UDP $PI_PORTS, video at rtsp://$LAN_IP:8554/gimbal$suffix"
+            n=$((n + 1))
+        done
     fi
 
     echo "GimbalCam video: rtsp://127.0.0.1:8554/gimbal (QGC, Pi) or http://127.0.0.1:8889/gimbal (browser, WebRTC)"

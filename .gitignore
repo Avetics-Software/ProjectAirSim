@@ -415,4 +415,5 @@ AGENTS.md
 client/python/example_user_scripts/sim_config/scene_px4_gimbal_cesium_custom.jsonc
 client/python/example_user_scripts/sim_config/robot_quadrotor_px4_gimbal_payload_custom*.jsonc
 client/python/example_user_scripts/osm_cache/
+client/python/example_user_scripts/gcs.log
 client/python/example_user_scripts/*.yml.bak

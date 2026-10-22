@@ -43,9 +43,7 @@ Examples:
 
 import argparse
 import asyncio
-import contextlib
 import faulthandler
-import io
 import json
 import logging
 import math
@@ -53,7 +51,6 @@ import os
 import signal
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
 
@@ -65,15 +62,18 @@ from projectairsim.types import Pose, Quaternion, Vector3
 from projectairsim.utils import load_scene_config_as_dict, projectairsim_log, quaternion_to_rpy
 
 from camera_properties import CameraProperties
-from payload_mavlink import PayloadLink
-from payload_video import CameraWindows, RtspStreamer, image_to_bgr
+from gcs.fleet import load_fleet
+from gcs.log import log as gcs_log
+from gcs.mavlink_link import VehicleLink
+from gcs.minimap import road_segments
+from gcs.station import DroneCamera, GroundStation
+from gcs.swarm import search_demo
+from payload_mavlink import SimCamera, payload_connection
+from payload_video import RtspStreamer, image_to_bgr
 from px4_sitl import Px4Sitl
 from shared_frame import SharedFrameWriter
-from companion import CompanionLink
-from minimap import MiniMap, road_segments
 from moving_actors import ACTORS_HELP, MovingActorManager
 from spawned_objects import CONSOLE_HELP, ObjectSpawner
-from swarm import SWARM_HELP, SwarmControl, search_demo
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SIM_CONFIG_DIR = os.path.join(SCRIPT_DIR, "sim_config")
@@ -142,6 +142,11 @@ def parse_args():
         help="IP of a companion computer running the X vision pipeline on Drone1 "
         "(default: run_cesium_sim.sh's --pi-ip). The dashboard shows its tracker "
         "video and sends it click-to-track and gimbal commands.",
+    )
+    parser.add_argument(
+        "--fleet",
+        help="fleet file (gcs/fleet.example.yml): the number of drones and each one's "
+        "companion computer. Replaces --drones and --companion.",
     )
     parser.add_argument(
         "--layer-step",
@@ -307,30 +312,28 @@ def gimbal_setpoint(t):
     return pitch, yaw
 
 
-class Payload:
-    """One drone's gimbal camera: RTSP stream, MAVLink camera and sim zoom. Its
-    frames go to the dashboard only while it is the selected drone.
+class SimPayload(DroneCamera):
+    """One sim drone's cameras: frames from the sim (to the dashboard while it
+    is the selected drone, and to RTSP), the sim zoom, and the MAVLink camera
+    that QGC and companion computers zoom through. The gimbal is steered over
+    MAVLink like a real drone's (DroneCamera).
 
     Everything that talks to the sim runs on the asyncio thread via `tick()`.
     """
 
-    def __init__(self, link, rtsp, camera, windows, name="Drone1"):
-        self.name = name
+    def __init__(self, link, windows, sim_camera, rtsp, camera):
+        super().__init__(link, windows)
         self.drone = None
-        self.link = link
+        self.sim_camera = sim_camera  # SimCamera
         self.rtsp = rtsp
-        self.camera = camera
-        self.windows = windows
-        self.selected = False
+        self.camera = camera  # CameraProperties
         self.zoom_speed = float(
             camera.props.get("zoom", {}).get("zoom_speed_percent_per_s", 30.0)
         )
         self.zoom_percent = 0.0
         self.zoom_rate = 0.0
         self.applied_zoom = None
-        self.pitch, self.yaw = GIMBAL_CAM_INITIAL_PITCH, 0.0
         self.last_gimbal_frame = None
-        self.last_control_claim = 0.0
         self.frame_counts = {"ChaseCam": 0, "GimbalCam": 0}
 
     def attach(self, client, drone):
@@ -355,15 +358,8 @@ class Payload:
         if self.rtsp:
             self.rtsp.push(bgr)
 
-    def steer(self, pitch_deg, yaw_deg):
-        # QGC can take gimbal control at any time; re-claim it when the user
-        # starts steering from the keyboard again
-        self.pitch, self.yaw = pitch_deg, yaw_deg
-        now = time.monotonic()
-        if now - self.last_control_claim > 2.0:
-            self.link.take_gimbal_control()
-        self.last_control_claim = now
-        self.link.set_gimbal_attitude(pitch_deg, yaw_deg)
+    def set_zoom(self, percent):
+        self.zoom_percent, self.zoom_rate = max(0.0, min(100.0, percent)), 0.0
 
     def nudge_zoom(self, delta_percent):
         self.zoom_percent = max(0.0, min(100.0, self.zoom_percent + delta_percent))
@@ -373,8 +369,9 @@ class Payload:
         return f"{focal:.1f} mm ({focal / self.camera.focal_min_mm:.1f}x)"
 
     def tick(self, dt):
-        while not self.link.zoom_requests.empty():
-            kind, value = self.link.zoom_requests.get()
+        requests = self.sim_camera.zoom_requests
+        while not requests.empty():
+            kind, value = requests.get()
             if kind == "range":
                 self.zoom_percent, self.zoom_rate = value, 0.0
             else:
@@ -388,10 +385,10 @@ class Payload:
             focal = self.camera.focal_length(self.zoom_percent)
             self.drone.set_field_of_view("GimbalCam", 0, self.camera.hfov_deg(focal))
             self.applied_zoom = self.zoom_percent
-            self.link.publish_zoom(self.zoom_percent)
+            self.sim_camera.publish_zoom(self.zoom_percent)
 
-        while not self.link.capture_requests.empty():
-            self.link.capture_requests.get()
+        while not self.sim_camera.capture_requests.empty():
+            self.sim_camera.capture_requests.get()
             self.save_snapshot()
 
     def save_snapshot(self):
@@ -401,164 +398,38 @@ class Payload:
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, time.strftime(f"{self.name}_GimbalCam_%Y%m%d_%H%M%S.png"))
         cv2.imwrite(path, self.last_gimbal_frame)
-        self.link.report_image_captured(path)
+        self.sim_camera.report_image_captured(path)
         projectairsim_log().info(f"Saved {path}")
 
 
-class PayloadGroup:
-    """Every drone's payload and the one dashboard window, which shows and
-    steers the selected drone (keys 1-9 or `select N`)."""
-
-    def __init__(self, payloads, windows, companions=None):
-        self.payloads = payloads
-        self.windows = windows
-        self.companions = companions or {}  # drone index -> CompanionLink
-        self._tracker_frame_time = 0.0
-        self.selected = 0
-        self.stats_t0 = time.monotonic()
-        self.select(1)
-
-    @property
-    def current(self):
-        return self.payloads[self.selected]
-
-    def select(self, number):
-        if not 1 <= number <= len(self.payloads):
-            return
-        self.selected = number - 1
-        for i, payload in enumerate(self.payloads):
-            payload.selected = i == self.selected
-        self.windows.title = self.current.name if len(self.payloads) > 1 else ""
-        self.windows.set_selected(number)
-        self.windows.set_companion(self.companions.get(self.selected))
-        self._tracker_frame_time = 0.0
-        self.windows.pitch, self.windows.yaw = self.current.pitch, self.current.yaw
-        with self.windows._lock:
-            self.windows._frames.clear()
-
-    def steer(self, pitch_deg, yaw_deg):
-        self.current.steer(pitch_deg, yaw_deg)
-
-    def nudge_zoom(self, delta_percent):
-        self.current.nudge_zoom(delta_percent)
-
-    def tick(self, dt):
-        for payload in self.payloads:
-            payload.tick(dt)
-        self.windows.zoom_text = self.current.zoom_text()
-        companion = self.companions.get(self.selected)
-        link = self.current.link
-        if companion and link.gimbal_attitude and time.monotonic() - link.gimbal_attitude_time < 1.0:
-            # The companion steers the gimbal, so show where it actually points
-            self.current.pitch, self.current.yaw = link.gimbal_attitude
-            self.windows.pitch, self.windows.yaw = link.gimbal_attitude
-        if companion and companion.frame is not None and companion.frame_time != self._tracker_frame_time:
-            self._tracker_frame_time = companion.frame_time
-            self.windows.receive("Tracker", companion.frame)
-        self.windows.update()
-
-        elapsed = time.monotonic() - self.stats_t0
-        if elapsed >= 10.0:
-            rates = "; ".join(
-                f"{p.name} " + ", ".join(f"{k} {n / elapsed:.1f}" for k, n in p.frame_counts.items())
-                for p in self.payloads
-            )
-            projectairsim_log().debug(f"Camera frames per second: {rates}")
-            for p in self.payloads:
-                p.frame_counts = dict.fromkeys(p.frame_counts, 0)
-            self.stats_t0 = time.monotonic()
+GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a new place (restarts PX4)"""
+SIM_HELP = CONSOLE_HELP + "\n" + ACTORS_HELP + "\n" + GOTO_HELP
 
 
-async def run_ui(group):
-    """Keep the dashboard, zoom and QGC camera requests serviced."""
-    last = time.monotonic()
-    while True:
-        now = time.monotonic()
-        try:
-            group.tick(now - last)
-        except Exception as err:  # e.g. the scene is reloading under us
-            projectairsim_log().debug(f"UI tick skipped: {err}")
-        last = now
-        await asyncio.sleep(0.015)
-
-
-GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a new place (restarts PX4)
-  gimbal PITCH YAW [N]                  point drone N's gimbal (degrees, yaw relative to
-                                        the drone) [the selected drone]
-  zoom PERCENT [N]                      set the zoom (0 = widest, 100 = longest focal length)"""
-
-
-async def handle_command(session, line):
-    """Run one console command (from the terminal or the dashboard)."""
-    help_text = CONSOLE_HELP + "\n" + ACTORS_HELP + "\n" + GOTO_HELP + "\n" + SWARM_HELP
-    parts = line.split()
-    if parts and parts[0].lower() == "help":
-        print(help_text)
-    elif parts and parts[0].lower() == "goto":
+async def sim_command(session, line, parts):
+    """The sim's own console commands, after the ground station's; anything
+    else goes to the object spawner, which reports what it doesn't know."""
+    word = parts[0].lower()
+    if word == "goto":
         try:
             lat, lon = float(parts[1]), float(parts[2])
             heading = float(parts[3]) if len(parts) > 3 else 0.0
         except (IndexError, ValueError):
             print("Usage: goto LAT LON [HEADING]")
-            return
+            return True
         if not session.args.qgc:
             print("goto is only available in --qgc mode")
-            return
+            return True
         try:
             await session.load(lat, lon, heading)
         except Exception as err:
             print(f"goto failed: {err}")
-    elif parts and parts[0].lower() == "gimbal" and len(parts) in (3, 4):
-        try:
-            pitch, yaw = float(parts[1]), float(parts[2])
-            payload = session.payloads.payloads[int(parts[3]) - 1] if len(parts) == 4 \
-                else session.payloads.current
-        except (ValueError, IndexError):
-            print("Usage: gimbal PITCH YAW [DRONE]")
-            return
-        payload.steer(pitch, yaw)
-        if payload.selected:
-            session.payloads.windows.pitch, session.payloads.windows.yaw = pitch, yaw
-    elif parts and parts[0].lower() == "select" and len(parts) == 2 and parts[1].isdigit():
-        session.payloads.select(int(parts[1]))
-    elif session.swarm and await session.swarm.run_command(parts):
-        pass
-    elif parts and parts[0].lower() == "actors":
+    elif word == "actors":
         if session.actors:
             session.actors.run_command(parts[1:])
-    elif parts and parts[0].lower() == "zoom" and len(parts) in (2, 3):
-        try:
-            payload = session.payloads.payloads[int(parts[2]) - 1] if len(parts) == 3 \
-                else session.payloads.current
-            payload.zoom_percent = max(0.0, min(100.0, float(parts[1])))
-        except (ValueError, IndexError):
-            print("Usage: zoom PERCENT [DRONE]")
-    else:
+    elif session.spawner:
         session.spawner.run_command(line)
-
-
-async def run_console(session):
-    """Run commands typed in the terminal or in the dashboard's command box.
-    Replies to dashboard commands are shown in the dashboard."""
-    loop = asyncio.get_running_loop()
-
-    def read_stdin():
-        # A daemon thread, so a blocked read never holds up exiting
-        for line in sys.stdin:
-            loop.call_soon_threadsafe(session.commands.put_nowait, (line, False))
-
-    threading.Thread(target=read_stdin, daemon=True).start()
-    print(CONSOLE_HELP + "\n" + ACTORS_HELP + "\n" + GOTO_HELP + "\n" + SWARM_HELP)
-    while True:
-        line, from_dashboard = await session.commands.get()
-        if not from_dashboard:
-            await handle_command(session, line)
-            continue
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            await handle_command(session, line)
-        for text in out.getvalue().splitlines():
-            session.payloads.windows.log(text)
+    return True
 
 
 async def run_ground_truth(session):
@@ -572,20 +443,11 @@ async def run_ground_truth(session):
         await asyncio.sleep(0.05)
 
 
-async def run_minimap(session, period=1.0):
-    """Refresh the minimap and status panel with every object's position."""
-    while True:
-        await asyncio.sleep(period)
-        if session.loading or not session.drones:
-            continue
-        try:
-            update_minimap(session)
-        except Exception as err:  # e.g. the scene is reloading under us
-            projectairsim_log().debug(f"Minimap update skipped: {err}")
-
-
-def update_minimap(session):
-    windows = session.payloads.windows
+def sim_objects(session):
+    """Every spawned object and moving actor, for the map, as (name, kind,
+    north, east, heading) from the sim's ground truth."""
+    if session.loading or not session.world:
+        return []
     kinds = {}
     if session.spawner:
         kinds.update(dict.fromkeys(session.spawner.spawned, "object"))
@@ -602,50 +464,16 @@ def update_minimap(session):
         if session.actors and name in session.actors.actors:
             yaw -= session.actors.actors[name]["yaw_offset"]
         objects.append((name, kinds[name], t["x"], t["y"], yaw))
-
-    counts = {}
+    session.object_counts = {}
     for _, kind, *_ in objects:
-        counts[kind] = counts.get(kind, 0) + 1
+        session.object_counts[kind] = session.object_counts.get(kind, 0) + 1
+    return objects
 
-    # Every drone: the selected one centres the map, the others are markers
-    selected = session.payloads.selected
-    drone_lines = []
-    centre = None
-    for i, drone in enumerate(session.drones):
-        kin = drone.get_ground_truth_kinematics()
-        p, q = kin["pose"]["position"], kin["pose"]["orientation"]
-        v = kin["twist"]["linear"]
-        heading = math.degrees(quaternion_to_rpy(q["w"], q["x"], q["y"], q["z"])[2]) % 360.0
-        if i == selected:
-            centre = (p["x"], p["y"], heading)
-        else:
-            objects.append((f"Drone{i + 1}", "drone", p["x"], p["y"], heading))
-        link = session.links[i]
-        mark = ">" if i == selected and len(session.drones) > 1 else " "
-        drone_lines.append(
-            f"{mark}Drone{i + 1}  {link.mode:<8} {'armed' if link.armed else 'disarmed':<8} "
-            f"height {-p['z']:5.1f} m   heading {heading:3.0f}   "
-            f"speed {math.hypot(v['x'], v['y']):4.1f} m/s"
-        )
-    windows.minimap.update(centre, objects, selected_name=f"Drone{selected + 1}")
-    swarm = session.swarm
-    windows.minimap.set_heading_to(
-        {f"Drone{i + 1}": dest for i, dest in swarm.destinations.items() if dest}
-    )
-    windows.minimap.set_routes({f"Drone{i + 1}": swarm.route(i) for i in swarm.plans})
-    windows.minimap.set_crossings(swarm.crossings)
-    windows.minimap.set_heading_goals(
-        {f"Drone{i + 1}": h for i, h in swarm.headings.items() if h is not None}
-    )
 
-    for i, companion in session.payloads.companions.items():
-        drone_lines.append(
-            f" Drone{i + 1} companion {companion.ip}: "
-            f"{'video ok' if companion.video_ok else 'no video yet'}"
-            f"{', tracking' if companion.tracking else ''}"
-        )
-    ports = ", ".join(f"{18570 + i}" for i in range(len(session.drones)))
-    windows.status_lines = drone_lines + [
+def sim_status(session):
+    counts = session.object_counts
+    ports = ", ".join(f"{18570 + i}" for i in range(len(session.px4s)))
+    return [
         "Objects: " + (", ".join(f"{n} {k}" for k, n in sorted(counts.items())) or "none"),
         f"QGC: UDP, listen 14550, servers 127.0.0.1: {ports}",
     ]
@@ -745,20 +573,20 @@ async def fly_gimbal_demo(drone, link):
 
 class Session:
     """The running world: loads a location, (re)starts PX4 for it and keeps the
-    camera windows, objects and spotter following the current scene."""
+    ground station's cameras and map, the objects and the spotter following
+    the current scene."""
 
-    def __init__(self, args, client, camera, payloads, links):
+    def __init__(self, args, client, camera, drones, companions):
         self.args = args
         self.client = client
         self.camera = camera
-        self.payloads = payloads  # PayloadGroup
-        self.links = links  # PayloadLink per drone
-        self.swarm = SwarmControl(links, args.layer_step)
-        self.commands = asyncio.Queue()  # (line, from the dashboard?)
-        self.px4s = [Px4Sitl(i) for i in range(len(links))]
+        self.station = None  # GroundStation, set once it is made
+        # Each PX4 also opens MAVLink links to its drone's companion computer
+        self.px4s = [Px4Sitl(i, pi_ip=companions.get(i, "")) for i in range(drones)]
         self.robot_configs = (
-            None if args.scene else [build_robot(camera, i) for i in range(len(links))]
+            None if args.scene else [build_robot(camera, i) for i in range(drones)]
         )
+        self.object_counts = {}
         self.world = None
         self.drones = []
         self.spawner = None
@@ -801,7 +629,7 @@ class Session:
             self.drones = [
                 Drone(self.client, self.world, f"Drone{i + 1}") for i in range(len(self.px4s))
             ]
-            for payload, drone in zip(self.payloads.payloads, self.drones):
+            for payload, drone in zip(self.station.cameras, self.drones):
                 payload.attach(self.client, drone)
             if self.pov_frames:
                 self.client.subscribe(
@@ -838,9 +666,9 @@ class Session:
                         "now) or raise --tile-wait."
                     )
 
-            for link in self.links:
+            for link in self.station.links:
                 link.wait_for_px4()
-            self.swarm.start()
+            self.station.swarm.start()
 
             # Ground lookups only see Cesium's collision once the sim is running
             self.spawner = ObjectSpawner(self.world, args.objects)
@@ -863,22 +691,16 @@ class Session:
             self.loading = False
 
     def _load_map_roads(self):
-        """OpenStreetMap roads around home for the minimap (cached after the
-        first download; moving actors on roads share the same data)."""
-        minimap = self.payloads.windows.minimap
+        """Centre the map on the scene's home, with its OpenStreetMap roads
+        (cached after the first download; moving actors on roads share them)."""
         home = self.world.home_geo_point
-        minimap.set_home(home["latitude"], home["longitude"])
-        minimap.picked.clear()
-        self.payloads.windows.targets.clear()
-        self.swarm.destinations.clear()
-        self.swarm.plans.clear()
-        self.swarm.crossings.clear()
-        minimap.set_roads([])
+        roads = []
         try:
             manager = self.actors or MovingActorManager(self.world, None)
-            minimap.set_roads(road_segments(manager._network("vehicle")))
+            roads = road_segments(manager._network("vehicle"))
         except Exception as err:
             projectairsim_log().warning(f"Minimap has no roads: {err}")
+        self.station.set_home(home["latitude"], home["longitude"], roads)
 
     def _stop_spotter(self):
         if self.spotter:
@@ -886,7 +708,6 @@ class Session:
             self.spotter = None
 
     def close(self):
-        self.swarm.stop()
         self._stop_spotter()
         if self.actors:
             self.actors.close()
@@ -894,22 +715,6 @@ class Session:
             px4.stop()
         if self.pov_frames:
             self.pov_frames.close()
-
-
-class DashboardLog(logging.Handler):
-    """Shows info messages and warnings in the dashboard's message box."""
-
-    def __init__(self, windows):
-        super().__init__(logging.INFO)
-        self.windows = windows
-        self.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
-
-    def emit(self, record):
-        message = record.getMessage()
-        # Skip the topic listings printed for each drone as it loads
-        if message.startswith(" ") or "can be subscribed" in message or message.startswith("-"):
-            return
-        self.windows.log(self.format(record))
 
 
 def quiet_terminal(verbose):
@@ -925,55 +730,68 @@ def drone_url(url, index):
     return url if index == 0 or not url else f"{url}{index + 1}"
 
 
+def share_sim_logging():
+    """The ground station logs to Project AirSim's log file and terminal too."""
+    gcs_log.setLevel(logging.DEBUG)
+    gcs_log.propagate = False
+    for handler in projectairsim_log().handlers:
+        gcs_log.addHandler(handler)
+
+
 async def main():
     args = parse_args()
     quiet_terminal(args.verbose)
+    share_sim_logging()
+    if args.fleet:
+        fleet = load_fleet(args.fleet)
+        args.drones = len(fleet.drones)
+        companions = fleet.companions
+    else:
+        companions = {0: args.companion} if args.companion else {}
     if args.scene and args.drones != 1:
         raise SystemExit("--drones needs a generated Cesium scene; it can't be used with --scene")
     camera = CameraProperties(args.camera_props if os.path.exists(args.camera_props) else None)
     projectairsim_log().info(f"GimbalCam {camera.describe()}")
 
     client = ProjectAirSimClient()
-    rtsps, links = [], []
-    group = None
+    rtsps, connections = [], []
+    station = None
     session = None
     tasks = []
 
     try:
         client.connect()
-        windows = CameraWindows(
-            on_gimbal=lambda p, y: group.steer(p, y),
-            on_zoom=lambda d: group.nudge_zoom(d),
-            on_select=lambda n: group.select(n),
-            initial_pitch=GIMBAL_CAM_INITIAL_PITCH, minimap=MiniMap(),
-        )
-
-        def dashboard_command(line):
-            if session:
-                session.commands.put_nowait((line, True))
-
-        windows.add_controls([f"Drone{i + 1}" for i in range(args.drones)], dashboard_command)
-        projectairsim_log().addHandler(DashboardLog(windows))
-        payloads = []
+        # Each drone's PX4 on its own payload link, with the sim's MAVLink camera
         advertised_url = args.rtsp_advertise_url or args.rtsp_url
+        links, sim_cameras = [], []
         for i in range(args.drones):
             rtsp = None if args.no_rtsp else RtspStreamer(drone_url(args.rtsp_url, i),
                                                           camera.resolution)
             rtsps.append(rtsp)
-            link = PayloadLink(drone_url(advertised_url, i) if rtsp else "", camera, instance=i)
-            links.append(link)
-            payloads.append(Payload(link, rtsp, camera, windows, name=f"Drone{i + 1}"))
-        companions = {}
-        if args.companion:
-            companions[0] = CompanionLink(args.companion, name="Drone1 companion")
-        group = PayloadGroup(payloads, windows, companions)
-        tasks.append(asyncio.create_task(run_ui(group)))
+            conn = payload_connection(i)
+            connections.append(conn)
+            links.append(VehicleLink(conn, i + 1, f"Drone{i + 1}"))
+            sim_cameras.append(SimCamera(conn, i, drone_url(advertised_url, i) if rtsp else "",
+                                         camera))
 
-        session = Session(args, client, camera, group, links)
+        session = Session(args, client, camera, args.drones, companions)
+        station = GroundStation(
+            links,
+            lambda i, link, windows: SimPayload(link, windows, sim_cameras[i], rtsps[i], camera),
+            companions=companions,
+            layer_step=args.layer_step,
+            extra_commands=lambda line, parts: sim_command(session, line, parts),
+            extra_help=SIM_HELP,
+            extra_objects=lambda: sim_objects(session),
+            extra_status=lambda: sim_status(session),
+        )
+        session.station = station
+        projectairsim_log().addHandler(station.dashboard_log)
+        station.start_ui()
+
         await session.load()
-        tasks.append(asyncio.create_task(run_console(session)))
+        station.start()
         tasks.append(asyncio.create_task(run_ground_truth(session)))
-        tasks.append(asyncio.create_task(run_minimap(session)))
 
         if args.qgc:
             servers = ", ".join(f"127.0.0.1:{18570 + i}" for i in range(args.drones))
@@ -989,7 +807,7 @@ async def main():
         else:
             home = session.world.home_geo_point
             heading = DEFAULT_HEADING if args.heading is None else args.heading
-            await search_demo(session.swarm, home["latitude"], home["longitude"], heading)
+            await search_demo(station.swarm, home["latitude"], home["longitude"], heading)
 
     finally:
         for task in tasks:
@@ -997,12 +815,11 @@ async def main():
         if session:
             session.close()
         client.disconnect()
-        if group:
-            group.windows.close()
-            for companion in group.companions.values():
-                companion.close()
-        for link in links:
-            link.close()
+        if station:
+            projectairsim_log().removeHandler(station.dashboard_log)
+            station.close()
+        for conn in connections:
+            conn.close()
         for rtsp in rtsps:
             if rtsp:
                 rtsp.close()

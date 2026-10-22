@@ -3,9 +3,9 @@ Copyright (C) 2025 IAMAI CONSULTING CORP
 MIT License.
 
 Flies several PX4 drones as a swarm from the run console or the dashboard.
-Commands go to each drone's PX4 over its MAVLink payload link
-(payload_mavlink.PayloadLink), the way a companion computer would send them, so
-QGroundControl shows what the drones are doing and can take over at any time.
+Commands go to each drone's PX4 over MAVLink (mavlink_link.VehicleLink), the
+way a companion computer or ground station would send them, so QGroundControl
+shows what the drones are doing and can take over at any time.
 
 Commands name the drones first: a number, a list like 1,3, or all.
   all takeoff 30                         arm and climb (each to its own height)
@@ -43,10 +43,9 @@ import itertools
 import math
 import time
 
-from projectairsim.utils import projectairsim_log
-
-from payload_mavlink import M
-from search_planner import find_crossings, plan_area_search
+from .log import log
+from .mavlink_link import M
+from .search_planner import find_crossings, plan_area_search
 
 EARTH_M_PER_DEG = 111_320.0
 DEFAULT_ALT_M = 30.0
@@ -88,7 +87,7 @@ def horizontal_m(a, b):
 
 class SwarmControl:
     def __init__(self, links, layer_step_m=5.0):
-        self.links = links  # PayloadLink per drone, drone N = links[N - 1]
+        self.links = links  # VehicleLink per drone, drone N = links[N - 1]
         self.layer_step = layer_step_m
         self.tasks = {}  # drone index -> asyncio task running its command
         # What each drone is doing, for the map and deconfliction:
@@ -203,7 +202,7 @@ class SwarmControl:
                 where = f"{rel:5.1f} m  {lat:.6f}, {lon:.6f}"
             else:
                 where = "no position yet"
-            lines.append(f"Drone{i + 1}  {link.mode:<8} {'armed' if link.armed else 'disarmed':<8} "
+            lines.append(f"{self.links[i].name}  {link.mode:<8} {'armed' if link.armed else 'disarmed':<8} "
                          f"{where}  position {rates[i]:.0f}/s  {doing}")
         return lines
 
@@ -225,7 +224,7 @@ class SwarmControl:
         except asyncio.CancelledError:
             raise
         except Exception as err:
-            projectairsim_log().warning(f"Drone{i + 1}: {err}")
+            log.warning(f"{self.links[i].name}: {err}")
 
     async def _call(self, func, *args):
         # Link calls wait for PX4's acknowledgement, so keep them off the UI loop
@@ -259,7 +258,7 @@ class SwarmControl:
 
     async def _takeoff(self, i, alt):
         await self._arm_and(i, self.links[i].takeoff, alt)
-        projectairsim_log().info(f"Drone{i + 1}: takeoff to {alt:.0f} m")
+        log.info(f"{self.links[i].name}: takeoff to {alt:.0f} m")
 
     async def _ensure_airborne(self, i, alt):
         link = self.links[i]
@@ -275,7 +274,7 @@ class SwarmControl:
             raise RuntimeError("take off before turning")
         await self._call(link.turn_to, heading)
         self.headings[i] = heading
-        projectairsim_log().info(f"Drone{i + 1}: turning to {heading:.0f} deg")
+        log.info(f"{self.links[i].name}: turning to {heading:.0f} deg")
 
     async def _fly_to(self, i, lat, lon, alt=None, wait=False, heading=None):
         link = self.links[i]
@@ -298,7 +297,7 @@ class SwarmControl:
                 await asyncio.sleep(0.5)
         if heading is not None:
             await self._call(link.fly_to, lat, lon, alt, -1.0, heading)
-            projectairsim_log().info(f"Drone{i + 1}: arrived; turning to {heading:.0f} deg")
+            log.info(f"{self.links[i].name}: arrived; turning to {heading:.0f} deg")
 
     async def _simple(self, i, action):
         link = self.links[i]
@@ -317,13 +316,13 @@ class SwarmControl:
         used = 0
         for i, path in zip(targets, paths):
             if not path:
-                projectairsim_log().info(f"Drone{i + 1}: area too small to need it")
+                log.info(f"{self.links[i].name}: area too small to need it")
                 continue
             used += 1
             drone_alt = self.layered(i, alt)
             self._set_plan(i, path, drone_alt)
             self._start(i, self._fly_mission(i, path, drone_alt))
-        projectairsim_log().info(
+        log.info(
             f"Searching the area with {used} drone{'s' if used != 1 else ''}: passes "
             f"{spacing:.0f} m apart, heading {heading:.0f} deg"
         )
@@ -333,7 +332,7 @@ class SwarmControl:
         link = self.links[i]
         airborne = bool(link.position and link.position[3] > 2.0 and link.armed)
         first, count = await self._call(link.upload_mission, path, alt, not airborne)
-        projectairsim_log().info(f"Drone{i + 1}: mission of {len(path)} waypoints uploaded")
+        log.info(f"{self.links[i].name}: mission of {len(path)} waypoints uploaded")
         await self._arm_and(i, link.start_mission)
         # Follow progress for the map until the last waypoint is reached
         while link.mission_reached < count - 1:
@@ -343,7 +342,7 @@ class SwarmControl:
                 self.destinations[i] = path[k]
             await asyncio.sleep(0.5)
         self._clear_plan(i)
-        projectairsim_log().info(f"Drone{i + 1}: search done; holding at the last waypoint")
+        log.info(f"{self.links[i].name}: search done; holding at the last waypoint")
 
     async def wait_idle(self):
         """Wait until every drone has finished its command."""
@@ -378,11 +377,11 @@ class SwarmControl:
                 alt_i, alt_j = self.plan_alts.get(i), self.plan_alts.get(j)
                 gap = abs(alt_i - alt_j) if alt_i is not None and alt_j is not None else 0.0
                 safe = gap >= SEPARATION_V_M
-                text = (f"Drone{i + 1} and Drone{j + 1} paths cross at {lat:.6f}, {lon:.6f}: "
+                text = (f"{self.links[i].name} and {self.links[j].name} paths cross at {lat:.6f}, {lon:.6f}: "
                         + (f"{gap:.0f} m apart in height, OK" if safe else
                            "same height; the separation monitor will make one give way"))
                 crossings.append((lat, lon, f"{i + 1}x{j + 1}", safe))
-                (projectairsim_log().info if safe else projectairsim_log().warning)(text)
+                (log.info if safe else log.warning)(text)
         # Keep crossings involving drones that didn't change
         self.crossings = [c for c in self.crossings
                           if not any(str(k + 1) in c[2].split("x") for k in changed)] + crossings
@@ -393,7 +392,7 @@ class SwarmControl:
             try:
                 await self._check_separation()
             except Exception as err:
-                projectairsim_log().debug(f"Separation check skipped: {err}")
+                log.debug(f"Separation check skipped: {err}")
 
     def _state(self, i, now):
         """Drone i's (north, east, up) metres from a common origin and velocity,
@@ -454,15 +453,15 @@ class SwarmControl:
                  "alt": self.plan_alts.get(j, rel), "heading": self.headings.get(j)}
         self.giving_way[j] = state
         when = "now" if t < 0.5 else f"in {t:.1f} s"
-        projectairsim_log().warning(
-            f"Drone{j + 1} would pass {dh:.1f} m from Drone{i + 1} ({dv:.1f} m in height) "
+        log.warning(
+            f"{self.links[j].name} would pass {dh:.1f} m from {self.links[i].name} ({dv:.1f} m in height) "
             f"{when}: giving way, climbing {GIVE_WAY_CLIMB_M:.0f} m"
         )
         await self._call(link.fly_to, lat, lon, rel + GIVE_WAY_CLIMB_M)
 
     async def _resume(self, j, state):
         link = self.links[j]
-        projectairsim_log().info(f"Drone{j + 1}: clear again, resuming")
+        log.info(f"{self.links[j].name}: clear again, resuming")
         if state["mode"] == "MISSION":
             await self._call(link.resume_mission)
         elif state["destination"]:
@@ -480,11 +479,11 @@ async def search_demo(swarm, home_lat, home_lon, heading_deg, alt=DEFAULT_ALT_M)
     lat1, lon1 = offset_geo(*centre, -100.0, -60.0 * len(swarm.links))
     lat2, lon2 = offset_geo(*centre, 100.0, 60.0 * len(swarm.links))
     targets = list(range(len(swarm.links)))
-    projectairsim_log().info("Swarm demo: searching")
+    log.info("Swarm demo: searching")
     box = [(lat1, lon1), (lat1, lon2), (lat2, lon2), (lat2, lon1)]
     swarm.search_area(targets, box, alt, SEARCH_SPACING_M)
     await swarm.wait_idle()
-    projectairsim_log().info("Swarm demo: return home")
+    log.info("Swarm demo: return home")
     for i in targets:
         swarm._start(i, swarm._simple(i, "rtl"))
     await swarm.wait_idle()

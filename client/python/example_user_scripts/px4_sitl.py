@@ -14,7 +14,9 @@ PX4's rootfs as before; instance N in build/px4_sitl_default/instance_N.
 Settings come from the environment (set by run_cesium_sim.sh):
   PX4_DIR, PX4_MODEL       PX4-Autopilot checkout and SITL model [none_iris]
   PX4_PARAM_<NAME>=value   parameters PX4 applies at boot
-  PI_IP, PI_PORTS          optional companion-computer MAVLink links
+  PI_PORTS                 companion-computer MAVLink ports [15540,15541]; each
+                           drone's companion IP comes from the launcher (--fleet,
+                           or PI_IP for the first drone)
   LOG_DIR                  where px4.log and px4.pid go (px4_N.* for instance N)
   PX4_KEEP_LOGS            PX4 flight logs (.ulg) to keep, counting the new one [5]
 """
@@ -29,12 +31,14 @@ from projectairsim.utils import projectairsim_log
 
 
 class Px4Sitl:
-    def __init__(self, instance=0):
+    def __init__(self, instance=0, pi_ip=None):
         self.instance = instance
         self.px4_dir = os.path.expanduser(os.environ.get("PX4_DIR", "~/Documents/PX4-Autopilot"))
         self.model = os.environ.get("PX4_MODEL", "none_iris")
-        # Companion-computer links are for the first drone only (for now)
-        self.pi_ip = os.environ.get("PI_IP", "") if instance == 0 else ""
+        # MAVLink links to this drone's companion computer, if it has one
+        if pi_ip is None:
+            pi_ip = os.environ.get("PI_IP", "") if instance == 0 else ""
+        self.pi_ip = pi_ip
         self.pi_ports = [p for p in os.environ.get("PI_PORTS", "15540,15541").split(",") if p]
         self.log_dir = os.environ.get("LOG_DIR", "/tmp/projectairsim-run")
         build = os.path.join(self.px4_dir, "build", "px4_sitl_default")
@@ -116,7 +120,8 @@ class Px4Sitl:
 
     def _add_companion_links(self):
         # PX4 starts its own MAVLink links once the sim connects; add the
-        # companion-computer links after the last of them (the gimbal link)
+        # companion-computer links after the last of them (the gimbal link).
+        # Local ports 14590+10N.., so several drones' PX4s don't collide.
         proc = self.proc
         while not self._log_has("mode: Gimbal"):
             if proc is not self.proc or proc.poll() is not None:
@@ -125,7 +130,7 @@ class Px4Sitl:
         with open(self.log_path, "a") as log:
             for i, port in enumerate(self.pi_ports):
                 subprocess.run(
-                    [self.bin + "-mavlink", "--instance", str(self.instance), "start", "-x", "-u", str(14590 + i),
+                    [self.bin + "-mavlink", "--instance", str(self.instance), "start", "-x", "-u", str(14590 + 10 * self.instance + i),
                      "-r", "200000", "-m", "onboard", "-t", self.pi_ip, "-o", port, "-f"],
                     cwd=self.rootfs, stdout=log, stderr=subprocess.STDOUT,
                 )
