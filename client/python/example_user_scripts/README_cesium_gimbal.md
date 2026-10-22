@@ -432,6 +432,49 @@ old ArduPilot `--serial1/2 udpclient:` links). The Pi can:
 
 Allow UDP 15540-15541 and TCP 8554 through any firewall between the two.
 
+### X vision pipeline on a Radxa (A5X_RPI_Release, `rknn-sim` profile)
+
+The `rknn-sim` profile (branch `swarm-sim`) runs X against this sim instead
+of a real camera and gimbal: it reads `rtsp://<laptop>:8554/gimbal`, steers
+the sim gimbal through PX4's gimbal manager and zooms the sim camera.
+
+```bash
+# laptop, in A5X_RPI_Release/X: deploy to its own folder (your flight copy is untouched)
+./deploy.sh --profile rknn-sim --dir radxa@192.168.199.99:~/Code/X_sim/ --no-setup
+ssh radxa@192.168.199.99 'ln -sfn ../X_quad/venv ~/Code/X_sim/venv'   # once: reuse X_quad's venv
+
+# laptop: the sim, with the Radxa as Drone1's companion
+./run_cesium_sim.sh --qgc --pi-ip 192.168.199.99
+
+# Radxa
+cd ~/Code/X_sim && venv/bin/python main.py
+```
+
+The profile's `INPUT_RTSP` names the laptop's address (192.168.199.98); edit
+it in `utils/config/rknn-sim/config_cv.yml` if that changes.
+
+The dashboard's main pane then always shows **Tracker**, X's annotated video
+(`rtsp://<radxa>:8554/tracker`), with GimbalCam (or ChaseCam, picked with View
+or V) in the small pane beside it. It talks to X like its ground station
+(`map-plot/laptop_client.py`), over UDP 5556:
+
+| Input (Tracker pane) | Sends |
+|---|---|
+| Click a target / drag a box around it | `CLICK:x,y` / `BOX:size` then `CLICK` at the box centre (tracker-video pixels) |
+| Right-click, or Esc | `CANCEL` |
+| Arrow keys | Nudge the tracked point by 8 px |
+| W / S, A / D (hold) | `PITCH:UP/DOWN`, `YAW:LEFT/RIGHT`, then `…:STOP` on release (cancels a track first) |
+| Mouse wheel over the camera, + / - | `ZOOM:IN/OUT`, then `ZOOM:STOP` |
+| G or C | `GIMBAL:CENTER` (cancels a track first). X (look down) is off with a companion |
+
+With a companion, the gimbal and zoom keys always go to X (it owns the gimbal),
+whichever view is shown. X ignores manual gimbal and zoom commands while it is
+tracking, so W/A/S/D and G cancel the track before steering; zoom does nothing
+until the track ends. A heartbeat goes out every 0.2 s, and the status panel shows whether
+the tracker video is arriving. `--companion IP` sets the companion without
+`--pi-ip`. Drone control (strike) is off in `rknn-sim` for now; fly the drone
+from the dashboard or QGC.
+
 ## Ports
 
 | Port | Used by |

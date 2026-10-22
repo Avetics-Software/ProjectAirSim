@@ -124,6 +124,15 @@ class CameraWindows:
                      with "Draw area" on, add a corner of the search area
       L              map labels on/off       1-9     show and steer that drone
 
+    With a companion computer (the X pipeline) on the selected drone the main
+    pane is always Tracker, its annotated video, and View (or V) picks the
+    camera in the small pane. In Tracker, click a target to track
+    it or drag a box around it; right-click or Esc cancels; the arrow keys
+    nudge the tracked point; G or C centres the gimbal (X has no look-down).
+    W/A/S/D and the zoom keys and wheel then go to the companion, which owns
+    the gimbal. X ignores them while it tracks, so W/A/S/D, G and C drop the
+    track first.
+
     It is a Tk window: OpenCV's Qt windows zoom the whole image on the mouse
     wheel, which can't be turned off.
     """
@@ -160,6 +169,14 @@ class CameraWindows:
         self.zoom_text = ""
         self.status_lines = []  # set by the caller
         self.main_cam = "GimbalCam"  # shown in the big pane; the other is small
+        # With a companion the big pane is always its Tracker video and this one
+        # of GimbalCam/ChaseCam goes in the small pane
+        self.side_cam = "GimbalCam"
+        self.companion = None  # CompanionLink of the selected drone, if it has one
+        self._fits = {}  # pane -> (x0, y0, scale, frame w, frame h) of the last draw
+        self._drag = None  # (x0, y0, x1, y1) canvas px while dragging a track box
+        self._jog = {}  # axis -> key held, for jogging the companion's gimbal
+        self._jog_release = {}  # axis -> pending Tk after() id
         self.chase_zoom = 1.0  # digital zoom of the ChaseCam
         self.selected = 1  # drone number shown and steered
         self.targets = {}  # drone number -> (lat, lon) clicked on the map
@@ -184,7 +201,11 @@ class CameraWindows:
         self.label.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self._photo = None
         self.root.bind("<KeyPress>", self._on_key)
+        self.root.bind("<KeyRelease>", self._on_key_release)
         self.label.bind("<Button-1>", self._on_click)
+        self.label.bind("<B1-Motion>", self._on_drag)
+        self.label.bind("<ButtonRelease-1>", self._on_release)
+        self.label.bind("<Button-3>", lambda e: self._cancel_track())
         for button, step in (("<Button-4>", 1), ("<Button-5>", -1)):  # X11 wheel
             self.label.bind(button, lambda e, s=step: self._on_wheel(e.x, e.y, s))
         self.label.bind(
@@ -226,9 +247,11 @@ class CameraWindows:
                   lambda n=n: self.on_select and self.on_select(n)).pack(side=tk.LEFT, padx=2)
         label(row, "   View").pack(side=tk.LEFT)
         self._view_var = tk.StringVar(value=self.main_cam)
+        self._view_buttons = {}
         for cam in ("GimbalCam", "ChaseCam"):
-            radio(row, cam, self._view_var, cam,
-                  lambda cam=cam: self._set_main(cam)).pack(side=tk.LEFT, padx=2)
+            b = radio(row, cam, self._view_var, cam, lambda cam=cam: self._set_main(cam))
+            b.pack(side=tk.LEFT, padx=2)
+            self._view_buttons[cam] = b
         self._all_var = tk.BooleanVar(value=False)
         if len(drone_names) > 1:
             tk.Checkbutton(row, text="Buttons command all drones", variable=self._all_var,
@@ -412,8 +435,21 @@ class CameraWindows:
             self._frames[name] = bgr
             self._seq += 1
 
+    def set_companion(self, companion):
+        """The selected drone's CompanionLink, or None."""
+        self.companion = companion
+        if hasattr(self, "_view_var"):
+            self._view_var.set(self.side_cam if companion else self.main_cam)
+        with self._lock:
+            self._frames.pop("Tracker", None)
+        self._seq += 1
+
     def _set_main(self, cam):
-        self.main_cam = cam
+        """The View choice: the big pane, or with a companion the small one."""
+        if self.companion:
+            self.side_cam = cam
+        else:
+            self.main_cam = cam
         if hasattr(self, "_view_var"):
             self._view_var.set(cam)
         self._seq += 1
@@ -429,19 +465,101 @@ class CameraWindows:
         return (wx - ox) / scale, (wy - oy) / scale
 
     def _cam_in(self, pane):
+        if self.companion:
+            return {"Main": "Tracker", "Small": self.side_cam}.get(pane)
         if pane == "Main":
             return self.main_cam
         if pane == "Small":
             return "ChaseCam" if self.main_cam == "GimbalCam" else "GimbalCam"
         return None
 
+    def _swap_cameras(self):
+        """V or a click on the small pane: swap GimbalCam and ChaseCam."""
+        shown = self.side_cam if self.companion else self.main_cam
+        self._set_main("ChaseCam" if shown == "GimbalCam" else "GimbalCam")
+
+    # ------------------------------------------------------------------
+    # Tracking with a companion
+
+    def _tracker_xy(self, x, y):
+        """Canvas px over the Tracker pane -> tracker video px, or None."""
+        pane = next((p for p in ("Main", "Small") if self._cam_in(p) == "Tracker"), None)
+        if pane is None or pane not in self._fits or self._pane_at(x, y) != pane:
+            return None
+        x0, y0, s, fw, fh = self._fits[pane]
+        fx, fy = (x - x0) / s, (y - y0) / s
+        if not (0 <= fx < fw and 0 <= fy < fh):
+            return None
+        return int(fx), int(fy)
+
+    def _on_drag(self, event):
+        if self._drag:
+            x, y = self._canvas_xy(event.x, event.y)
+            self._drag = (self._drag[0], self._drag[1], x, y)
+            self._seq += 1
+
+    def _on_release(self, event):
+        if not self._drag or not self.companion:
+            self._drag = None
+            return
+        x0, y0, x1, y1 = self._drag
+        self._drag = None
+        self._seq += 1
+        a, b = self._tracker_xy(x0, y0), self._tracker_xy(x1, y1)
+        if a is None:
+            return
+        if b is None or abs(b[0] - a[0]) < 5 or abs(b[1] - a[1]) < 5:
+            self.companion.click(*a)
+            self.log(f"Track: CLICK {a[0]},{a[1]}")
+        else:
+            (ax, bx), (ay, by) = sorted((a[0], b[0])), sorted((a[1], b[1]))
+            self.companion.drag(ax, ay, bx, by)
+            self.log(f"Track: box {ax},{ay} to {bx},{by}")
+
+    def _cancel_track(self):
+        if self.companion:
+            self.companion.cancel()
+            self.log("Track cancelled")
+            self._seq += 1
+
+    def _jog_press(self, axis, direction):
+        """Hold-to-jog the companion's gimbal; X11 key repeat sends release/press
+        pairs, so a release only stops the jog if no press follows quickly."""
+        pending = self._jog_release.pop(axis, None)
+        if pending:
+            self.root.after_cancel(pending)
+        self._take_over()
+        if self._jog.get(axis) != direction:
+            self._jog[axis] = direction
+            self.companion.jog(axis, direction)
+
+    def _take_over(self):
+        """X ignores manual gimbal commands while it tracks, so steering by hand
+        drops the track first."""
+        if self.companion and self.companion.tracking:
+            self._cancel_track()
+
+    def _on_key_release(self, event):
+        if not self.companion or isinstance(event.widget, tk.Entry):
+            return
+        axis = {"w": "PITCH", "s": "PITCH", "a": "YAW", "d": "YAW"}.get(
+            (event.keysym or "").lower())
+        if axis and axis in self._jog:
+            def stop(axis=axis):
+                self._jog_release.pop(axis, None)
+                if self._jog.pop(axis, None) and self.companion:
+                    self.companion.jog(axis, "STOP")
+            self._jog_release[axis] = self.root.after(120, stop)
+
     def _on_click(self, event):
         self.label.focus_set()  # keys steer the gimbal again after typing
         self._seq += 1
         x, y = self._canvas_xy(event.x, event.y)
         pane = self._pane_at(x, y)
-        if pane == "Small":
-            self._set_main(self._cam_in("Small"))
+        if self.companion and self._tracker_xy(x, y) is not None:
+            self._drag = (x, y, x, y)  # a click or the start of a box
+        elif pane == "Small":
+            self._swap_cameras()
         elif pane == "Minimap" and self.minimap:
             px, py, pw, ph = self.PANES["Minimap"]
             geo = self.minimap.pixel_to_geo(x - px, y - py, pw, ph)
@@ -457,7 +575,9 @@ class CameraWindows:
         self._seq += 1
         pane = self._pane_at(*self._canvas_xy(wx, wy))
         cam = self._cam_in(pane)
-        if cam == "GimbalCam":
+        if cam in ("GimbalCam", "Tracker") and self.companion:
+            self.companion.zoom(step)
+        elif cam == "GimbalCam":
             self.on_zoom(step * self.ZOOM_STEP_PERCENT)
         elif cam == "ChaseCam":
             self.chase_zoom = min(self.CHASE_ZOOM_MAX, max(1.0, self.chase_zoom * 1.25 ** step))
@@ -478,6 +598,7 @@ class CameraWindows:
         nw, nh = max(1, int(iw * s)), max(1, int(ih * s))
         ox, oy = x + (w - nw) // 2, y + (h - nh) // 2
         canvas[oy:oy + nh, ox:ox + nw] = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+        return ox, oy, s, iw, ih
 
     @staticmethod
     def _crop_centre(img, zoom):
@@ -497,6 +618,9 @@ class CameraWindows:
         cv2.putText(canvas, text, org, font, scale, colour, 1, cv2.LINE_AA)
 
     def _cam_title(self, cam):
+        if cam == "Tracker":
+            state = "tracking" if self.companion and self.companion.tracking else "click or drag to track"
+            return f"{self.title} Tracker (companion {self.companion.ip if self.companion else ''})  {state}"
         if cam == "GimbalCam":
             return (f"{self.title} GimbalCam  pitch {self.pitch:+.0f}  yaw {self.yaw:+.0f}  "
                     f"{self.zoom_text}")
@@ -512,10 +636,18 @@ class CameraWindows:
                 frame = frames[cam]
                 if cam == "ChaseCam" and self.chase_zoom > 1.0:
                     frame = self._crop_centre(frame, self.chase_zoom)
-                self._fit(canvas, frame, rect)
+                self._fits[pane] = self._fit(canvas, frame, rect)
             else:
-                self._text(canvas, "waiting for camera...", (rect[0] + 20, rect[1] + rect[3] // 2))
+                self._fits.pop(pane, None)
+                waiting = ("waiting for the companion's video..." if cam == "Tracker"
+                           else "waiting for camera...")
+                self._text(canvas, waiting, (rect[0] + 20, rect[1] + rect[3] // 2))
             self._text(canvas, self._cam_title(cam), (rect[0] + 10, rect[1] + 22), scale)
+
+        if self._drag:
+            x0, y0, x1, y1 = (int(v) for v in self._drag)
+            if abs(x1 - x0) >= 5 or abs(y1 - y0) >= 5:
+                cv2.rectangle(canvas, (x0, y0), (x1, y1), (0, 200, 255), 2)
 
         m = self.PANES["Minimap"]
         if self.minimap:
@@ -528,6 +660,9 @@ class CameraWindows:
             "Map: [ ]  L labels  click = target",
             "Mouse wheel zooms the pane under the pointer.  V or click the small camera: swap",
         ]
+        if self.companion:
+            help_lines.append("Companion: in Tracker click / drag a box to track, right-click or "
+                              "Esc cancel, arrows nudge, G centre gimbal")
         for i, line in enumerate(self.status_lines + [""] + help_lines):
             self._text(canvas, line, (x + 12, y + 26 + 22 * i), 0.5,
                        (170, 170, 170) if line in help_lines else (235, 235, 235), box=False)
@@ -571,6 +706,8 @@ class CameraWindows:
         self._seq += 1
         ch = event.char.lower() if event.char else ""
         step = self.PAN_STEP_DEG
+        if self.companion and self._companion_key(ch or (event.keysym or "").lower(), event.keysym):
+            return
         if ch == "w":
             self._move(step, 0)
         elif ch == "s":
@@ -584,7 +721,7 @@ class CameraWindows:
         elif ch == "x":
             self._move(-90.0 - self.pitch, -self.yaw)
         elif ch == "v":
-            self._set_main(self._cam_in("Small"))
+            self._swap_cameras()
         elif ch in ("+", "="):
             self.on_zoom(self.ZOOM_STEP_PERCENT)
         elif ch in ("-", "_"):
@@ -597,6 +734,33 @@ class CameraWindows:
             self.minimap.show_labels = not self.minimap.show_labels
         elif self.on_select and ch.isdigit() and ch != "0":
             self.on_select(int(ch))
+
+    def _companion_key(self, ch, keysym):
+        """Keys that go to the companion when the drone has one; True if used."""
+        c = self.companion
+        jogs = {"w": ("PITCH", "UP"), "s": ("PITCH", "DOWN"),
+                "a": ("YAW", "LEFT"), "d": ("YAW", "RIGHT")}
+        nudges = {"Up": (0, -8), "Down": (0, 8), "Left": (-8, 0), "Right": (8, 0)}
+        if ch in jogs:
+            self._jog_press(*jogs[ch])
+        elif ch in ("+", "="):
+            c.zoom(1)
+        elif ch in ("-", "_"):
+            c.zoom(-1)
+        elif ch in ("g", "c"):
+            self._take_over()
+            c.center_gimbal()
+        elif ch == "x":
+            # Steering the gimbal from here would take PX4's gimbal control
+            # away from X, which only claims it when it starts
+            self.log("Look-down isn't available while the companion owns the gimbal")
+        elif keysym == "Escape":
+            self._cancel_track()
+        elif keysym in nudges:
+            c.nudge(*nudges[keysym])
+        else:
+            return False
+        return True
 
     def close(self):
         try:

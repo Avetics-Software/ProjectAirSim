@@ -69,6 +69,7 @@ from payload_mavlink import PayloadLink
 from payload_video import CameraWindows, RtspStreamer, image_to_bgr
 from px4_sitl import Px4Sitl
 from shared_frame import SharedFrameWriter
+from companion import CompanionLink
 from minimap import MiniMap, road_segments
 from moving_actors import ACTORS_HELP, MovingActorManager
 from spawned_objects import CONSOLE_HELP, ObjectSpawner
@@ -134,6 +135,13 @@ def parse_args():
         type=float,
         default=8.0,
         help="metres between the drones at the spawn, in a line to the right (default 8)",
+    )
+    parser.add_argument(
+        "--companion",
+        default=os.environ.get("PI_IP", ""),
+        help="IP of a companion computer running the X vision pipeline on Drone1 "
+        "(default: run_cesium_sim.sh's --pi-ip). The dashboard shows its tracker "
+        "video and sends it click-to-track and gimbal commands.",
     )
     parser.add_argument(
         "--layer-step",
@@ -401,9 +409,11 @@ class PayloadGroup:
     """Every drone's payload and the one dashboard window, which shows and
     steers the selected drone (keys 1-9 or `select N`)."""
 
-    def __init__(self, payloads, windows):
+    def __init__(self, payloads, windows, companions=None):
         self.payloads = payloads
         self.windows = windows
+        self.companions = companions or {}  # drone index -> CompanionLink
+        self._tracker_frame_time = 0.0
         self.selected = 0
         self.stats_t0 = time.monotonic()
         self.select(1)
@@ -420,6 +430,8 @@ class PayloadGroup:
             payload.selected = i == self.selected
         self.windows.title = self.current.name if len(self.payloads) > 1 else ""
         self.windows.set_selected(number)
+        self.windows.set_companion(self.companions.get(self.selected))
+        self._tracker_frame_time = 0.0
         self.windows.pitch, self.windows.yaw = self.current.pitch, self.current.yaw
         with self.windows._lock:
             self.windows._frames.clear()
@@ -434,6 +446,15 @@ class PayloadGroup:
         for payload in self.payloads:
             payload.tick(dt)
         self.windows.zoom_text = self.current.zoom_text()
+        companion = self.companions.get(self.selected)
+        link = self.current.link
+        if companion and link.gimbal_attitude and time.monotonic() - link.gimbal_attitude_time < 1.0:
+            # The companion steers the gimbal, so show where it actually points
+            self.current.pitch, self.current.yaw = link.gimbal_attitude
+            self.windows.pitch, self.windows.yaw = link.gimbal_attitude
+        if companion and companion.frame is not None and companion.frame_time != self._tracker_frame_time:
+            self._tracker_frame_time = companion.frame_time
+            self.windows.receive("Tracker", companion.frame)
         self.windows.update()
 
         elapsed = time.monotonic() - self.stats_t0
@@ -617,6 +638,12 @@ def update_minimap(session):
         {f"Drone{i + 1}": h for i, h in swarm.headings.items() if h is not None}
     )
 
+    for i, companion in session.payloads.companions.items():
+        drone_lines.append(
+            f" Drone{i + 1} companion {companion.ip}: "
+            f"{'video ok' if companion.video_ok else 'no video yet'}"
+            f"{', tracking' if companion.tracking else ''}"
+        )
     ports = ", ".join(f"{18570 + i}" for i in range(len(session.drones)))
     windows.status_lines = drone_lines + [
         "Objects: " + (", ".join(f"{n} {k}" for k, n in sorted(counts.items())) or "none"),
@@ -936,7 +963,10 @@ async def main():
             link = PayloadLink(drone_url(advertised_url, i) if rtsp else "", camera, instance=i)
             links.append(link)
             payloads.append(Payload(link, rtsp, camera, windows, name=f"Drone{i + 1}"))
-        group = PayloadGroup(payloads, windows)
+        companions = {}
+        if args.companion:
+            companions[0] = CompanionLink(args.companion, name="Drone1 companion")
+        group = PayloadGroup(payloads, windows, companions)
         tasks.append(asyncio.create_task(run_ui(group)))
 
         session = Session(args, client, camera, group, links)
@@ -969,6 +999,8 @@ async def main():
         client.disconnect()
         if group:
             group.windows.close()
+            for companion in group.companions.values():
+                companion.close()
         for link in links:
             link.close()
         for rtsp in rtsps:

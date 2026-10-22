@@ -79,6 +79,7 @@ class PayloadLink:
         self.video_uri = video_uri
         self.camera = camera  # CameraProperties
         self.zoom_percent = 0.0
+        self._published_zooms = []  # (time.monotonic(), percent) reported in the last second
         self.zoom_requests = queue.Queue()
         self.capture_requests = queue.Queue()
         self.image_count = 0
@@ -91,6 +92,8 @@ class PayloadLink:
         self.position_count = 0  # positions received, to measure the rate
         self.landed = True
         self.status_text = ""
+        self.gimbal_attitude = None  # (pitch, yaw relative to the drone) in degrees
+        self.gimbal_attitude_time = 0.0
         self.mission_seq = -1  # PX4's current mission item
         self.mission_reached = -1  # the last mission item PX4 reached
 
@@ -311,7 +314,18 @@ class PayloadLink:
     def publish_zoom(self, zoom_percent):
         """Report the current zoom to QGC (0 = widest, 100 = most zoomed)."""
         self.zoom_percent = zoom_percent
+        now = time.monotonic()
+        self._published_zooms = [(t, z) for t, z in self._published_zooms if now - t < 1.0]
+        self._published_zooms.append((now, zoom_percent))
         self._send_camera_settings()
+
+    def _is_zoom_echo(self, percent):
+        """QGC's zoom slider follows CAMERA_SETTINGS and sends the level back as
+        a range zoom, which would stop a continuous zoom (from the companion or
+        the keys) a few ms after it starts. A level we reported in the last
+        second is that echo, not a request."""
+        now = time.monotonic()
+        return any(now - t < 1.0 and abs(z - percent) < 0.5 for t, z in self._published_zooms)
 
     def report_image_captured(self, path):
         self.image_count += 1
@@ -366,6 +380,10 @@ class PayloadLink:
             elif msg_type == "EXTENDED_SYS_STATE" and from_px4:
                 self.landed = msg.landed_state in (M.MAV_LANDED_STATE_ON_GROUND,
                                                    M.MAV_LANDED_STATE_UNDEFINED)
+            elif msg_type == "GIMBAL_DEVICE_ATTITUDE_STATUS" and msg.get_srcSystem() == self.sysid:
+                _, pitch, yaw = QuaternionBase(list(msg.q)).euler
+                self.gimbal_attitude = (math.degrees(pitch), wrap_180(math.degrees(yaw)))
+                self.gimbal_attitude_time = time.monotonic()
             elif msg_type == "STATUSTEXT" and from_px4:
                 self.status_text = msg.text
             elif msg_type == "COMMAND_ACK" and from_px4:
@@ -393,6 +411,10 @@ class PayloadLink:
 
     def _handle_camera_command(self, msg):
         cmd = msg.command
+        projectairsim_log().debug(
+            f"Camera {self.instance + 1}: command {cmd} ({msg.param1:g}, {msg.param2:g}) "
+            f"from {msg.get_srcSystem()}/{msg.get_srcComponent()}"
+        )
         accepted, unsupported = M.MAV_RESULT_ACCEPTED, M.MAV_RESULT_UNSUPPORTED
 
         if cmd == M.MAV_CMD_REQUEST_MESSAGE:
@@ -421,7 +443,9 @@ class PayloadLink:
             self._send_capture_status()
         elif cmd == M.MAV_CMD_SET_CAMERA_ZOOM:
             zoom_type, value = int(msg.param1), msg.param2
-            if zoom_type == M.ZOOM_TYPE_RANGE:
+            if zoom_type == M.ZOOM_TYPE_RANGE and self._is_zoom_echo(value):
+                pass  # QGC's slider sending back a level we just reported
+            elif zoom_type == M.ZOOM_TYPE_RANGE:
                 self.zoom_requests.put(("range", max(0.0, min(100.0, value))))
             elif zoom_type == M.ZOOM_TYPE_CONTINUOUS:
                 self.zoom_requests.put(("continuous", int(math.copysign(1, value)) if value else 0))
