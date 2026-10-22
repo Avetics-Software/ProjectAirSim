@@ -35,7 +35,7 @@ sets the drone on it.
 | Command | What it does |
 |---|---|
 | `./run_cesium_sim.sh` | Scripted demo at Seletar: take off, climb to 40 m, sweep the gimbal, land |
-| `./run_cesium_sim.sh --qgc` | Load the world and wait; fly and steer the gimbal from QGroundControl or the GimbalCam window |
+| `./run_cesium_sim.sh --qgc` | Load the world and wait; fly and steer the gimbal from QGroundControl or the dashboard window |
 | `./run_cesium_sim.sh --qgc --lat 1.3521 --lon 103.8198 --heading 90` | Same, spawning somewhere else |
 | `./run_cesium_sim.sh --qgc --spotter` | Also open the spotter window |
 | `./run_cesium_sim.sh --px4-params my.params --pi-ip 192.168.199.73 --qgc` | Your PX4 parameters, plus MAVLink and video for the Raspberry Pi |
@@ -188,15 +188,40 @@ vibration aren't simulated yet; the script warns if they're enabled.
 
 ## Camera and gimbal
 
-**GimbalCam window** (click it first so it has keyboard focus):
+**Dashboard window** ("ProjectAirSim"): one window, tiled like tmux panes:
+
+```
++----------------------------+-------------+
+|                            |  ChaseCam   |
+|         GimbalCam          +-------------+
+|                            |             |
++----------------------------+   Minimap   |
+|  Status (position, counts) |             |
++----------------------------+-------------+
+```
+
+The **minimap** is north-up and centred on the drone (yellow arrow). It shows
+OpenStreetMap roads, moving vehicles and people (dots with a heading tick) and
+static objects (grey squares). Positions refresh every second. It starts at
+2 m per pixel (about 1 km across) and zooms from 0.25 to 16 m per pixel. Roads
+cover 1.5 km around the spawn point; objects show wherever they are.
+
+Each pane zooms on its own: the mouse wheel acts on the pane under the pointer.
+
+Click the window first so it has keyboard focus:
 
 | Input | Action |
 |---|---|
-| W / S | Tilt up / down |
+| W / S | Tilt the gimbal up / down |
 | A / D | Pan left / right |
-| Mouse wheel, + / - | Zoom in / out along the lens's focal-length range |
+| Mouse wheel over GimbalCam, + / - | Optical zoom along the lens's focal-length range |
+| Mouse wheel over ChaseCam | Digital zoom (1–8x) |
 | C | Centre (level, straight ahead) |
 | X | Look straight down |
+| Mouse wheel over the minimap, [ / ] | Zoom the map out / in |
+| L | Map labels on / off |
+
+The spotter's control and POV windows stay separate.
 
 **Video stream:** the GimbalCam is published once and served two ways:
 
@@ -211,7 +236,7 @@ type UDP, port 14550, server `127.0.0.1:18570`, then Connect. The script
 appears to QGC as a MAVLink camera, so QGC picks up the video and its zoom and
 shutter controls work. Snapshots are saved to `~/Pictures/projectairsim/`.
 
-QGC and the GimbalCam window both steer the gimbal through PX4. Whichever was
+QGC and the dashboard both steer the gimbal through PX4. Whichever was
 used last is in control.
 
 ## Spotter

@@ -47,24 +47,8 @@ defaults:
     align_to_ground: true
 
 actors:
-  # A person walking a rectangle beside the runway, right of the default spawn
-  - name: Person1
-    kind: person
-    waypoints:
-      - [1.413416, 103.865262]
-      - [1.413642, 103.865409]
-      - [1.413568, 103.865522]
-      - [1.413342, 103.865375]
-
-  # A person walking back and forth on the grass left of the runway
-  - name: Person2
-    kind: person
-    speed: 1.2
-    mode: pingpong
-    waypoints:
-      - [1.414024, 103.865068]
-      - [1.414274, 103.865177]
-      - [1.414476, 103.865361]
+  # Only vehicles for now. For a person, use `kind: person` with any path
+  # below, e.g. random_route: {length_m: 500} for a walk along footpaths.
 
   # A car driving up and down the runway
   - name: Vehicle1
@@ -93,12 +77,6 @@ actors:
     count: 4
     speed: 12
     random_route: {length_m: 1500}
-
-  # People on the footpaths and minor roads nearby
-  - name: Walker
-    kind: person
-    count: 3
-    random_route: {length_m: 500}
 
   # A car between two places, by the shortest road route:
   # - name: Courier

@@ -9,7 +9,7 @@ spawn is Seletar Airport's runway, Singapore.
 - The GimbalCam is published as RTSP (rtsp://127.0.0.1:8554/gimbal by default)
   and announced to QGroundControl as a MAVLink camera, so QGC shows the video
   and its zoom controls work.
-- The gimbal can be steered from QGC, or from the GimbalCam window: W/A/S/D to
+- The gimbal can be steered from QGC, or from the dashboard window: W/A/S/D to
   move, mouse wheel or +/- to zoom, C to centre, X to look straight down.
 - Objects from config_spawned_objects.yml are placed on the ground; type `help`
   in this terminal for commands to spawn, list and delete objects while running.
@@ -54,13 +54,14 @@ import cv2
 
 from projectairsim import ProjectAirSimClient, Drone, World
 from projectairsim.types import Pose, Quaternion, Vector3
-from projectairsim.utils import load_scene_config_as_dict, projectairsim_log
+from projectairsim.utils import load_scene_config_as_dict, projectairsim_log, quaternion_to_rpy
 
 from camera_properties import CameraProperties
 from payload_mavlink import PayloadLink
 from payload_video import CameraWindows, RtspStreamer, image_to_bgr
 from px4_sitl import Px4Sitl
 from shared_frame import SharedFrameWriter
+from minimap import MiniMap, road_segments
 from moving_actors import ACTORS_HELP, MovingActorManager
 from spawned_objects import CONSOLE_HELP, ObjectSpawner
 
@@ -132,7 +133,7 @@ def parse_args():
         "--qgc",
         action="store_true",
         help="load the world and wait; arm, fly missions and steer the gimbal "
-        "from QGroundControl or the GimbalCam window instead of the scripted demo",
+        "from QGroundControl or the dashboard window instead of the scripted demo",
     )
     parser.add_argument(
         "--rtsp-url",
@@ -262,7 +263,7 @@ class Payload:
         self.stats_t0 = time.monotonic()
         self.windows = CameraWindows(
             on_gimbal=self.steer, on_zoom=self.nudge_zoom,
-            initial_pitch=GIMBAL_CAM_INITIAL_PITCH,
+            initial_pitch=GIMBAL_CAM_INITIAL_PITCH, minimap=MiniMap(),
         )
 
     def attach(self, client, drone):
@@ -421,6 +422,58 @@ async def run_ground_truth(session):
             except Exception as err:  # e.g. the scene is reloading under us
                 projectairsim_log().debug(f"Ground-truth log skipped: {err}")
         await asyncio.sleep(0.05)
+
+
+async def run_minimap(session, period=1.0):
+    """Refresh the minimap and status panel with every object's position."""
+    while True:
+        await asyncio.sleep(period)
+        if session.loading or not session.drone:
+            continue
+        try:
+            update_minimap(session)
+        except Exception as err:  # e.g. the scene is reloading under us
+            projectairsim_log().debug(f"Minimap update skipped: {err}")
+
+
+def update_minimap(session):
+    windows = session.payload.windows
+    kinds = {}
+    if session.spawner:
+        kinds.update(dict.fromkeys(session.spawner.spawned, "object"))
+    if session.actors:
+        kinds.update({name: a["kind"] for name, a in session.actors.actors.items()})
+    names = list(kinds)
+    poses = session.world.get_object_poses(names) if names else []
+    objects = []
+    for name, pose in zip(names, poses):
+        t, q = pose["translation"], pose["rotation"]
+        if math.isnan(t["x"]):
+            continue
+        yaw = math.degrees(quaternion_to_rpy(q["w"], q["x"], q["y"], q["z"])[2])
+        if session.actors and name in session.actors.actors:
+            yaw -= session.actors.actors[name]["yaw_offset"]
+        objects.append((name, kinds[name], t["x"], t["y"], yaw))
+
+    kin = session.drone.get_ground_truth_kinematics()
+    p, q = kin["pose"]["position"], kin["pose"]["orientation"]
+    v = kin["twist"]["linear"]
+    heading = math.degrees(quaternion_to_rpy(q["w"], q["x"], q["y"], q["z"])[2]) % 360.0
+    windows.minimap.update((p["x"], p["y"], heading), objects)
+
+    home = session.world.home_geo_point
+    lat = home["latitude"] + p["x"] / 111_320.0
+    lon = home["longitude"] + p["y"] / (111_320.0 * math.cos(math.radians(home["latitude"])))
+    counts = {}
+    for _, kind, *_ in objects:
+        counts[kind] = counts.get(kind, 0) + 1
+    speed = math.hypot(v["x"], v["y"])
+    windows.status_lines = [
+        f"Drone1   {lat:.6f}, {lon:.6f}   height {-p['z']:.1f} m above home   "
+        f"heading {heading:.0f}   speed {speed:.1f} m/s",
+        "Objects: " + (", ".join(f"{n} {k}" for k, n in sorted(counts.items())) or "none"),
+        "QGC: UDP, listen 14550, server 127.0.0.1:18570",
+    ]
 
 
 async def wait_for_ground(world, max_wait, min_wait=10.0, stable_reads=3):
@@ -602,6 +655,7 @@ class Session:
                     self.world, args.actors, os.environ.get("LOG_DIR", "/tmp/projectairsim-run")
                 )
                 self.actors.spawn_from_config()
+            self._load_map_roads()
 
             if args.spotter:
                 self.spotter = subprocess.Popen(
@@ -611,6 +665,17 @@ class Session:
                 )
         finally:
             self.loading = False
+
+    def _load_map_roads(self):
+        """OpenStreetMap roads around home for the minimap (cached after the
+        first download; moving actors on roads share the same data)."""
+        minimap = self.payload.windows.minimap
+        minimap.set_roads([])
+        try:
+            manager = self.actors or MovingActorManager(self.world, None)
+            minimap.set_roads(road_segments(manager._network("vehicle")))
+        except Exception as err:
+            projectairsim_log().warning(f"Minimap has no roads: {err}")
 
     def _stop_spotter(self):
         if self.spotter:
@@ -651,6 +716,7 @@ async def main():
         await session.load()
         tasks.append(asyncio.create_task(run_console(session)))
         tasks.append(asyncio.create_task(run_ground_truth(session)))
+        tasks.append(asyncio.create_task(run_minimap(session)))
 
         if args.qgc:
             projectairsim_log().info(
