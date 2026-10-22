@@ -3,7 +3,8 @@ Copyright (C) 2025 IAMAI CONSULTING CORP
 MIT License.
 
 A top-down map of the area around the drone: OpenStreetMap roads, the drone
-and every spawned or moving object, north up. Positions are pushed in by the
+(yellow; other drones of a swarm in blue) and every spawned or moving object,
+north up. Positions are pushed in by the
 caller (about once a second); the map is drawn into a pane of the dashboard.
 """
 
@@ -22,8 +23,11 @@ KIND_COLOURS = {
     "vehicle": (80, 160, 255),
     "person": (120, 230, 120),
     "object": (170, 170, 170),
+    "drone": (235, 170, 60),  # other drones of a swarm (blue)
 }
+TARGET = (60, 60, 255)
 MIN_M_PER_PX, MAX_M_PER_PX = 0.25, 16.0
+EARTH_M_PER_DEG = 111_320.0
 
 
 class MiniMap:
@@ -33,9 +37,16 @@ class MiniMap:
         self._roads = []  # [(n1, e1, n2, e2)] metres from home
         self._drone = None  # (north, east, heading_deg)
         self._objects = []  # [(name, kind, north, east, heading_deg)]
+        self.home = None  # (lat, lon) of the north/east origin, for clicks
+        # Targets per drone name, (north, east): picked by clicking (not yet
+        # sent) and where the drone is actually flying to
+        self.picked = {}
+        self.heading_to = {}
+        self.selected_name = None  # the drone at the centre
         self._lock = threading.Lock()
         self._cache = None
         self._cache_key = None
+        self._centre = (0.0, 0.0)  # north/east at the centre of the last render
 
     def set_roads(self, segments):
         """Road centrelines as (north1, east1, north2, east2) metres from home."""
@@ -43,12 +54,57 @@ class MiniMap:
             self._roads = list(segments)
             self._cache_key = None
 
-    def update(self, drone, objects):
-        """drone: (north, east, heading_deg) or None.
-        objects: [(name, kind, north, east, heading_deg)]."""
+    def update(self, drone, objects, selected_name=None):
+        """drone: (north, east, heading_deg) of the selected drone, or None.
+        objects: [(name, kind, north, east, heading_deg)], other drones as kind
+        "drone"."""
         with self._lock:
             self._drone = drone
             self._objects = list(objects)
+            if selected_name:
+                self.selected_name = selected_name
+            self._cache_key = None
+
+    def set_home(self, lat, lon):
+        self.home = (lat, lon)
+
+    def pixel_to_geo(self, x, y, width, height):
+        """lat/lon under pixel (x, y) of a width x height render, or None."""
+        if not self.home:
+            return None
+        north = self._centre[0] - (y - height / 2) * self.m_per_px
+        east = self._centre[1] + (x - width / 2) * self.m_per_px
+        lat = self.home[0] + north / EARTH_M_PER_DEG
+        lon = self.home[1] + east / (EARTH_M_PER_DEG * math.cos(math.radians(self.home[0])))
+        return lat, lon
+
+    def _to_ned(self, lat, lon):
+        north = (lat - self.home[0]) * EARTH_M_PER_DEG
+        east = (lon - self.home[1]) * EARTH_M_PER_DEG * math.cos(math.radians(self.home[0]))
+        return north, east
+
+    def set_picked(self, name, lat_lon):
+        """The target clicked for drone `name` (lat, lon), or None to clear."""
+        if not self.home:
+            return
+        with self._lock:
+            if lat_lon:
+                self.picked[name] = self._to_ned(*lat_lon)
+            else:
+                self.picked.pop(name, None)
+            self._cache_key = None
+
+    def set_heading_to(self, destinations):
+        """Where each drone is flying: {name: (lat, lon)}."""
+        if not self.home:
+            return
+        with self._lock:
+            self.heading_to = {name: self._to_ned(*ll) for name, ll in destinations.items()}
+            self._cache_key = None
+
+    def select(self, name):
+        with self._lock:
+            self.selected_name = name
             self._cache_key = None
 
     def zoom(self, steps):
@@ -63,6 +119,7 @@ class MiniMap:
             roads, drone, objects = self._roads, self._drone, self._objects
         img = np.full((height, width, 3), BACKGROUND, np.uint8)
         cn, ce = (drone[0], drone[1]) if drone else (0.0, 0.0)
+        self._centre = (cn, ce)
         scale = 1.0 / self.m_per_px
 
         def px(north, east):
@@ -79,7 +136,9 @@ class MiniMap:
                 continue
             visible += 1
             colour = KIND_COLOURS.get(kind, KIND_COLOURS["object"])
-            if kind == "object":
+            if kind == "drone":
+                self._draw_drone(img, x, y, heading, colour, scale=0.75)
+            elif kind == "object":
                 cv2.rectangle(img, (x - 3, y - 3), (x + 3, y + 3), colour, -1)
             else:
                 h = math.radians(heading)
@@ -90,12 +149,40 @@ class MiniMap:
                 cv2.putText(img, name, (x + 6, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
                             colour, 1, cv2.LINE_AA)
 
+        self._draw_targets(img, px, drone, objects)
         if drone:
             self._draw_drone(img, width // 2, height // 2, drone[2])
         self._draw_legend(img, width, height, visible, len(objects))
         with self._lock:
             self._cache, self._cache_key = img, key
         return img
+
+    def _draw_targets(self, img, px, drone, objects):
+        """Each drone's target: where it is flying (a line from the drone) or,
+        failing that, the one clicked for it. The selected drone's in red,
+        the others' in blue and labelled."""
+        positions = {n: (north, east) for n, kind, north, east, _ in objects if kind == "drone"}
+        if drone and self.selected_name:
+            positions[self.selected_name] = (drone[0], drone[1])
+        for name in set(self.heading_to) | set(self.picked):
+            mine = name == self.selected_name
+            colour = TARGET if mine else KIND_COLOURS["drone"]
+            flying = name in self.heading_to
+            tx, ty = px(*(self.heading_to[name] if flying else self.picked[name]))
+            if flying and name in positions:
+                cv2.line(img, px(*positions[name]), (tx, ty), colour, 2 if mine else 1,
+                         cv2.LINE_AA)
+            size = 9 if mine else 6
+            cv2.circle(img, (tx, ty), size, colour, 2 if mine else 1, cv2.LINE_AA)
+            cv2.line(img, (tx - size - 5, ty), (tx + size + 5, ty), colour, 1, cv2.LINE_AA)
+            cv2.line(img, (tx, ty - size - 5), (tx, ty + size + 5), colour, 1, cv2.LINE_AA)
+            if not mine:
+                cv2.putText(img, f"{name} target", (tx + 8, ty + 14), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.35, colour, 1, cv2.LINE_AA)
+            # A clicked target not sent yet, for the selected drone
+            if mine and flying and name in self.picked and self.picked[name] != self.heading_to[name]:
+                ux, uy = px(*self.picked[name])
+                cv2.circle(img, (ux, uy), 7, TARGET, 1, cv2.LINE_AA)
 
     def _draw_grid(self, img, cn, ce, scale):
         h, w = img.shape[:2]
@@ -114,15 +201,16 @@ class MiniMap:
             n += spacing
 
     @staticmethod
-    def _draw_drone(img, x, y, heading):
+    def _draw_drone(img, x, y, heading, colour=DRONE, scale=1.0):
         h = math.radians(heading)
 
         def rot(dx, dy):  # dx right, dy forward
+            dx, dy = dx * scale, dy * scale
             return (int(x + dx * math.cos(h) + dy * math.sin(h)),
                     int(y + dx * math.sin(h) - dy * math.cos(h)))
 
         pts = np.array([rot(0, 12), rot(-7, -7), rot(0, -3), rot(7, -7)], np.int32)
-        cv2.fillPoly(img, [pts], DRONE, cv2.LINE_AA)
+        cv2.fillPoly(img, [pts], colour, cv2.LINE_AA)
 
     def _draw_legend(self, img, width, height, visible, total):
         # North arrow
@@ -135,7 +223,7 @@ class MiniMap:
         cv2.line(img, (12, height - 14), (12 + bar, height - 14), TEXT, 2)
         cv2.putText(img, f"{length} m", (12, height - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.4, TEXT, 1,
                     cv2.LINE_AA)
-        cv2.putText(img, f"{visible}/{total} objects in view  (wheel: zoom, L: labels)",
+        cv2.putText(img, f"{visible}/{total} objects   wheel: zoom  L: labels  click: target",
                     (12, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.4, TEXT, 1, cv2.LINE_AA)
 
 

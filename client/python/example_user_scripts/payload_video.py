@@ -11,6 +11,7 @@ Video side of the simulated gimbal payload:
   the keyboard steers the gimbal
 """
 
+import collections
 import shutil
 import subprocess
 import threading
@@ -100,24 +101,27 @@ class RtspStreamer:
 
 
 class CameraWindows:
-    """One dashboard window with tiled panes: GimbalCam, ChaseCam, a minimap
-    and a status panel. All OpenCV calls stay on the caller's thread.
+    """One dashboard window: camera panes, a minimap and a status panel drawn
+    with OpenCV, and (with add_controls) a control bar for the swarm below.
 
       +----------------------------+-------------+
-      |                            |  ChaseCam   |
-      |         GimbalCam          +-------------+
-      |                            |             |
+      |                            | small camera|
+      |  main camera (GimbalCam    +-------------+
+      |  or ChaseCam)              |             |
       +----------------------------+   Minimap   |
       |          Status            |             |
       +----------------------------+-------------+
+      | drones, view, flight buttons, command box, messages |
 
-    Controls (with the window focused):
+    Controls (with the camera/map area focused):
       W / S          tilt up / down          A / D   pan left / right
-      wheel          zooms the pane under the pointer: optical zoom on
-                     GimbalCam, digital zoom on ChaseCam, scale on Minimap
+      wheel          zooms the pane under the pointer: optical zoom on the
+                     GimbalCam, digital zoom on the ChaseCam, scale on the map
       + / -          zoom the camera         [ / ]   zoom the map out / in
       C              centre (level, ahead)   X       look straight down
-      L              map labels on/off
+      V or click the small camera            swap the two cameras
+      click the map  set the selected drone's target for "Go to target"
+      L              map labels on/off       1-9     show and steer that drone
 
     It is a Tk window: OpenCV's Qt windows zoom the whole image on the mouse
     wheel, which can't be turned off.
@@ -129,8 +133,8 @@ class CameraWindows:
     # Pane rectangles (x, y, w, h) on a 1440x810 canvas
     SIZE = (1440, 810)
     PANES = {
-        "GimbalCam": (0, 0, 960, 540),
-        "ChaseCam": (960, 0, 480, 270),
+        "Main": (0, 0, 960, 540),
+        "Small": (960, 0, 480, 270),
         "Minimap": (960, 270, 480, 540),
         "Status": (0, 540, 960, 270),
     }
@@ -138,37 +142,204 @@ class CameraWindows:
     CHASE_ZOOM_MAX = 8.0
     MAX_FPS = 30.0
     IDLE_REDRAW_S = 0.5  # redraw this often anyway, for the status and minimap
+    LOG_LINES = 200
+    # Control bar colours
+    BG, FG, FIELD, ACCENT = "#1e1f22", "#e6e6e6", "#2b2d31", "#3d6fb6"
 
-    def __init__(self, on_gimbal, on_zoom, initial_pitch=-45.0, minimap=None):
+    def __init__(self, on_gimbal, on_zoom, initial_pitch=-45.0, minimap=None,
+                 on_select=None):
         self.on_gimbal = on_gimbal  # called with (pitch_deg, yaw_deg)
         self.on_zoom = on_zoom  # called with a zoom delta in percent
+        self.on_select = on_select  # called with a drone number for keys 1-9
+        self.on_command = None  # called with a console command line (controls)
+        self.title = ""  # which drone the camera panes show
         self.minimap = minimap
         self.pitch = initial_pitch
         self.yaw = 0.0
         self.zoom_text = ""
         self.status_lines = []  # set by the caller
-        self.chase_zoom = 1.0  # digital zoom of the ChaseCam pane
+        self.main_cam = "GimbalCam"  # shown in the big pane; the other is small
+        self.chase_zoom = 1.0  # digital zoom of the ChaseCam
+        self.selected = 1  # drone number shown and steered
+        self.targets = {}  # drone number -> (lat, lon) clicked on the map
         self._frames = {}
         self._lock = threading.Lock()
-        self._view = (1.0, 0, 0)  # scale and offset from canvas to the window
+        self._messages = collections.deque()  # log lines waiting to be shown
+        self._view = (1.0, 0, 0)  # scale and offset from canvas to the label
         self._seq = 0  # bumped by new frames and input; redraw when it changes
         self._drawn_seq = -1
         self._last_draw = 0.0
+        self._log = None
 
         self.root = tk.Tk()
         self.root.title(self.WINDOW)
         self.root.geometry(f"{self.SIZE[0]}x{self.SIZE[1]}")
         self.root.configure(bg="black")
+        self.root.option_add("*Font", ("DejaVu Sans", 10))
         self.root.protocol("WM_DELETE_WINDOW", self.root.iconify)  # stop with Ctrl+C
-        self.label = tk.Label(self.root, bg="black", bd=0, highlightthickness=0)
-        self.label.pack(fill=tk.BOTH, expand=True)
+        self.label = tk.Label(self.root, bg="black", bd=0, highlightthickness=0,
+                              takefocus=True)
+        self.label.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self._photo = None
         self.root.bind("<KeyPress>", self._on_key)
+        self.label.bind("<Button-1>", self._on_click)
         for button, step in (("<Button-4>", 1), ("<Button-5>", -1)):  # X11 wheel
             self.label.bind(button, lambda e, s=step: self._on_wheel(e.x, e.y, s))
         self.label.bind(
             "<MouseWheel>", lambda e: self._on_wheel(e.x, e.y, 1 if e.delta > 0 else -1)
         )
+
+    # ------------------------------------------------------------------
+    # Control bar
+
+    def add_controls(self, drone_names, on_command, default_alt=30.0):
+        """Add the control bar: drone and camera choice, flight buttons for the
+        selected drone or all of them, a command box and recent messages."""
+        self.on_command = on_command
+        self.root.geometry(f"{self.SIZE[0]}x{self.SIZE[1] + 190}")
+        bar = tk.Frame(self.root, bg=self.BG)
+        bar.pack(side=tk.BOTTOM, fill=tk.X, before=self.label)
+
+        def label(parent, text):
+            return tk.Label(parent, text=text, bg=self.BG, fg=self.FG)
+
+        def button(parent, text, command):
+            return tk.Button(parent, text=text, command=command, bg=self.FIELD, fg=self.FG,
+                             activebackground=self.ACCENT, activeforeground="white",
+                             relief=tk.FLAT, padx=10, pady=3, highlightthickness=0)
+
+        def radio(parent, text, var, value, command):
+            return tk.Radiobutton(parent, text=text, variable=var, value=value,
+                                  command=command, indicatoron=False, bg=self.FIELD,
+                                  fg=self.FG, selectcolor=self.ACCENT, activebackground=self.ACCENT,
+                                  relief=tk.FLAT, padx=10, pady=3, highlightthickness=0)
+
+        # Row 1: which drone and camera to show, and who flight buttons command
+        row = tk.Frame(bar, bg=self.BG)
+        row.pack(fill=tk.X, padx=8, pady=(6, 2))
+        label(row, "Drone").pack(side=tk.LEFT)
+        self._drone_var = tk.IntVar(value=1)
+        for n, name in enumerate(drone_names, start=1):
+            radio(row, name, self._drone_var, n,
+                  lambda n=n: self.on_select and self.on_select(n)).pack(side=tk.LEFT, padx=2)
+        label(row, "   View").pack(side=tk.LEFT)
+        self._view_var = tk.StringVar(value=self.main_cam)
+        for cam in ("GimbalCam", "ChaseCam"):
+            radio(row, cam, self._view_var, cam,
+                  lambda cam=cam: self._set_main(cam)).pack(side=tk.LEFT, padx=2)
+        self._all_var = tk.BooleanVar(value=False)
+        if len(drone_names) > 1:
+            tk.Checkbutton(row, text="Buttons command all drones", variable=self._all_var,
+                           bg=self.BG, fg=self.FG, selectcolor=self.FIELD,
+                           activebackground=self.BG, activeforeground=self.FG,
+                           highlightthickness=0).pack(side=tk.LEFT, padx=16)
+
+        # Row 2: flight buttons
+        row = tk.Frame(bar, bg=self.BG)
+        row.pack(fill=tk.X, padx=8, pady=2)
+        label(row, "Height (m)").pack(side=tk.LEFT)
+        self._alt_var = tk.StringVar(value=f"{default_alt:g}")
+        tk.Entry(row, textvariable=self._alt_var, width=5, bg=self.FIELD, fg=self.FG,
+                 insertbackground=self.FG, relief=tk.FLAT).pack(side=tk.LEFT, padx=(4, 10))
+        for text, action in (("Take off", "takeoff"), ("Go to target", "goto"),
+                             ("Hold", "hold"), ("Land", "land"), ("Return home", "rtl")):
+            button(row, text, lambda a=action: self._fly(a)).pack(side=tk.LEFT, padx=2)
+        self._target_text = tk.StringVar()
+        label(row, "").pack(side=tk.LEFT, padx=6)
+        tk.Label(row, textvariable=self._target_text, bg=self.BG, fg="#ff8080").pack(side=tk.LEFT)
+        self._show_target()
+
+        # Row 3: command box, same commands as the terminal
+        row = tk.Frame(bar, bg=self.BG)
+        row.pack(fill=tk.X, padx=8, pady=2)
+        label(row, "Command").pack(side=tk.LEFT)
+        self._entry = tk.Entry(row, bg=self.FIELD, fg=self.FG, insertbackground=self.FG,
+                               relief=tk.FLAT)
+        self._entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self._entry.bind("<Return>", lambda e: self._send_entry())
+        self._entry.bind("<Up>", lambda e: self._history_step(-1))
+        self._entry.bind("<Down>", lambda e: self._history_step(1))
+        self._history, self._history_pos = [], 0
+        button(row, "Send", self._send_entry).pack(side=tk.LEFT)
+        button(row, "Help", lambda: self.on_command("help")).pack(side=tk.LEFT, padx=2)
+
+        # Row 4: recent messages
+        self._log = tk.Text(bar, height=5, bg="#141517", fg="#c8c8c8", relief=tk.FLAT,
+                            font=("DejaVu Sans Mono", 9), state=tk.DISABLED, takefocus=False)
+        self._log.pack(fill=tk.X, padx=8, pady=(2, 8))
+
+    @staticmethod
+    def drone_name(number):
+        return f"Drone{number}"
+
+    def set_selected(self, number):
+        """Show drone `number`'s choice in the control bar and its target."""
+        self.selected = number
+        if hasattr(self, "_drone_var"):
+            self._drone_var.set(number)
+        if self.minimap:
+            self.minimap.select(self.drone_name(number))
+        self._show_target()
+        self._seq += 1
+
+    def _show_target(self):
+        if not hasattr(self, "_target_text"):
+            return
+        target = self.targets.get(self.selected)
+        name = self.drone_name(self.selected)
+        self._target_text.set(f"{name} target: {target[0]:.6f}, {target[1]:.6f}" if target
+                              else f"{name} target: click the map")
+
+    def log(self, text):
+        """Show a message in the control bar (any thread)."""
+        self._messages.append(text)
+
+    def _fly(self, action):
+        who = "all" if self._all_var.get() else str(self.selected)
+        alt = self._alt_var.get().strip() or "30"
+        if action == "takeoff":
+            self.on_command(f"{who} takeoff {alt}")
+        elif action == "goto":
+            target = self.targets.get(self.selected)
+            if not target:
+                self.log(f"Click the map to set {self.drone_name(self.selected)}'s target first")
+                return
+            self.on_command(f"{who} goto {target[0]:.6f} {target[1]:.6f} {alt}")
+        else:
+            self.on_command(f"{who} {action}")
+
+    def _send_entry(self):
+        line = self._entry.get().strip()
+        if not line:
+            return
+        self._history.append(line)
+        self._history_pos = len(self._history)
+        self._entry.delete(0, tk.END)
+        self.log(f"> {line}")
+        self.on_command(line)
+
+    def _history_step(self, step):
+        if not self._history:
+            return
+        self._history_pos = max(0, min(len(self._history), self._history_pos + step))
+        self._entry.delete(0, tk.END)
+        if self._history_pos < len(self._history):
+            self._entry.insert(0, self._history[self._history_pos])
+
+    def _flush_log(self):
+        if not self._log or not self._messages:
+            return
+        self._log.configure(state=tk.NORMAL)
+        while self._messages:
+            self._log.insert(tk.END, self._messages.popleft().rstrip() + "\n")
+        lines = int(self._log.index("end-1c").split(".")[0])
+        if lines > self.LOG_LINES:
+            self._log.delete("1.0", f"{lines - self.LOG_LINES}.0")
+        self._log.see(tk.END)
+        self._log.configure(state=tk.DISABLED)
+
+    # ------------------------------------------------------------------
+    # Panes and input
 
     def receive(self, name, bgr):
         """Store a frame (any thread)."""
@@ -176,19 +347,51 @@ class CameraWindows:
             self._frames[name] = bgr
             self._seq += 1
 
+    def _set_main(self, cam):
+        self.main_cam = cam
+        if hasattr(self, "_view_var"):
+            self._view_var.set(cam)
+        self._seq += 1
+
     def _pane_at(self, x, y):
         for name, (px, py, pw, ph) in self.PANES.items():
             if px <= x < px + pw and py <= y < py + ph:
                 return name
         return None
 
+    def _canvas_xy(self, wx, wy):
+        scale, ox, oy = self._view
+        return (wx - ox) / scale, (wy - oy) / scale
+
+    def _cam_in(self, pane):
+        if pane == "Main":
+            return self.main_cam
+        if pane == "Small":
+            return "ChaseCam" if self.main_cam == "GimbalCam" else "GimbalCam"
+        return None
+
+    def _on_click(self, event):
+        self.label.focus_set()  # keys steer the gimbal again after typing
+        self._seq += 1
+        x, y = self._canvas_xy(event.x, event.y)
+        pane = self._pane_at(x, y)
+        if pane == "Small":
+            self._set_main(self._cam_in("Small"))
+        elif pane == "Minimap" and self.minimap:
+            px, py, pw, ph = self.PANES["Minimap"]
+            geo = self.minimap.pixel_to_geo(x - px, y - py, pw, ph)
+            if geo:
+                self.targets[self.selected] = geo
+                self.minimap.set_picked(self.drone_name(self.selected), geo)
+                self._show_target()
+
     def _on_wheel(self, wx, wy, step):
         self._seq += 1
-        scale, ox, oy = self._view
-        pane = self._pane_at((wx - ox) / scale, (wy - oy) / scale)
-        if pane == "GimbalCam":
+        pane = self._pane_at(*self._canvas_xy(wx, wy))
+        cam = self._cam_in(pane)
+        if cam == "GimbalCam":
             self.on_zoom(step * self.ZOOM_STEP_PERCENT)
-        elif pane == "ChaseCam":
+        elif cam == "ChaseCam":
             self.chase_zoom = min(self.CHASE_ZOOM_MAX, max(1.0, self.chase_zoom * 1.25 ** step))
         elif pane == "Minimap" and self.minimap:
             self.minimap.zoom(step)
@@ -225,23 +428,26 @@ class CameraWindows:
             cv2.rectangle(canvas, (x - 4, y - h - 4), (x + w + 4, y + base + 2), (0, 0, 0), -1)
         cv2.putText(canvas, text, org, font, scale, colour, 1, cv2.LINE_AA)
 
+    def _cam_title(self, cam):
+        if cam == "GimbalCam":
+            return (f"{self.title} GimbalCam  pitch {self.pitch:+.0f}  yaw {self.yaw:+.0f}  "
+                    f"{self.zoom_text}")
+        return f"{self.title} ChaseCam" + (
+            f"  {self.chase_zoom:.1f}x digital" if self.chase_zoom > 1 else "")
+
     def _compose(self, frames):
         canvas = np.zeros((self.SIZE[1], self.SIZE[0], 3), np.uint8)
-        for name in ("GimbalCam", "ChaseCam"):
-            rect = self.PANES[name]
-            if name in frames:
-                frame = frames[name]
-                if name == "ChaseCam" and self.chase_zoom > 1.0:
+        for pane, scale in (("Main", 0.6), ("Small", 0.5)):
+            cam = self._cam_in(pane)
+            rect = self.PANES[pane]
+            if cam in frames:
+                frame = frames[cam]
+                if cam == "ChaseCam" and self.chase_zoom > 1.0:
                     frame = self._crop_centre(frame, self.chase_zoom)
                 self._fit(canvas, frame, rect)
             else:
                 self._text(canvas, "waiting for camera...", (rect[0] + 20, rect[1] + rect[3] // 2))
-        g = self.PANES["GimbalCam"]
-        self._text(canvas, f"GimbalCam  pitch {self.pitch:+.0f}  yaw {self.yaw:+.0f}  {self.zoom_text}",
-                   (g[0] + 10, g[1] + 22), 0.6)
-        c = self.PANES["ChaseCam"]
-        chase_title = "ChaseCam" + (f"  {self.chase_zoom:.1f}x digital" if self.chase_zoom > 1 else "")
-        self._text(canvas, chase_title, (c[0] + 8, c[1] + 18))
+            self._text(canvas, self._cam_title(cam), (rect[0] + 10, rect[1] + 22), scale)
 
         m = self.PANES["Minimap"]
         if self.minimap:
@@ -250,9 +456,9 @@ class CameraWindows:
         x, y, w, h = self.PANES["Status"]
         canvas[y:y + h, x:x + w] = (24, 24, 24)
         help_lines = [
-            "Gimbal: W/S tilt  A/D pan  C centre  X down     Camera zoom: +/-     "
-            "Map: [ ]  L labels",
-            "Mouse wheel zooms the pane under the pointer",
+            "Gimbal: W/S tilt  A/D pan  C centre  X down   Camera zoom: +/-   "
+            "Map: [ ]  L labels  click = target",
+            "Mouse wheel zooms the pane under the pointer.  V or click the small camera: swap",
         ]
         for i, line in enumerate(self.status_lines + [""] + help_lines):
             self._text(canvas, line, (x + 12, y + 26 + 22 * i), 0.5,
@@ -264,6 +470,7 @@ class CameraWindows:
 
     def update(self):
         """Draw the dashboard and handle input; call every few ms."""
+        self._flush_log()
         now = time.monotonic()
         changed = self._seq != self._drawn_seq or now - self._last_draw > self.IDLE_REDRAW_S
         if not changed or now - self._last_draw < 1.0 / self.MAX_FPS:
@@ -275,7 +482,7 @@ class CameraWindows:
         self._last_draw = now
         canvas = self._compose(frames)
 
-        # Fit the canvas to the window, keeping its aspect ratio
+        # Fit the canvas to the label, keeping its aspect ratio
         ww, wh = max(self.label.winfo_width(), 2), max(self.label.winfo_height(), 2)
         scale = min(ww / self.SIZE[0], wh / self.SIZE[1])
         size = (max(1, int(self.SIZE[0] * scale)), max(1, int(self.SIZE[1] * scale)))
@@ -291,6 +498,8 @@ class CameraWindows:
         self.root.update()
 
     def _on_key(self, event):
+        if isinstance(event.widget, tk.Entry):
+            return  # typing a command or height, not steering
         self._seq += 1
         ch = event.char.lower() if event.char else ""
         step = self.PAN_STEP_DEG
@@ -306,6 +515,8 @@ class CameraWindows:
             self._move(-self.pitch, -self.yaw)
         elif ch == "x":
             self._move(-90.0 - self.pitch, -self.yaw)
+        elif ch == "v":
+            self._set_main(self._cam_in("Small"))
         elif ch in ("+", "="):
             self.on_zoom(self.ZOOM_STEP_PERCENT)
         elif ch in ("-", "_"):
@@ -316,6 +527,8 @@ class CameraWindows:
             self.minimap.zoom(-1)
         elif self.minimap and ch == "l":
             self.minimap.show_labels = not self.minimap.show_labels
+        elif self.on_select and ch.isdigit() and ch != "0":
+            self.on_select(int(ch))
 
     def close(self):
         try:

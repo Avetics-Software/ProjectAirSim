@@ -6,11 +6,16 @@ Starts and stops PX4 SITL for one simulator scene. PX4 SITL can only connect to
 one scene, so moving to a new location means loading the new scene and then
 starting a fresh PX4 for it.
 
+Each drone of a swarm has its own PX4 instance (`px4 -i N`). PX4 offsets its
+ports by N (simulator TCP 4560+N, QGC link 18570+N, payload link to 14030+N,
+gimbal link to 13280+N) and uses MAVLink system id N+1. Instance 0 runs in
+PX4's rootfs as before; instance N in build/px4_sitl_default/instance_N.
+
 Settings come from the environment (set by run_cesium_sim.sh):
   PX4_DIR, PX4_MODEL       PX4-Autopilot checkout and SITL model [none_iris]
   PX4_PARAM_<NAME>=value   parameters PX4 applies at boot
   PI_IP, PI_PORTS          optional companion-computer MAVLink links
-  LOG_DIR                  where px4.log and px4.pid go
+  LOG_DIR                  where px4.log and px4.pid go (px4_N.* for instance N)
   PX4_KEEP_LOGS            PX4 flight logs (.ulg) to keep, counting the new one [5]
 """
 
@@ -24,28 +29,36 @@ from projectairsim.utils import projectairsim_log
 
 
 class Px4Sitl:
-    def __init__(self):
+    def __init__(self, instance=0):
+        self.instance = instance
         self.px4_dir = os.path.expanduser(os.environ.get("PX4_DIR", "~/Documents/PX4-Autopilot"))
         self.model = os.environ.get("PX4_MODEL", "none_iris")
-        self.pi_ip = os.environ.get("PI_IP", "")
+        # Companion-computer links are for the first drone only (for now)
+        self.pi_ip = os.environ.get("PI_IP", "") if instance == 0 else ""
         self.pi_ports = [p for p in os.environ.get("PI_PORTS", "15540,15541").split(",") if p]
         self.log_dir = os.environ.get("LOG_DIR", "/tmp/projectairsim-run")
-        self.rootfs = os.path.join(self.px4_dir, "build", "px4_sitl_default", "rootfs")
+        build = os.path.join(self.px4_dir, "build", "px4_sitl_default")
+        self.bin = os.path.join(build, "bin", "px4")
+        self.etc = os.path.join(build, "etc")
+        self.rootfs = os.path.join(build, "rootfs" if instance == 0 else f"instance_{instance}")
         self.keep_logs = int(os.environ.get("PX4_KEEP_LOGS", "5"))
-        self.log_path = os.path.join(self.log_dir, "px4.log")
+        suffix = "" if instance == 0 else f"_{instance}"
+        self.log_path = os.path.join(self.log_dir, f"px4{suffix}.log")
+        self.pid_path = os.path.join(self.log_dir, f"px4{suffix}.pid")
         self.proc = None
 
     def start(self, timeout=30):
         """Start PX4 and wait until it is trying to reach the simulator."""
         self.prune_flight_logs(self.keep_logs - 1)  # PX4 starts a new one
         os.makedirs(self.log_dir, exist_ok=True)
+        os.makedirs(self.rootfs, exist_ok=True)
         log = open(self.log_path, "w")
         env = dict(os.environ, PX4_SIM_MODEL=self.model)
         self.proc = subprocess.Popen(
-            ["../bin/px4", "-d", "../etc", "-s", "etc/init.d-posix/rcS"],
+            [self.bin, "-i", str(self.instance), "-d", self.etc, "-s", "etc/init.d-posix/rcS"],
             cwd=self.rootfs, env=env, stdout=log, stderr=subprocess.STDOUT,
         )
-        with open(os.path.join(self.log_dir, "px4.pid"), "w") as f:
+        with open(self.pid_path, "w") as f:
             f.write(str(self.proc.pid))
 
         deadline = time.monotonic() + timeout
@@ -55,7 +68,9 @@ class Px4Sitl:
             if time.monotonic() > deadline:
                 raise RuntimeError(f"PX4 did not start within {timeout}s; see {self.log_path}")
             time.sleep(0.5)
-        projectairsim_log().info(f"PX4 SITL started ({self.model}); log: {self.log_path}")
+        projectairsim_log().info(
+            f"PX4 SITL {self.instance} started ({self.model}); log: {self.log_path}"
+        )
 
         if self.pi_ip:
             threading.Thread(target=self._add_companion_links, daemon=True).start()
@@ -110,7 +125,7 @@ class Px4Sitl:
         with open(self.log_path, "a") as log:
             for i, port in enumerate(self.pi_ports):
                 subprocess.run(
-                    ["../bin/px4-mavlink", "start", "-x", "-u", str(14590 + i),
+                    [self.bin + "-mavlink", "--instance", str(self.instance), "start", "-x", "-u", str(14590 + i),
                      "-r", "200000", "-m", "onboard", "-t", self.pi_ip, "-o", port, "-f"],
                     cwd=self.rootfs, stdout=log, stderr=subprocess.STDOUT,
                 )

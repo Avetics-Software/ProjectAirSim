@@ -68,6 +68,8 @@ acceleration); edit it to taste.
 | `--ground-alt` | looked up online | Ground elevation at the spawn (m MSL). Pass it to skip the Open-Meteo lookup |
 | `--spawn-height` | 15 | The drone starts this high above `--ground-alt` and settles onto the real surface |
 | `--geoid` | 8.1 | Geoid height (m); about 8 across Singapore |
+| `--drones N` | 1 | Fly a swarm of N PX4 drones (see [Swarm](#swarm)) |
+| `--drone-spacing M` | 8 | Metres between the drones at the spawn, in a line to the right |
 | `--objects FILE` | `config_spawned_objects.yml` | Objects to place in the world; `''` for none |
 | `--actors FILE` | `config_moving_actors.yml` | People and vehicles moving along paths; `''` for none |
 | `--camera-props FILE` | `camera_properties.json` | GimbalCam resolution, sensor and zoom lens |
@@ -213,6 +215,45 @@ show the CSV on a map. Columns:
 The same check is available to scripts as
 `world.get_object_visibility(robot, camera, names)`.
 
+## Swarm
+
+```bash
+./run_cesium_sim.sh --qgc --drones 3
+```
+
+starts Drone1 at the spawn point and Drone2, Drone3 in a line to its right
+(`--drone-spacing`), each with its own PX4 instance, gimbal camera, MAVLink
+camera and RTSP stream (`/gimbal`, `/gimbal2`, `/gimbal3`). Without `--qgc`,
+the swarm flies a hands-off demo: takeoff, a search of a box ahead of the
+spawn, return and land.
+
+**From QGroundControl:** one manual UDP link (listen 14550) with a server per
+drone: `127.0.0.1:18570`, `127.0.0.1:18571`, `127.0.0.1:18572`. QGC shows
+Vehicle 1-3; pick one in the toolbar to fly it or upload its mission, or use
+the Fly view's multi-vehicle list to command them all.
+
+**From the terminal** (drones first: a number, a list like `1,3`, or `all`):
+
+| Command | Effect |
+|---|---|
+| `all takeoff [ALT]` | Arm and climb to ALT m above home (default 30) |
+| `2 goto LAT LON [ALT]` | Fly drone 2 there and hover; several drones form a line 15 m apart |
+| `1,3 hold` / `land` / `rtl` | Hover / land where they are / return home and land |
+| `all search LAT1 LON1 LAT2 LON2 [ALT] [SPACING]` | Split the box into one strip per drone and sweep it in passes SPACING m apart (default 40) |
+| `status` | Each drone's flight mode, armed state, height and position |
+| `select N` | Show and steer drone N in the dashboard (or press 1-9 there) |
+| `gimbal PITCH YAW [N]`, `zoom PERCENT [N]` | Point / zoom drone N's camera (default: the selected one) |
+
+The commands go to each drone's PX4 over MAVLink, like a companion computer's,
+so QGC shows what the drones are doing and can take over at any time. A new
+command for a drone replaces what it was doing.
+
+The dashboard shows the selected drone's cameras; the minimap shows all drones
+(the selected one yellow, the others blue) and the status panel lists each
+drone's mode and height. Every camera of the swarm renders, so frame rates drop
+(about 12 fps per camera with 3 drones on an RTX 3070 laptop, against 22 with
+one); drones 2 and up have a smaller chase camera and no down camera.
+
 ## Changing location
 
 Start somewhere else with `--lat/--lon/--heading`, or move while running by
@@ -331,8 +372,9 @@ Allow UDP 15540-15541 and TCP 8554 through any firewall between the two.
 
 | Port | Used by |
 |---|---|
-| UDP 14550 ← 18570 | PX4 ↔ QGroundControl |
-| UDP 14030 ← 14280 | PX4 ↔ this script (gimbal control and MAVLink camera) |
+| UDP 14550 ← 18570 (+N) | PX4 ↔ QGroundControl (drone N+1 of a swarm) |
+| UDP 14030 ← 14280 (+N) | PX4 ↔ this script (gimbal, MAVLink camera, swarm commands) |
+| TCP 4560 (+N) | PX4 ↔ simulator |
 | UDP 15540, 15541 ← 14590, 14591 | PX4 ↔ Raspberry Pi (with `--pi-ip`) |
 | TCP 8554 | RTSP video |
 | TCP 8989 / 8990 | Simulator API |

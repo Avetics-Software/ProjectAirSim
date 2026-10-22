@@ -8,6 +8,7 @@
 #
 #   ./run_cesium_sim.sh                                   # Seletar runway demo
 #   ./run_cesium_sim.sh --qgc --spotter                   # fly from QGC, with a spotter
+#   ./run_cesium_sim.sh --qgc --drones 3                  # a swarm of 3 PX4 drones
 #   ./run_cesium_sim.sh --px4-params my.params --pi-ip 192.168.199.73 --qgc
 #
 # Launcher options (everything else goes to px4_gimbal_cesium.py, see --help):
@@ -121,7 +122,16 @@ main() {
         (cd "$SCRIPT_DIR" && "$PYTHON" actor_editor.py "${EDITOR_ARGS[@]}")
     fi
 
-    for port in 8989 8990 4560; do
+    # Each drone's PX4 connects to the sim on TCP 4560 + its index
+    DRONES=1
+    i=0
+    while [ $i -lt ${#SCRIPT_ARGS[@]} ]; do
+        [ "${SCRIPT_ARGS[$i]}" = "--drones" ] && DRONES="${SCRIPT_ARGS[$((i + 1))]}"
+        i=$((i + 1))
+    done
+    PORTS="8989 8990"
+    for ((n = 0; n < DRONES; n++)); do PORTS="$PORTS $((4560 + n))"; done
+    for port in $PORTS; do
         if ss -ltn | grep -q ":$port "; then
             echo "Port $port is in use; is another simulator or PX4 still running?" >&2
             exit 1
@@ -131,14 +141,16 @@ main() {
     mkdir -p "$LOG_DIR"
     SIM_PID=""
     RTSP_PID=""
-    rm -f "$LOG_DIR/px4.pid"
+    rm -f "$LOG_DIR"/px4*.pid
 
     cleanup() {
         trap - EXIT INT TERM
         echo "Stopping PX4 and the simulator..."
         # px4_gimbal_cesium.py starts PX4 (and restarts it for 'goto'); stop the
         # last one in case the script didn't get to
-        [ -f "$LOG_DIR/px4.pid" ] && kill "$(cat "$LOG_DIR/px4.pid")" 2>/dev/null || true
+        for pid_file in "$LOG_DIR"/px4*.pid; do
+            [ -f "$pid_file" ] && kill "$(cat "$pid_file")" 2>/dev/null || true
+        done
         [ -n "$RTSP_PID" ] && kill "$RTSP_PID" 2>/dev/null || true
         [ -n "$SIM_PID" ] && kill "$SIM_PID" 2>/dev/null || true
         sleep 3
@@ -167,6 +179,7 @@ main() {
     fi
 
     echo "GimbalCam video: rtsp://127.0.0.1:8554/gimbal (QGC, Pi) or http://127.0.0.1:8889/gimbal (browser, WebRTC)"
+    [ "$DRONES" -gt 1 ] && echo "  drone N of the swarm: .../gimbalN (e.g. http://127.0.0.1:8889/gimbal2)"
 
     # --- Simulator ---------------------------------------------------------------
     echo "Starting the simulator ($SIM_MAP); log: $LOG_DIR/sim.log"

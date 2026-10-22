@@ -2,13 +2,16 @@
 Copyright (C) 2025 IAMAI CONSULTING CORP
 MIT License.
 
-MAVLink side of the simulated gimbal payload, on PX4's onboard payload link
-(PX4 sends to UDP 14030):
+MAVLink side of the simulated gimbal payload and swarm flight control, on PX4's
+onboard payload link (PX4 instance N sends to UDP 14030+N; its system id is N+1):
 
 - gimbal control through PX4's gimbal manager (GIMBAL_MANAGER_SET_ATTITUDE), the
   same way a companion-computer tracker would steer a real gimbal
 - a MAVLink camera component (MAV_COMP_ID_CAMERA) so QGroundControl finds the
   RTSP video stream on its own and its zoom controls drive the camera's FOV
+- flight commands (arm, takeoff, fly to a point, hold, land, return) and the
+  drone's position and flight mode, for controlling a swarm from the console.
+  They go to PX4 like a companion computer's would, so QGC stays in sync.
 
 PX4 forwards messages between this link and the ground-station link, so QGC
 talks to the camera component through PX4.
@@ -26,14 +29,12 @@ from pymavlink.quaternion import QuaternionBase
 
 from projectairsim.utils import projectairsim_log
 
-PAYLOAD_LINK = "udpin:0.0.0.0:14030"
-TRACKER_SYSID = 1  # same vehicle
+PAYLOAD_PORT = 14030  # + PX4 instance
 TRACKER_COMPID = mavutil.mavlink.MAV_COMP_ID_ONBOARD_COMPUTER
 CAMERA_COMPID = mavutil.mavlink.MAV_COMP_ID_CAMERA
 
 # PX4's gimbal manager runs in the autopilot; it ignores setpoints sent to the
 # broadcast component, so always address it explicitly
-PX4_SYSID = 1
 PX4_COMPID = mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1
 GIMBAL_DEVICE_COMPID = mavutil.mavlink.MAV_COMP_ID_GIMBAL
 
@@ -44,6 +45,20 @@ GIMBAL_FLAGS = (
 
 M = mavutil.mavlink
 
+# PX4 custom_mode: main mode in byte 2, sub mode (of AUTO) in byte 3
+PX4_MAIN_MODES = {1: "MANUAL", 2: "ALTCTL", 3: "POSCTL", 4: "AUTO", 5: "ACRO", 6: "OFFBOARD",
+                  7: "STABILIZED", 8: "RATTITUDE"}
+PX4_AUTO_MODES = {1: "READY", 2: "TAKEOFF", 3: "HOLD", 4: "MISSION", 5: "RTL", 6: "LAND",
+                  8: "FOLLOW", 9: "PRECLAND"}
+
+
+def px4_mode_name(custom_mode):
+    main = (custom_mode >> 16) & 0xFF
+    sub = (custom_mode >> 24) & 0xFF
+    if main == 4:
+        return PX4_AUTO_MODES.get(sub, "AUTO")
+    return PX4_MAIN_MODES.get(main, "?")
+
 
 class PayloadLink:
     """One UDP link to PX4 shared by the gimbal controller and camera component.
@@ -53,18 +68,29 @@ class PayloadLink:
     sim client must not be used from this link's reader thread.
     """
 
-    def __init__(self, video_uri, camera):
+    def __init__(self, video_uri, camera, instance=0):
+        self.instance = instance
+        self.sysid = instance + 1  # PX4's, and ours: we are part of that vehicle
+        self.port = PAYLOAD_PORT + instance
         self.video_uri = video_uri
         self.camera = camera  # CameraProperties
         self.zoom_percent = 0.0
         self.zoom_requests = queue.Queue()
         self.capture_requests = queue.Queue()
         self.image_count = 0
+        # Telemetry, updated by the reader thread
+        self.armed = False
+        self.mode = "?"
+        self.position = None  # (lat, lon, alt AMSL m, alt above home m)
+        self.landed = True
+        self.status_text = ""
 
         self._mav = mavutil.mavlink_connection(
-            PAYLOAD_LINK, source_system=TRACKER_SYSID, source_component=TRACKER_COMPID
+            f"udpin:0.0.0.0:{self.port}", source_system=self.sysid,
+            source_component=TRACKER_COMPID,
         )
         self._send_lock = threading.Lock()
+        self._acks = queue.Queue()
         self._boot = time.monotonic()
         self._stop = threading.Event()
         self._px4_seen = threading.Event()
@@ -85,8 +111,10 @@ class PayloadLink:
         """Wait for the next PX4 heartbeat (e.g. from a freshly started PX4)."""
         self._px4_seen.clear()
         if not self._px4_seen.wait(timeout):
-            raise RuntimeError("No heartbeat from PX4 on the payload link (UDP 14030)")
-        projectairsim_log().info("Payload link up")
+            raise RuntimeError(
+                f"No heartbeat from PX4 {self.instance} on the payload link (UDP {self.port})"
+            )
+        projectairsim_log().info(f"Payload link {self.instance + 1} up (UDP {self.port})")
 
     # ------------------------------------------------------------------
     # Gimbal
@@ -100,11 +128,11 @@ class PayloadLink:
         self._send_as(
             TRACKER_COMPID,
             lambda mav: mav.command_long_send(
-                PX4_SYSID,
+                self.sysid,
                 PX4_COMPID,
                 M.MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE,
                 0,
-                TRACKER_SYSID,  # primary control sysid
+                self.sysid,  # primary control sysid
                 TRACKER_COMPID,  # primary control compid
                 -1,  # secondary control sysid: unchanged
                 -1,  # secondary control compid: unchanged
@@ -121,7 +149,7 @@ class PayloadLink:
         self._send_as(
             TRACKER_COMPID,
             lambda mav: mav.gimbal_manager_set_attitude_send(
-                PX4_SYSID,
+                self.sysid,
                 PX4_COMPID,
                 GIMBAL_FLAGS,
                 0,  # gimbal device id: all
@@ -131,6 +159,78 @@ class PayloadLink:
                 math.radians(yaw_rate_dps),
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Flight (swarm control)
+
+    def command(self, command, *params, timeout=3.0):
+        """Send a COMMAND_LONG to PX4 and return its MAV_RESULT (None if no ack)."""
+        params = list(params) + [0.0] * (7 - len(params))
+        while not self._acks.empty():
+            self._acks.get_nowait()
+        self._send_as(
+            TRACKER_COMPID,
+            lambda mav: mav.command_long_send(self.sysid, PX4_COMPID, command, 0, *params),
+        )
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                acked, result = self._acks.get(timeout=max(0.0, deadline - time.monotonic()))
+            except queue.Empty:
+                break
+            if acked == command:
+                return result
+        return None
+
+    def arm(self):
+        return self.command(M.MAV_CMD_COMPONENT_ARM_DISARM, 1)
+
+    def takeoff(self, alt_m):
+        """Take off to alt_m above home. Arms first; PX4 refuses to arm until its
+        estimator has settled, so the caller may need to retry."""
+        if self.position is None:
+            return None
+        if not self.armed:
+            result = self.arm()
+            if result != M.MAV_RESULT_ACCEPTED:
+                return result
+        lat, lon, amsl, rel = self.position
+        return self.command(M.MAV_CMD_NAV_TAKEOFF, -1, 0, 0, math.nan, math.nan, math.nan,
+                            amsl - rel + alt_m)
+
+    def fly_to(self, lat, lon, alt_m, speed_mps=-1.0):
+        """Fly to lat/lon at alt_m above home and hover there (PX4 Hold)."""
+        if self.position is None:
+            return None
+        _, _, amsl, rel = self.position
+        if speed_mps > 0:
+            self.command(M.MAV_CMD_DO_CHANGE_SPEED, 1, speed_mps, -1)
+        with self._send_lock:
+            self._mav.mav.srcComponent = TRACKER_COMPID
+            self._mav.mav.command_int_send(
+                self.sysid, PX4_COMPID, M.MAV_FRAME_GLOBAL, M.MAV_CMD_DO_REPOSITION, 0, 0,
+                -1, M.MAV_DO_REPOSITION_FLAGS_CHANGE_MODE, 0, math.nan,
+                int(lat * 1e7), int(lon * 1e7), amsl - rel + alt_m,
+            )
+        return M.MAV_RESULT_ACCEPTED
+
+    def hold(self):
+        # PX4 custom mode: AUTO (4) / LOITER (3)
+        return self.command(M.MAV_CMD_DO_SET_MODE, M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 4, 3)
+
+    def land(self):
+        return self.command(M.MAV_CMD_NAV_LAND, 0, 0, 0, math.nan, math.nan, math.nan, math.nan)
+
+    def return_home(self):
+        return self.command(M.MAV_CMD_NAV_RETURN_TO_LAUNCH)
+
+    def distance_to(self, lat, lon):
+        """Horizontal distance (m) from the drone to lat/lon, or None."""
+        if self.position is None:
+            return None
+        dn = (lat - self.position[0]) * 111_320.0
+        de = (lon - self.position[1]) * 111_320.0 * math.cos(math.radians(lat))
+        return math.hypot(dn, de)
 
     # ------------------------------------------------------------------
     # Camera component
@@ -178,9 +278,22 @@ class PayloadLink:
             if msg is None:
                 continue
             msg_type = msg.get_type()
+            from_px4 = msg.get_srcSystem() == self.sysid and msg.get_srcComponent() == PX4_COMPID
             if msg_type == "HEARTBEAT":
-                if msg.get_srcSystem() == PX4_SYSID and msg.get_srcComponent() == PX4_COMPID:
+                if from_px4:
                     self._px4_seen.set()
+                    self.armed = bool(msg.base_mode & M.MAV_MODE_FLAG_SAFETY_ARMED)
+                    self.mode = px4_mode_name(msg.custom_mode)
+            elif msg_type == "GLOBAL_POSITION_INT" and from_px4:
+                self.position = (msg.lat / 1e7, msg.lon / 1e7, msg.alt / 1000.0,
+                                 msg.relative_alt / 1000.0)
+            elif msg_type == "EXTENDED_SYS_STATE" and from_px4:
+                self.landed = msg.landed_state in (M.MAV_LANDED_STATE_ON_GROUND,
+                                                   M.MAV_LANDED_STATE_UNDEFINED)
+            elif msg_type == "STATUSTEXT" and from_px4:
+                self.status_text = msg.text
+            elif msg_type == "COMMAND_ACK" and from_px4:
+                self._acks.put((msg.command, msg.result))
             elif msg_type == "COMMAND_LONG" and msg.target_component == CAMERA_COMPID:
                 self._handle_camera_command(msg)
 
