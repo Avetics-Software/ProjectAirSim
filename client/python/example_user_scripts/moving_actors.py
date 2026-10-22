@@ -7,7 +7,9 @@ config_moving_actors.yml or from commands typed while the sim runs. The sim
 moves them every frame (SetObjectPath), so dozens can move at once.
 
 Where every actor is gets logged to a CSV (sim time, name, kind, lat, lon,
-alt, heading) as ground truth for scoring detection and re-identification.
+alt, heading) as ground truth for scoring detection and re-identification,
+with how visible it is from the drone's camera (in view, visible fraction,
+under cover) for scoring detection under occlusion.
 """
 
 import csv
@@ -126,7 +128,7 @@ def _return_path(opts, network, points):
         return roads.route_via([tuple(p) for p in reversed(opts["waypoints"])])
     if "route" in opts:
         return roads.route(opts["route"]["to"], opts["route"]["from"])
-    return roads.route(points[-1], points[0])
+    return roads.route(points[-1][:2], points[0][:2])
 
 
 def expand_actors(config):
@@ -150,8 +152,11 @@ def expand_actors(config):
 
 
 class MovingActorManager:
-    def __init__(self, world, config_path, log_dir=None):
+    def __init__(self, world, config_path, log_dir=None, camera=None):
+        """camera: (robot name, camera id) whose view the ground-truth log
+        scores visibility from, e.g. ("Drone1", "GimbalCam")."""
         self.world = world
+        self.camera = camera
         self.config_path = config_path
         # A spawner of its own, so `delete all` / `reload` for static objects
         # leave the moving actors alone
@@ -188,9 +193,10 @@ class MovingActorManager:
         geo_path, mode, note = plan_path(opts, self._network)
         if note:
             projectairsim_log().warning(f"{opts['name']}: {note}")
-        ned_path = [self._to_ned(lat, lon) for lat, lon in geo_path]
+        # [north, east] or [north, east, 1] on bridges
+        ned_path = [self._to_ned(p[0], p[1]) + list(p[2:3]) for p in geo_path]
         yaw_offset = float(opts.get("yaw_offset", 0.0))
-        (n0, e0), (n1, e1) = ned_path[0], ned_path[1]
+        (n0, e0), (n1, e1) = ned_path[0][:2], ned_path[1][:2]
         heading = math.degrees(math.atan2(e1 - e0, n1 - n0))
 
         name = self.spawner.spawn(
@@ -216,7 +222,7 @@ class MovingActorManager:
             animation_speed=float(opts.get("animation_speed", 0.0)),
             start_delay=float(opts.get("start_delay", 0.0)),
         )
-        length = sum(math.dist(a, b) for a, b in zip(ned_path, ned_path[1:]))
+        length = sum(math.dist(a[:2], b[:2]) for a, b in zip(ned_path, ned_path[1:]))
         self.actors[name] = {
             "kind": kind,
             "yaw_offset": yaw_offset,
@@ -269,7 +275,8 @@ class MovingActorManager:
         self.log_writer = csv.writer(self.log_file)
         self.log_writer.writerow(
             ["sim_time_s", "name", "kind", "lat", "lon", "alt_m", "north_m", "east_m",
-             "down_m", "heading_deg"]
+             "down_m", "heading_deg", "in_view", "visible_fraction", "covered",
+             "camera_distance_m"]
         )
         projectairsim_log().info(f"Logging moving-actor ground truth to {path}")
 
@@ -281,9 +288,15 @@ class MovingActorManager:
         self.last_log = now
         names = list(self.actors)
         poses = self.world.get_object_poses(names)
+        visibility = [{}] * len(names)
+        if self.camera:
+            try:
+                visibility = self.world.get_object_visibility(*self.camera, names)
+            except Exception as err:  # e.g. an older sim without the service
+                projectairsim_log().debug(f"No visibility for the ground truth: {err}")
         sim_time = self.world.get_sim_time() / 1e9
         home_alt = self.world.home_geo_point["altitude"]
-        for name, pose in zip(names, poses):
+        for name, pose, seen in zip(names, poses, visibility):
             t, q = pose["translation"], pose["rotation"]
             if math.isnan(t["x"]):
                 continue
@@ -293,7 +306,9 @@ class MovingActorManager:
             self.log_writer.writerow(
                 [f"{sim_time:.3f}", name, self.actors[name]["kind"], f"{lat:.7f}",
                  f"{lon:.7f}", f"{home_alt - t['z']:.2f}", f"{t['x']:.2f}",
-                 f"{t['y']:.2f}", f"{t['z']:.2f}", f"{heading:.1f}"]
+                 f"{t['y']:.2f}", f"{t['z']:.2f}", f"{heading:.1f}",
+                 int(seen.get("in_view", 0)), f"{seen.get('visible_fraction', 0.0):.2f}",
+                 int(seen.get("covered", 0)), f"{seen.get('distance_m', float('nan')):.1f}"]
             )
         self.log_file.flush()
 

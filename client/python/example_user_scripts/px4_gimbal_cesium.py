@@ -652,7 +652,8 @@ class Session:
             self.spawner.spawn_from_config()
             if args.actors:
                 self.actors = MovingActorManager(
-                    self.world, args.actors, os.environ.get("LOG_DIR", "/tmp/projectairsim-run")
+                    self.world, args.actors, os.environ.get("LOG_DIR", "/tmp/projectairsim-run"),
+                    camera=("Drone1", "GimbalCam"),
                 )
                 self.actors.spawn_from_config()
             self._load_map_roads()

@@ -124,6 +124,16 @@ class WorldSimApi {
 
   bool clearObjectPath(const std::string& object_name);
 
+  // How visible each object is from a robot's camera, for scoring detection:
+  // per object [in_view (0/1), visible_fraction (0-1), covered (0/1),
+  // distance_m]. in_view: the object's centre is in the camera's field of view
+  // within max_distance (m). visible_fraction: of points spread over the
+  // object's box, those in the field of view with a clear line of sight.
+  // covered: the object is moving under an overhang (PathFollowerComponent).
+  std::vector<std::vector<float>> getObjectVisibility(
+      const std::string& robot_name, const std::string& camera_name,
+      const std::vector<std::string>& object_names, float max_distance);
+
   // Pause or resume every object following a path
   bool pauseObjectPaths(bool paused);
 

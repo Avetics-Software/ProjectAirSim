@@ -727,7 +727,9 @@ class World(object):
 
         Args:
             object_name (str): the name of a spawned object
-            points (List[List[float]]): at least two [north, east] NED points (m)
+            points (List[List[float]]): at least two [north, east] NED points (m);
+                a third value of 1 marks a point on a bridge, where the object
+                stays on the deck instead of going under it
             speed (float): speed along the path (m/s)
             mode (str): "once" (stop at the end), "loop" (back to the first
                 point) or "pingpong" (back and forth)
@@ -747,7 +749,7 @@ class World(object):
             "method": f"{self.parent_topic}/SetObjectPath",
             "params": {
                 "object_name": object_name,
-                "points": [[float(v) for v in p[:2]] for p in points],
+                "points": [[float(v) for v in p[:3]] for p in points],
                 "speed": float(speed),
                 "mode": mode,
                 "yaw_offset": float(yaw_offset),
@@ -769,6 +771,49 @@ class World(object):
             "version": 1.0,
         }
         return self.client.request(clear_path_req)
+
+    def get_object_visibility(
+        self,
+        robot_name: str,
+        camera_name: str,
+        object_names: List[str],
+        max_distance: float = 1500.0,
+    ) -> List[Dict]:
+        """How visible each object is from a robot's camera
+
+        Points spread over each object's box are checked against the camera's
+        field of view and for a clear line of sight (trees, buildings and other
+        objects block it).
+
+        Args:
+            robot_name (str): the robot carrying the camera, e.g. "Drone1"
+            camera_name (str): the camera's id in the robot config
+            object_names (List[str]): objects to check
+            max_distance (float): objects farther than this (m) are out of view
+
+        Returns:
+            List[Dict]: per object, in order: "in_view" (its centre is in the
+                field of view), "visible_fraction" (0-1, the share of its points
+                in view and unobstructed), "covered" (it is moving under trees,
+                a bridge or a roof) and "distance_m" (from the camera; NaN if the
+                object wasn't found)
+        """
+        visibility_req: Dict = {
+            "method": f"{self.parent_topic}/GetObjectVisibility",
+            "params": {
+                "robot_name": robot_name,
+                "camera_name": camera_name,
+                "object_names": object_names,
+                "max_distance": float(max_distance),
+            },
+            "version": 1.0,
+        }
+        rows = self.client.request(visibility_req)
+        return [
+            {"in_view": bool(r[0]), "visible_fraction": r[1], "covered": bool(r[2]),
+             "distance_m": r[3]}
+            for r in rows
+        ]
 
     def pause_object_paths(self, paused: bool = True) -> bool:
         """Pause (or resume) every object following a path"""

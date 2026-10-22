@@ -22,6 +22,7 @@
 #ifdef ENABLE_CESIUM
 #include "Cesium3DTileset.h"
 #include "CesiumGeoreference.h"
+#include "World/PathFollowerComponent.h"
 #endif
 
 namespace projectairsim = microsoft::projectairsim;
@@ -295,6 +296,52 @@ void AUnrealSimLoader::ConfigureCesiumTileset(
       0, 90, 0);  // to match cesium's ENU RHS coords with our NEU LHS coords.
   UGameplayStatics::FinishSpawningActor(CesiumTile,
                                         FTransform(CesiumRot, FVector::ZeroVector));
+  CesiumTilesets.Add(CesiumTile);
+}
+
+void AUnrealSimLoader::SpawnBareEarthTerrain(
+    projectairsim::GeoPoint& HomeGeoPoint, float TilesAltitudeOffset) {
+  auto Terrain = UnrealWorld->SpawnActorDeferred<ACesium3DTileset>(
+      ACesium3DTileset::StaticClass(), FTransform(), nullptr, nullptr,
+      ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+  // Only object-type queries for kBareEarthObjectType see it: it blocks no
+  // trace channel, so drones, cameras and ground lookups ignore it
+  Terrain->BodyInstance.SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+  Terrain->BodyInstance.SetObjectType(kBareEarthObjectType);
+  Terrain->BodyInstance.SetResponseToAllChannels(ECR_Ignore);
+  Terrain->SetActorHiddenInGame(true);
+  Terrain->Tags.Add(TEXT("ProjectAirSimBareEarth"));
+  // Cesium World Terrain: ellipsoid heights like the photorealistic tiles
+  ConfigureCesiumTileset(Terrain, HomeGeoPoint, TilesAltitudeOffset,
+                         TEXT("ion://1"));
+}
+
+void AUnrealSimLoader::StartTileShadows(ACesium3DTileset* CesiumTile) {
+  TWeakObjectPtr<ACesium3DTileset> Tileset(CesiumTile);
+  FTSTicker::GetCoreTicker().RemoveTicker(TileShadowTicker);
+  TileShadowTicker = FTSTicker::GetCoreTicker().AddTicker(
+      FTickerDelegate::CreateLambda([Tileset](float) {
+        if (!Tileset.IsValid()) return false;
+        TArray<UPrimitiveComponent*> Primitives;
+        Tileset->GetComponents(Primitives);
+        for (UPrimitiveComponent* Primitive : Primitives) {
+          if (!Primitive->CastShadow || !Primitive->bCastDynamicShadow) {
+            Primitive->bCastDynamicShadow = true;
+            Primitive->SetCastShadow(true);
+          }
+        }
+        return true;
+      }),
+      0.5f);
+}
+
+void AUnrealSimLoader::DestroyCesiumTilesets() {
+  FTSTicker::GetCoreTicker().RemoveTicker(TileShadowTicker);
+  TileShadowTicker.Reset();
+  for (const TWeakObjectPtr<ACesium3DTileset>& Tileset : CesiumTilesets) {
+    if (Tileset.IsValid()) Tileset->Destroy();
+  }
+  CesiumTilesets.Reset();
 }
 #endif
 
@@ -419,6 +466,9 @@ void AUnrealSimLoader::LoadUnrealScene() {
                       nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
               ConfigureCesiumTileset(CesiumTile, HomeGeoPoint,
                                      Scene.GetTilesAltitudeOffset(), TilesDir);
+              StartTileShadows(CesiumTile);
+              SpawnBareEarthTerrain(HomeGeoPoint,
+                                    Scene.GetTilesAltitudeOffset());
               break;
 #else
               UnrealLogger::Log(
@@ -511,6 +561,11 @@ void AUnrealSimLoader::UnloadUnrealScene() {
           UnrealScene->Destroy();
           UnrealScene = nullptr;
         }
+
+#ifdef ENABLE_CESIUM
+        // Destroy the Cesium tilesets; otherwise each reload adds another
+        DestroyCesiumTilesets();
+#endif
 
         // Destroy GIS rendering actors if they exist
         if (GISRenderer) {

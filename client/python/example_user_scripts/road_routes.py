@@ -118,6 +118,7 @@ class RoadNetwork:
         self.lat0, self.lon0 = lat, lon
         self.nodes = {}  # id -> (north, east) metres from lat0/lon0
         self.edges = {}  # id -> [(next id, length m, lane offset m, weight)]
+        self.bridges = set()  # (id, id) edges on bridges and viaducts
         data = load_ways(lat, lon, radius_m, kind)
         for el in data["elements"]:
             if el["type"] == "node":
@@ -157,8 +158,11 @@ class RoadNetwork:
         offset = self._lane_offset(tags, forward and backward)
         # Weight 0 keeps random routes off runways and taxiways
         weight = 0 if "aeroway" in tags else ROAD_WEIGHTS.get(tags.get("highway"), 1)
+        on_bridge = tags.get("bridge", "no") != "no"
         for a, b in zip(ids, ids[1:]):
             length = math.dist(self.nodes[a], self.nodes[b])
+            if on_bridge:
+                self.bridges.update({(a, b), (b, a)})
             if forward:
                 self.edges.setdefault(a, []).append((b, length, offset, weight))
             if backward:
@@ -210,7 +214,7 @@ class RoadNetwork:
 
     def route(self, start, end):
         """Shortest path between the network points nearest two [lat, lon]."""
-        source, target = self._snap(*start, "from"), self._snap(*end, "to")
+        source, target = self._snap(*start[:2], "from"), self._snap(*end[:2], "to")
         path, offsets = self._shortest(source, target)
         return self._finish(path, offsets)
 
@@ -219,7 +223,8 @@ class RoadNetwork:
         back to the first one if `closed`. A leg whose ends aren't both within
         MAX_SNAP_M of the network, or that the network doesn't connect (e.g. a
         public road and an airside taxiway), is a straight line instead."""
-        points = [list(p) for p in points] + ([list(points[0])] if closed else [])
+        points = [list(p[:2]) for p in points]
+        points += [points[0]] if closed else []
         nodes = [self._node_within(lat, lon, MAX_SNAP_M) for lat, lon in points]
         out = []
         run, run_offsets = [], []  # consecutive legs along the network
@@ -294,7 +299,7 @@ class RoadNetwork:
         """A random drive/walk of about length_m, from `start` ([lat, lon]) or
         from a random point within start_radius_m of the network's centre."""
         node = (
-            self.nearest_node(*start, roads_only=True)
+            self.nearest_node(*start[:2], roads_only=True)
             if start
             else self.random_node(self.lat0, self.lon0, start_radius_m, rng)
         )
@@ -322,7 +327,9 @@ class RoadNetwork:
         return self._finish(path, offsets)
 
     def _finish(self, path, offsets):
-        """Node ids to [lat, lon] points, shifted left into each edge's lane."""
+        """Node ids to path points, shifted left into each edge's lane: [lat, lon],
+        or [lat, lon, 1] where the point is on a bridge (the sim keeps the
+        object on the deck there instead of under it)."""
         points = [self.nodes[n] for n in path]
         shifted = []
         for i, (n, e) in enumerate(points):
@@ -334,14 +341,20 @@ class RoadNetwork:
             if norm > 0 and offset:
                 # Left of the direction of travel is (de, -dn) in north/east
                 n, e = n + offset * de / norm, e - offset * dn / norm
-            if not shifted or math.dist(shifted[-1], (n, e)) > 0.5:
-                shifted.append((n, e))
-        return [self._to_geo(n, e) for n, e in shifted]
+            on_bridge = any(
+                (path[j], path[j + 1]) in self.bridges
+                for j in (i - 1, i) if 0 <= j < len(path) - 1
+            )
+            if not shifted or math.dist(shifted[-1][:2], (n, e)) > 0.5:
+                shifted.append((n, e, on_bridge))
+        return [self._to_geo(n, e) + ([1] if bridge else []) for n, e, bridge in shifted]
 
 
 def path_length_m(points):
+    """Length of [lat, lon, ...] points in metres."""
     total = 0.0
-    for (lat1, lon1), (lat2, lon2) in zip(points, points[1:]):
+    for p, q in zip(points, points[1:]):
+        (lat1, lon1), (lat2, lon2) = p[:2], q[:2]
         dn = (lat2 - lat1) * EARTH_M_PER_DEG
         de = (lon2 - lon1) * EARTH_M_PER_DEG * math.cos(math.radians(lat1))
         total += math.hypot(dn, de)

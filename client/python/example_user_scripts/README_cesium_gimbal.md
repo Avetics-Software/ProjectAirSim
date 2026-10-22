@@ -184,10 +184,34 @@ after saving.
 | `actors reload` | Delete and respawn from the YAML file |
 | `actors delete NAME` | Remove one |
 
-Where every actor is gets logged about 5 times a second to
-`/tmp/projectairsim-run/ground_truth_<time>.csv` (sim time, name, kind, lat,
-lon, alt, heading), as ground truth for detection and re-identification. The
-newest 5 logs are kept. geojson.io can show the CSV on a map.
+**Trees, bridges and occlusion.** The photorealistic world is one 3D surface:
+where trees or a bridge overhang a road, their top is all there is. A hidden
+bare-earth terrain (Cesium World Terrain, ion asset 1, needs no extra setup) is
+loaded alongside it. Where the visible surface is more than 4 m above the road,
+an actor goes *under* it at road level, so tree cover hides it from the drone
+as it would in reality. The road height under cover is ramped from where the
+cover starts to where the path comes out of it. Bridges (from OSM) keep
+vehicles on the deck. Placed objects whose underside is high up, like a roof,
+count as cover too; objects standing on the ground, like parked cars, don't.
+The tiles cast Unreal shadows, so actors under trees or beside buildings are
+shaded.
+
+**Ground truth.** Where every actor is gets logged about 5 times a second to
+`/tmp/projectairsim-run/ground_truth_<time>.csv`, as ground truth for detection,
+occlusion and re-identification. The newest 5 logs are kept; geojson.io can
+show the CSV on a map. Columns:
+
+| Column | Meaning |
+|---|---|
+| `sim_time_s`, `name`, `kind` | When, which actor, person or vehicle |
+| `lat`, `lon`, `alt_m`, `north_m`, `east_m`, `down_m`, `heading_deg` | Where, and its direction of travel |
+| `in_view` | 1 if its centre is in Drone1's GimbalCam field of view (within 1.5 km) |
+| `visible_fraction` | Share of 18 points over its body that are in view with a clear line of sight (0-1); trees, buildings and other actors block it |
+| `covered` | 1 while it is under trees, a bridge or a roof |
+| `camera_distance_m` | Distance from the GimbalCam |
+
+The same check is available to scripts as
+`world.get_object_visibility(robot, camera, names)`.
 
 ## Changing location
 
