@@ -5,7 +5,11 @@
 #   name:       unique name in the sim; also its identity in the ground-truth log
 #   kind:       person or vehicle; picks the defaults below
 #   a path, one of:
-#     waypoints:    [[lat, lon], ...] at least two points to walk/drive along
+#     waypoints:    [[lat, lon], ...] at least two points to walk/drive along.
+#                   Vehicles follow roads, runways and taxiways between them
+#                   (people walk straight); set follow_roads: true/false to
+#                   change that. A waypoint more than 50 m from a road, or a
+#                   leg the roads don't connect, is driven straight.
 #     route:        {from: [lat, lon], to: [lat, lon]} shortest way between two
 #                   points along OpenStreetMap roads (vehicles) or footpaths
 #                   (people); vehicles keep left
@@ -17,7 +21,11 @@
 #   count:      with random_route, spawn this many (named NAME_1, NAME_2, ...)
 #   mode:       loop (back to the first point), pingpong (back and forth) or
 #               once (stop at the end)    [default loop for waypoints, pingpong
-#               for road routes, which loop only if they end where they start]
+#               for road routes]. A vehicle on roads drives back by its own
+#               legal route (one-way streets, left lane) rather than reversing
+#               over its outbound path, so pingpong and loop both make it lap
+#               the round trip.
+#   Vehicles drive in the kerb-side (leftmost) lane, using OSM's lane counts.
 #   speed:      m/s
 #   start_delay: seconds to stand still before setting off        [default 0]
 #   asset:      Unreal asset to spawn (type `assets` in the run console to list)
@@ -33,52 +41,37 @@
 # Edit this file while the sim is running and type `actors reload` to apply it.
 
 defaults:
-  person:
-    asset: SKM_Manny_Simple
-    speed: 1.4
-    yaw_offset: -90          # the UE Mannequin faces along its +Y axis
-    walk_animation: MF_Unarmed_Walk_Fwd
-    idle_animation: MM_Idle
-    animation_speed: 1.6     # m/s the walk animation is authored at
-  vehicle:
-    asset: SKM_SportsCar
-    length: 4.5
-    speed: 10
-    align_to_ground: true
-
+  person: {asset: SKM_Manny_Simple, speed: 1.4, yaw_offset: -90, walk_animation: MF_Unarmed_Walk_Fwd,
+    idle_animation: MM_Idle, animation_speed: 1.6}
+  vehicle: {asset: SKM_SportsCar, length: 4.5, speed: 10, align_to_ground: true}
 actors:
-  # Only vehicles for now. For a person, use `kind: person` with any path
-  # below, e.g. random_route: {length_m: 500} for a walk along footpaths.
-
-  # A car driving up and down the runway
-  - name: Vehicle1
-    kind: vehicle
-    speed: 15
-    mode: pingpong
-    waypoints:
-      - [1.413936, 103.865203]
-      - [1.418004, 103.867846]
-
-  # A car lapping the runway, setting off after 10 s
-  - name: Vehicle2
-    kind: vehicle
-    speed: 12
-    start_delay: 10
-    waypoints:
-      - [1.413969, 103.865482]
-      - [1.417133, 103.867537]
-      - [1.417251, 103.867357]
-      - [1.414086, 103.865301]
-
-  # Traffic on the roads west of the runway (OpenStreetMap, downloaded once
-  # into osm_cache/)
-  - name: Traffic
-    kind: vehicle
-    count: 4
-    speed: 12
-    random_route: {length_m: 1500}
-
-  # A car between two places, by the shortest road route:
-  # - name: Courier
-  #   kind: vehicle
-  #   route: {from: [1.41660, 103.86180], to: [1.40780, 103.86330]}
+- name: Vehicle1
+  kind: vehicle
+  speed: 15
+  mode: loop
+  waypoints:
+  - [1.415689, 103.866675]
+  - [1.417282, 103.867734]
+  - [1.416381, 103.869182]
+  - [1.414786, 103.868142]
+- name: Vehicle2
+  kind: vehicle
+  speed: 12
+  start_delay: 10
+  route:
+    from: [1.409005, 103.862289]
+    to: [1.415268, 103.866441]
+  mode: pingpong
+- name: Traffic
+  kind: vehicle
+  speed: 12
+  mode: loop
+  waypoints:
+  - [1.41, 103.860551]
+  - [1.411169, 103.861458]
+- name: Courier
+  kind: vehicle
+  speed: 15
+  route:
+    from: [1.4166, 103.8618]
+    to: [1.40894, 103.860691]

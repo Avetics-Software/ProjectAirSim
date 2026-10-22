@@ -20,7 +20,7 @@ import time
 import yaml
 
 from projectairsim.utils import geo_to_ned_coordinates, projectairsim_log, quaternion_to_rpy
-from road_routes import RoadNetwork
+from road_routes import RoadNetwork, path_length_m
 from spawned_objects import ObjectSpawner
 
 # Used for anything neither the actor nor the config's `defaults` set
@@ -51,6 +51,104 @@ ACTORS_HELP = """  actors [list]                         moving people and vehic
   actors delete NAME                    remove one"""
 
 
+def follows_roads(opts):
+    """Waypoints are joined along roads/footpaths unless `follow_roads: false`;
+    by default vehicles follow roads and people walk straight between points."""
+    return bool(opts.get("follow_roads", opts.get("kind") == "vehicle"))
+
+
+def resolve_path(opts, network):
+    """[lat, lon] points of an actor's path from its config entry. `network(kind)`
+    returns the RoadNetwork around home. Shared with actor_editor.py, so its
+    preview shows exactly the path the sim will use."""
+    if "waypoints" in opts:
+        points = [(float(p[0]), float(p[1])) for p in opts["waypoints"]]
+        if len(points) < 2:
+            raise ValueError("waypoints needs at least two [lat, lon] points")
+        if follows_roads(opts):
+            # Along the roads between waypoints; a loop's last leg goes back to
+            # the first waypoint along the roads too
+            closed = opts.get("mode", "loop") == "loop"
+            return network(opts["kind"]).route_via(points, closed=closed)
+        return points
+    if "route" in opts:
+        route = opts["route"] or {}
+        if not route.get("from") or not route.get("to"):
+            raise ValueError("route needs both `from` (A) and `to` (B) points")
+        return network(opts["kind"]).route(route["from"], route["to"])
+    if "random_route" in opts:
+        spec = opts["random_route"] or {}
+        # Seeded by name, so `actors reload` and restarts drive the same routes
+        rng = random.Random(f"{opts['name']}:{spec.get('seed', 0)}")
+        return network(opts["kind"]).random_route(
+            float(spec.get("length_m", 1000.0)),
+            rng,
+            start=spec.get("start"),
+            start_radius_m=float(spec.get("start_radius_m", 400.0)),
+        )
+    raise ValueError("needs waypoints, route or random_route")
+
+
+def plan_path(opts, network):
+    """The path and follower mode the sim will use, and a note for the user:
+    ([lat, lon] points, "once" | "loop" | "pingpong", str).
+
+    A vehicle on roads never drives back over its outbound path, which would
+    take it the wrong way down one-way streets and onto the wrong side of the
+    road. Instead it gets a legal return route from the end to the start and
+    loops the round trip ("pingpong" and "loop" both do this)."""
+    points = resolve_path(opts, network)
+    mode = opts.get("mode", "loop" if "waypoints" in opts else "pingpong")
+    if mode not in ("once", "loop", "pingpong"):
+        raise ValueError(f"mode must be once, loop or pingpong, not {mode}")
+    closed = path_length_m([points[0], points[-1]]) < 10.0
+    on_roads = "waypoints" not in opts or follows_roads(opts)
+    if mode == "once":
+        return points, mode, ""
+    if opts["kind"] == "vehicle" and on_roads:
+        if closed:
+            return points, "loop", ""
+        try:
+            back = _return_path(opts, network, points)
+        except (ValueError, RuntimeError) as err:
+            return points, "pingpong", f"no legal way back ({err}); reversing instead"
+        return points + back[1:], "loop", ""
+    if mode == "loop" and not closed and "waypoints" not in opts:
+        # Looping would cut straight across from the end back to the start
+        return points, "pingpong", "path doesn't end where it starts; using pingpong"
+    return points, mode, ""
+
+
+def _return_path(opts, network, points):
+    """A legal route from the end of an actor's path back to its start."""
+    roads = network(opts["kind"])
+    if "waypoints" in opts:
+        return roads.route_via([tuple(p) for p in reversed(opts["waypoints"])])
+    if "route" in opts:
+        return roads.route(opts["route"]["to"], opts["route"]["from"])
+    return roads.route(points[-1], points[0])
+
+
+def expand_actors(config):
+    """Config entries with defaults applied and `count` copies expanded, as
+    (kind, opts) pairs in spawn order."""
+    defaults = config.get("defaults") or {}
+    expanded = []
+    for i, entry in enumerate(config.get("actors") or []):
+        kind = entry.get("kind", "person")
+        opts = {**KIND_DEFAULTS.get(kind, {}), **(defaults.get(kind) or {}), **entry}
+        opts.setdefault("name", f"{kind.capitalize()}{i + 1}")
+        opts["kind"] = kind
+        count = int(opts.pop("count", 1))
+        if count > 1 and "random_route" not in opts:
+            projectairsim_log().warning(f"{opts['name']}: count needs random_route; spawning one")
+            count = 1
+        for n in range(count):
+            name = f"{opts['name']}_{n + 1}" if count > 1 else opts["name"]
+            expanded.append((kind, dict(opts, name=name)))
+    return expanded
+
+
 class MovingActorManager:
     def __init__(self, world, config_path, log_dir=None):
         self.world = world
@@ -74,34 +172,22 @@ class MovingActorManager:
         with open(self.config_path) as f:
             config = yaml.safe_load(f) or {}
         base_dir = os.path.dirname(os.path.abspath(self.config_path))
-        defaults = config.get("defaults") or {}
-        for i, entry in enumerate(config.get("actors") or []):
-            kind = entry.get("kind", "person")
-            opts = {**KIND_DEFAULTS.get(kind, {}), **(defaults.get(kind) or {}), **entry}
-            opts.setdefault("name", f"{kind.capitalize()}{i + 1}")
+        for kind, opts in expand_actors(config):
             if opts.get("file"):
                 opts["file"] = os.path.join(base_dir, os.path.expanduser(opts["file"]))
                 opts.pop("asset", None)
-            count = int(opts.pop("count", 1))
-            if count > 1 and "random_route" not in opts:
-                projectairsim_log().warning(
-                    f"{opts['name']}: count needs random_route; spawning one"
-                )
-                count = 1
-            for n in range(count):
-                copy = dict(opts, name=f"{opts['name']}_{n + 1}" if count > 1 else opts["name"])
-                try:
-                    self.spawn(kind, copy)
-                except Exception as err:
-                    projectairsim_log().warning(
-                        f"Could not spawn moving actor {copy['name']}: {err}"
-                    )
+            try:
+                self.spawn(kind, opts)
+            except Exception as err:
+                projectairsim_log().warning(f"Could not spawn moving actor {opts['name']}: {err}")
         self._open_log()
 
     def spawn(self, kind, opts):
         """Spawn one actor at the start of its path and set it moving."""
         opts = dict(opts, kind=kind)
-        geo_path = self._path(opts)
+        geo_path, mode, note = plan_path(opts, self._network)
+        if note:
+            projectairsim_log().warning(f"{opts['name']}: {note}")
         ned_path = [self._to_ned(lat, lon) for lat, lon in geo_path]
         yaw_offset = float(opts.get("yaw_offset", 0.0))
         (n0, e0), (n1, e1) = ned_path[0], ned_path[1]
@@ -118,12 +204,6 @@ class MovingActorManager:
             scale=opts.get("scale"),
         )
         speed = float(opts["speed"])
-        on_roads = "waypoints" not in opts
-        mode = opts.get("mode", "pingpong" if on_roads else "loop")
-        if mode == "loop" and on_roads and math.dist(ned_path[0], ned_path[-1]) > 10.0:
-            # Looping would cut straight across from the end back to the start
-            projectairsim_log().warning(f"{opts['name']}: road route isn't closed; using pingpong")
-            mode = "pingpong"
         self.world.set_object_path(
             name,
             ned_path,
@@ -143,27 +223,6 @@ class MovingActorManager:
             "desc": f"{kind}, {speed:g} m/s, {mode}, {len(ned_path)} points / {length:.0f} m",
         }
         return name
-
-    def _path(self, opts):
-        if "waypoints" in opts:
-            points = [(float(p[0]), float(p[1])) for p in opts["waypoints"]]
-            if len(points) < 2:
-                raise ValueError("waypoints needs at least two [lat, lon] points")
-            return points
-        if "route" in opts:
-            route = opts["route"]
-            return self._network(opts["kind"]).route(route["from"], route["to"])
-        if "random_route" in opts:
-            spec = opts["random_route"] or {}
-            # Seeded by name, so `actors reload` and restarts drive the same routes
-            rng = random.Random(f"{opts['name']}:{spec.get('seed', 0)}")
-            return self._network(opts["kind"]).random_route(
-                float(spec.get("length_m", 1000.0)),
-                rng,
-                start=spec.get("start"),
-                start_radius_m=float(spec.get("start_radius_m", 400.0)),
-            )
-        raise ValueError("needs waypoints, route or random_route")
 
     def _network(self, kind):
         if kind not in self.networks:

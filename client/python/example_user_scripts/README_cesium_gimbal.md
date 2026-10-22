@@ -129,7 +129,7 @@ actors:
     mode: loop                      # loop, pingpong or once
   - name: Courier
     kind: vehicle
-    route: {from: [1.41660, 103.86180], to: [1.40780, 103.86330]}
+    route: {from: [1.41660, 103.86180], to: [1.406242, 103.859972]}
   - name: Traffic                   # Traffic_1 .. Traffic_4
     kind: vehicle
     count: 4
@@ -137,11 +137,45 @@ actors:
     random_route: {length_m: 1500}
 ```
 
-`route` and `random_route` follow OpenStreetMap roads (vehicles keep left) or
-footpaths (people). The map data is downloaded once into `osm_cache/` and needs
+`route` and `random_route` follow OpenStreetMap roads or footpaths (people).
+Vehicles obey one-way streets and drive in the kerb-side lane (left in
+Singapore), placed using OSM's lane counts (3.5 m lanes). To go back, a
+vehicle takes its own legal route from the end to the start (often the other
+carriageway) instead of reversing over its path, and laps that round trip. A `route`'s `from` and `to` must be within 50 m of a road
+or footpath. Vehicle `waypoints` are joined along the roads too (set
+`follow_roads: false` for straight lines; people walk straight unless
+`follow_roads: true`); a waypoint off the roads is reached in a straight line.
+For vehicles, airport runways and taxiways count as roads for `waypoints` and
+`route`, but random traffic stays off them. The map data is downloaded once into `osm_cache/` and needs
 internet the first time. Preview routes without the sim:
 `python road_routes.py --kind vehicle --random 1500 --count 5 --geojson routes.geojson`,
 then drop the file onto https://geojson.io.
+
+**Map editor.** Instead of typing coordinates, pick paths on a map in the
+browser:
+
+```bash
+python actor_editor.py                    # edit config_moving_actors.yml
+./run_cesium_sim.sh --qgc --edit-actors   # edit first; the sim starts on "Save & start"
+```
+
+Choose or add an actor on the left, pick a path type, then click the map:
+
+- **Route:** click A, then B. The path follows roads (vehicles) or footpaths
+  (people). Drag the pins to adjust.
+- **Waypoints:** click points in order. Drag to move, right-click to remove.
+  With "Follow roads between waypoints" (on by default for vehicles) the path
+  follows the roads between points; untick it for straight lines. "Return to
+  the first point" loops back to the start, like a mission that returns to its
+  takeoff point.
+- **Random route:** optionally click a start point; set the length, number of
+  copies and seed.
+
+The line drawn is exactly the path the sim will use. Save writes the YAML and
+keeps the previous file as `.bak`. Comments inside the actor list aren't kept;
+the explanation at the top of the file is. Pass `--lat/--lon` if the drone
+spawns somewhere other than Seletar. In a running sim, type `actors reload`
+after saving.
 
 | Command | Effect |
 |---|---|

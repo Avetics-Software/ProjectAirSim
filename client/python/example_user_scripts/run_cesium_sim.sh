@@ -20,6 +20,9 @@
 #                          UDP ports --pi-ports (default 15540,15541), and
 #                          announce the video at rtsp://<this laptop>:8554/gimbal
 #   --pi-ports P1[,P2...]  companion-computer MAVLink ports
+#   --edit-actors          first open the map editor for the moving actors
+#                          (actor_editor.py) in the browser; the sim starts
+#                          after you press "Save & start"
 #
 # Environment (defaults in brackets):
 #   UE_ROOT           Unreal Engine 5.7 [~/UnrealEngine-5.7]
@@ -54,6 +57,7 @@ main() {
     [ -f "$SCRIPT_DIR/px4_params.parm" ] && PX4_PARAM_FILES+=("$SCRIPT_DIR/px4_params.parm")
     PI_IP=""
     PI_PORTS="15540,15541"
+    EDIT_ACTORS=0
     SCRIPT_ARGS=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -61,6 +65,7 @@ main() {
             --px4-params) PX4_PARAM_FILES+=("$(realpath "$2")"); shift 2 ;;
             --pi-ip) PI_IP="$2"; shift 2 ;;
             --pi-ports) PI_PORTS="$2"; shift 2 ;;
+            --edit-actors) EDIT_ACTORS=1; shift ;;
             *) SCRIPT_ARGS+=("$1"); shift ;;
         esac
     done
@@ -100,6 +105,21 @@ main() {
         exit 1
     fi
     export CESIUM_ION_TOKEN
+
+    if [ "$EDIT_ACTORS" = 1 ]; then
+        # Edit the same file and area the sim will use
+        EDITOR_ARGS=(--wait)
+        i=0
+        while [ $i -lt ${#SCRIPT_ARGS[@]} ]; do
+            case "${SCRIPT_ARGS[$i]}" in
+                --lat) EDITOR_ARGS+=(--lat "${SCRIPT_ARGS[$((i + 1))]}") ;;
+                --lon) EDITOR_ARGS+=(--lon "${SCRIPT_ARGS[$((i + 1))]}") ;;
+                --actors) [ -n "${SCRIPT_ARGS[$((i + 1))]}" ] && EDITOR_ARGS+=(--config "${SCRIPT_ARGS[$((i + 1))]}") ;;
+            esac
+            i=$((i + 1))
+        done
+        (cd "$SCRIPT_DIR" && "$PYTHON" actor_editor.py "${EDITOR_ARGS[@]}")
+    fi
 
     for port in 8989 8990 4560; do
         if ss -ltn | grep -q ":$port "; then
