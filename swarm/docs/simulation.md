@@ -443,6 +443,60 @@ shutter controls work. Snapshots are saved to `~/Pictures/projectairsim/`.
 QGC and the dashboard both steer the gimbal through PX4. Whichever was
 used last is in control.
 
+### Gimbal stabilisation and yaw modes
+
+The GimbalCam's mount keeps the camera level: whatever the drone's roll and
+pitch, the camera holds the pitch it was given (measured: drone tilting up to
+38 deg in hard acceleration and braking, camera roll 0.0 and pitch exactly as
+commanded throughout).
+
+How the gimbal moves is set by the actuator's `gimbal-settings` in
+`sim_config/robot_quadrotor_px4_gimbal_payload.jsonc` (leave the block out for
+an ideal gimbal that reaches every angle at once):
+
+| Setting | Default here | Meaning |
+|---|---|---|
+| `max-pitch-rate-deg`, `max-yaw-rate-deg`, `max-roll-rate-deg` | 120 | Top slew rate (deg/s) |
+| `pitch-min-deg` / `pitch-max-deg` | -90 / 25 | Pitch travel |
+| `yaw-min-deg` / `yaw-max-deg` | -160 / 160 | Yaw travel, from the nose |
+| `settling-time-s` | 0.1 | Lag reaching a commanded angle |
+| `yaw-follow-time-s` | 0.5 | Follow mode: how far the camera trails the drone's turns |
+
+These are typical of a ZR10-class gimbal; set them from your own gimbal's
+datasheet. The C++ is `core_sim/src/actuators/gimbal.cpp` (rebuild the sim libs
+and the Blocks plugin after changing it; the settings themselves only need a
+restart).
+
+**Yaw follow or yaw lock.** In *follow* (the default) the camera turns with the
+drone, trailing its turns by `yaw-follow-time-s`. In *lock* it holds its
+compass heading while the drone turns, until it reaches its yaw travel. For a
+drone without a companion, press **Y** (or `gimbal lock on|off [N]`); the
+GimbalCam title shows `yaw follow` / `yaw lock` and the angle the gimbal
+actually reports. With a companion, X decides: `MAVLINK_YAW_LOCK` in its
+`config_gimbal.yml`.
+
+**Measuring it.**
+
+- `sim attitude [SECONDS] [N]` logs drone N's attitude and its camera's actual
+  (rendered) attitude to `attitude_<drone>_<time>.csv` in the log folder.
+- `sim tracktest [N] [follow|lock]` (a drone without a companion, airborne)
+  points the gimbal at a ground point 50 m ahead 20 times a second (an
+  idealised tracker, so it measures the gimbal, not a vision tracker) while the
+  drone dashes 120 m sideways, stops hard, turns 90 deg and dashes back. It
+  reports the target's largest offset from the image centre in each phase and
+  the share of frames it was in frame, with a CSV of every frame.
+
+Results with the settings above:
+
+| Yaw mode | In frame | Largest offset (deg): dash / stop / turn / dash back | Mean |
+|---|---|---|---|
+| follow | 100% | 5.0 / 0.7 / 21.2 / 2.8 | 2.2 |
+| lock | 100% | 2.3 / 0.2 / 2.0 / 1.9 | 0.7 |
+
+Pitch and roll stabilisation keep the target steady through the dashes and the
+hard stop in both modes; in a turn, follow mode swings the target 21 deg off
+centre (half the frame's width is 31 deg) while yaw lock holds it within 2 deg.
+
 ## Spotter
 
 `--spotter` (or `python spotter_control.py` while a scene is running) opens a

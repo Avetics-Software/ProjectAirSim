@@ -51,13 +51,11 @@ Still to do:
   (`ground_truth_*.csv`) to score this against.
 - ([#18](https://github.com/Avetics-Software/ProjectAirSim/issues/18)) **Hand-off:** tell another drone to take over tracking a target, and hand
   tracking between drones as they move.
-- ([#19](https://github.com/Avetics-Software/ProjectAirSim/issues/19)) **A stabilised gimbal camera:** hold the camera steady in the world frame
-  (roll and pitch, and yaw when locked) while the drone accelerates, brakes,
-  turns or is pushed by wind, as a real 3-axis gimbal does. Sudden drone
-  movements should then not throw the target across the frame or out of it,
-  and break X's track. Model the gimbal's own limits too (slew rate, travel,
-  settling lag), so tracking is tuned against realistic behaviour. Check first
-  how far the sim's gimbal already compensates the drone's attitude.
+- ([#19](https://github.com/Avetics-Software/ProjectAirSim/issues/19)) **A stabilised gimbal camera:** done
+  (yaw lock and smooth follow, slew and travel limits, `sim tracktest`; see the
+  [simulation guide](simulation.md#gimbal-stabilisation-and-yaw-modes)). Roll and
+  pitch were already held level by the camera mount. Not done: residual jitter
+  growing with the drone's angular rates.
 
 ## 4. The dashboard
 

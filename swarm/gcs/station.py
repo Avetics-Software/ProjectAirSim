@@ -36,6 +36,8 @@ ROAD_RADIUS_M = 1500.0  # OpenStreetMap roads loaded around home for the map
 STATION_HELP = """  select N                              show and steer drone N (or keys 1-9)
   gimbal PITCH YAW [N]                  point drone N's gimbal (degrees, yaw relative to
                                         the drone) [the selected drone]
+  gimbal lock on|off [N]                yaw lock: hold the camera's compass heading while
+                                        the drone turns (or Y); off: follow the drone
   zoom PERCENT [N]                      set the zoom (0 = widest, 100 = longest focal length)
 Safety (F2 opens the safety panel; Ctrl+H holds every drone):
   alerts                                list active alerts
@@ -58,7 +60,10 @@ class DroneCamera:
         self.name = link.name
         self.windows = windows
         self.selected = False
-        self.pitch, self.yaw = GIMBAL_INITIAL_PITCH, 0.0
+        self.pitch, self.yaw = GIMBAL_INITIAL_PITCH, 0.0  # commanded; yaw from the nose
+        # Yaw lock: the gimbal holds a compass heading while the drone turns
+        # (else it follows the drone's heading)
+        self.yaw_lock = False
         self.last_control_claim = 0.0
         self.streams = {}  # pane name -> VideoStream
         if video_url:
@@ -75,7 +80,18 @@ class DroneCamera:
         if now - self.last_control_claim > 2.0:
             self.link.take_gimbal_control()
         self.last_control_claim = now
-        self.link.set_gimbal_attitude(pitch_deg, yaw_deg)
+        if self.yaw_lock and self.link.heading is not None:
+            # A compass heading: where the nose-relative yaw points right now
+            heading = (self.link.heading + yaw_deg + 180.0) % 360.0 - 180.0
+            self.link.set_gimbal_attitude(pitch_deg, heading, yaw_lock=True)
+        else:
+            self.link.set_gimbal_attitude(pitch_deg, yaw_deg)
+
+    def set_yaw_lock(self, on):
+        """Hold the camera's compass heading (on) or follow the drone (off),
+        keeping it pointed where it is."""
+        self.yaw_lock = on
+        self.steer(self.pitch, self.yaw)
 
     def set_zoom(self, percent):
         self.link.set_zoom(percent)
@@ -148,6 +164,7 @@ class GroundStation:
         self.windows.add_controls([link.name for link in links], self._dashboard_command)
         self.windows.on_key_log = log.debug  # key presses in the debug log
         self.windows.on_target_picked = self._check_target
+        self.windows.on_yaw_lock = self._toggle_yaw_lock
         config = config or Fleet(drones=[])
         self.config = config
         self.windows.PAN_STEP_DEG = config.controls.gimbal_step_deg
@@ -222,8 +239,13 @@ class GroundStation:
         self.windows.zoom_text = self.current.zoom_text()
         companion = self.companions.get(self.selected)
         link = self.current.link
-        if companion and link.gimbal_attitude and time.monotonic() - link.gimbal_attitude_time < 1.0:
-            # The companion steers the gimbal, so show where it actually points
+        fresh = link.gimbal_attitude and time.monotonic() - link.gimbal_attitude_time < 1.0
+        # The title shows where the gimbal actually points (it takes time to get
+        # there, and holds a heading under yaw lock)
+        self.windows.gimbal_actual = link.gimbal_attitude if fresh else None
+        self.windows.yaw_lock = self.current.yaw_lock
+        if companion and fresh:
+            # The companion steers the gimbal: steps start from where it is
             self.current.pitch, self.current.yaw = link.gimbal_attitude
             self.windows.pitch, self.windows.yaw = link.gimbal_attitude
         if companion and companion.frame is not None and companion.frame_time != self._tracker_frame_time:
@@ -337,6 +359,17 @@ class GroundStation:
             except Exception as err:
                 log.warning(f"Safety check failed: {err}")
 
+    def _toggle_yaw_lock(self):
+        if self.companions.get(self.selected):
+            self.windows.log(f"{self.current.name}'s gimbal is X's: its yaw lock is X's "
+                             "MAVLINK_YAW_LOCK setting")
+            return
+        camera = self.current
+        camera.set_yaw_lock(not camera.yaw_lock)
+        self.windows.log(f"{camera.name} gimbal: " + (
+            "yaw lock, holding its compass heading while the drone turns" if camera.yaw_lock
+            else "yaw follow, turning with the drone"))
+
     def _check_target(self, geo):
         """Warn at once about a map target PX4 will refuse: outside the fence."""
         if len(self.safety.fence) >= 3 and not fence_check(self.safety.fence, *geo)[0]:
@@ -437,6 +470,16 @@ class GroundStation:
             print(self.help_text())
         elif word == "select" and len(parts) == 2 and parts[1].isdigit():
             self.select(int(parts[1]))
+        elif word == "gimbal" and len(parts) in (3, 4) and parts[1].lower() == "lock":
+            try:
+                camera = self._camera_arg(parts, 3)
+                on = {"on": True, "off": False}[parts[2].lower()]
+            except (KeyError, ValueError, IndexError):
+                print("Usage: gimbal lock on|off [DRONE]")
+                return
+            if not self.x_controls(self.cameras.index(camera)):
+                camera.set_yaw_lock(on)
+                print(f"{camera.name} gimbal: yaw {'lock' if on else 'follow'}")
         elif word == "gimbal" and len(parts) in (3, 4):
             try:
                 pitch, yaw = float(parts[1]), float(parts[2])

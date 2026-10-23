@@ -45,6 +45,15 @@ The same without typing:
   [area search](area-search.md)).
 - **Messages** below show replies, warnings and what each drone is doing.
 
+## Shortcuts
+
+**F1** opens a sheet of every shortcut, over the camera pane, grouped into
+Camera, Map, Drones and Safety; it lists only the keys that work for the
+selected drone (the companion's keys when it has one). F1 or Esc closes it.
+The buttons with a shortcut (drones, views, Safety, HOLD ALL, RTL ALL) show it
+when the pointer rests on them, and the status panel keeps one line: `F1
+shortcuts  F2 safety and alerts  Ctrl+H hold all  Ctrl+R return all`.
+
 ## The map and status panel
 
 - **Minimap:** every drone (the selected one yellow, the others blue), where

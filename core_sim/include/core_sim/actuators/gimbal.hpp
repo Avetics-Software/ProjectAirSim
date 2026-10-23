@@ -42,8 +42,10 @@ class Gimbal : public Actuator {
 
   const std::string& GetTargetID(void) const;
 
+  // vehicle_yaw: the robot's heading (rad), for yaw lock and smooth yaw
+  // follow; NAN to apply the commanded angles relative to the body as given
   void UpdateGimbal(IController::GimbalState& new_state,
-                    const TimeNano sim_dt_nanos);
+                    const TimeNano sim_dt_nanos, float vehicle_yaw = NAN);
 
   const IController::GimbalState& GetGimbalState() const;
 

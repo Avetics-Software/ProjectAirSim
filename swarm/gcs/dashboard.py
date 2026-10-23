@@ -21,6 +21,40 @@ import numpy as np
 from PIL import Image, ImageTk
 
 
+class HoverTip:
+    """A small note shown under a widget after the pointer rests on it."""
+
+    DELAY_MS = 500
+
+    def __init__(self, widget, text):
+        self.widget, self.text = widget, text
+        self._after = None
+        self._tip = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event):
+        self._after = self.widget.after(self.DELAY_MS, self._show)
+
+    def _show(self):
+        x = self.widget.winfo_rootx()
+        y = self.widget.winfo_rooty() - 28  # above: the control bar is at the bottom
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.wm_overrideredirect(True)
+        self._tip.wm_geometry(f"+{x}+{y}")
+        tk.Label(self._tip, text=self.text, bg="#2b2d31", fg="#e6e6e6", relief=tk.SOLID,
+                 borderwidth=1, padx=6, pady=2, font=("DejaVu Sans", 9)).pack()
+
+    def _hide(self, _event=None):
+        if self._after:
+            self.widget.after_cancel(self._after)
+            self._after = None
+        if self._tip:
+            self._tip.destroy()
+            self._tip = None
+
+
 class CameraWindows:
     """One dashboard window: camera panes, a minimap and a status panel drawn
     with OpenCV, and (with add_controls) a control bar for the swarm below.
@@ -93,11 +127,14 @@ class CameraWindows:
         # Set by the caller: each a str, or (str, BGR colour) to colour the line
         self.status_lines = []
         self.alert_line = None  # (text, BGR colour) shown at the top of the status panel
-        self.show_help = False  # F1: the full key help in the status panel
+        self.show_help = False  # F1: the shortcuts sheet over the main camera
         self.fence = []  # geofence corners (lat, lon) being drawn
         self.fence_drawing = False  # map clicks add fence corners (safety panel)
         self.on_fence_changed = None  # called after a fence corner is added
         self.on_f9 = None  # F9: the sim's fault controls, if any
+        self.gimbal_actual = None  # (pitch, yaw) the gimbal reports, for the title
+        self.yaw_lock = False  # the selected drone's gimbal holds a compass heading
+        self.on_yaw_lock = None  # Y: toggle yaw lock (drones without a companion)
         self.on_key_log = None  # called with "key X down/up", for the debug log
         self.on_target_picked = None  # called with (lat, lon) when a map target is set
         self.on_fence_drawing_changed = None  # called when fence drawing starts or stops
@@ -177,14 +214,18 @@ class CameraWindows:
         label(row, "Drone").pack(side=tk.LEFT)
         self._drone_var = tk.IntVar(value=1)
         for n, name in enumerate(drone_names, start=1):
-            radio(row, name, self._drone_var, n,
-                  lambda n=n: self.on_select and self.on_select(n)).pack(side=tk.LEFT, padx=2)
+            b = radio(row, name, self._drone_var, n,
+                      lambda n=n: self.on_select and self.on_select(n))
+            b.pack(side=tk.LEFT, padx=2)
+            if n <= 9:
+                HoverTip(b, f"Show and steer {name} (key {n})")
         label(row, "   View").pack(side=tk.LEFT)
         self._view_var = tk.StringVar(value=self.main_cam)
         self._view_buttons = {}
         for cam in ("GimbalCam", "ChaseCam"):
             b = radio(row, cam, self._view_var, cam, lambda cam=cam: self._set_main(cam))
             b.pack(side=tk.LEFT, padx=2)
+            HoverTip(b, "V swaps GimbalCam and ChaseCam;  F1 lists every shortcut")
             self._view_buttons[cam] = b
         self._all_var = tk.BooleanVar(value=False)
         if len(drone_names) > 1:
@@ -193,13 +234,18 @@ class CameraWindows:
                            activebackground=self.BG, activeforeground=self.FG,
                            highlightthickness=0).pack(side=tk.LEFT, padx=16)
         # Emergency buttons, always visible at the right, and the safety drawer
-        for text, command in (("RTL ALL", self._rtl_all), ("HOLD ALL", self._hold_all)):
-            tk.Button(row, text=text, command=command, bg=self.DANGER, fg="white",
-                      activebackground="#d04040", activeforeground="white", relief=tk.FLAT,
-                      padx=12, pady=3, highlightthickness=0,
-                      font=("DejaVu Sans", 10, "bold")).pack(side=tk.RIGHT, padx=2)
+        for text, command, tip in (
+                ("RTL ALL", self._rtl_all, "Send every drone home; asks first (Ctrl+R)"),
+                ("HOLD ALL", self._hold_all, "Hold every drone where it is (Ctrl+H)")):
+            b = tk.Button(row, text=text, command=command, bg=self.DANGER, fg="white",
+                          activebackground="#d04040", activeforeground="white", relief=tk.FLAT,
+                          padx=12, pady=3, highlightthickness=0,
+                          font=("DejaVu Sans", 10, "bold"))
+            b.pack(side=tk.RIGHT, padx=2)
+            HoverTip(b, tip)
         self._safety_button = button(row, "Safety (F2)", self.toggle_drawer)
         self._safety_button.pack(side=tk.RIGHT, padx=(2, 12))
+        HoverTip(self._safety_button, "Alerts, drone health, responses, geofence (F2)")
         # The drawer docks at the right of the camera canvas when open
         self.drawer = tk.Frame(self.root, bg=self.BG, width=self.DRAWER_WIDTH)
         self.drawer.pack_propagate(False)
@@ -666,7 +712,10 @@ class CameraWindows:
             return f"{self.title} Tracker (companion {self.companion.ip if self.companion else ''})  {state}"
         if cam == "GimbalCam":
             via = "X" if self.companion else "PX4"  # who steers this camera
-            return (f"{self.title} GimbalCam  pitch {self.pitch:+.0f}  yaw {self.yaw:+.0f}  "
+            pitch, yaw = self.gimbal_actual or (self.pitch, self.yaw)
+            mode = "" if self.companion else (
+                "  yaw lock (Y)" if self.yaw_lock else "  yaw follow (Y)")
+            return (f"{self.title} GimbalCam  pitch {pitch:+.0f}  yaw {yaw:+.0f}{mode}  "
                     f"{self.zoom_text}  (via {via})")
         return f"{self.title} ChaseCam" + (
             f"  {self.chase_zoom:.1f}x digital" if self.chase_zoom > 1 else "")
@@ -717,20 +766,8 @@ class CameraWindows:
         for line in self.status_lines:
             lines.append(line if isinstance(line, tuple) else (line, (235, 235, 235)))
         grey = (150, 150, 150)
-        if self.show_help:
-            lines += [("", grey),
-                      ("Gimbal: W/S tilt  A/D pan  C centre  X down   Camera zoom: +/-   "
-                       "Map: [ ]  L labels  click = target", grey),
-                      ("Mouse wheel zooms the pane under the pointer.  V or click the small "
-                       "camera: swap", grey),
-                      ("Safety: F2 panel  Ctrl+H hold all  Ctrl+R return all   F1 hides this help",
-                       grey)]
-            if self.companion:
-                lines.append(("Companion: in Tracker click / drag a box to track, right-click "
-                              "or Esc cancel, arrows nudge, G centre gimbal", grey))
-        else:
-            lines += [("", grey), ("F1 keys help   F2 safety and alerts   Ctrl+H hold all   "
-                                   "Ctrl+R return all", grey)]
+        lines += [("", grey), ("F1 shortcuts   F2 safety and alerts   Ctrl+H hold all   "
+                               "Ctrl+R return all", grey)]
         for i, (line, colour) in enumerate(lines):
             if top + 22 * i > y + h - 6:
                 break
@@ -738,7 +775,63 @@ class CameraWindows:
 
         for px, py, pw, ph in self.PANES.values():
             cv2.rectangle(canvas, (px, py), (px + pw - 1, py + ph - 1), self.BORDER, 1)
+        if self.show_help:
+            self._draw_shortcuts(canvas)
         return canvas
+
+    def _shortcut_groups(self):
+        """The keys that work now, for the selected drone, grouped."""
+        if self.companion:
+            camera = [("Click / drag in Tracker", "track a target / a box"),
+                      ("Esc, right-click", "stop tracking"),
+                      ("Arrow keys", "nudge the tracked point"),
+                      ("W/S  A/D (hold)", "tilt / pan the gimbal (through X)"),
+                      ("G or C", "centre the gimbal"),
+                      ("Wheel, + / -", "zoom"),
+                      ("V, click small view", "GimbalCam / ChaseCam beside Tracker")]
+        else:
+            camera = [("W/S  A/D", "tilt / pan the gimbal"),
+                      ("C", "centre (level, ahead)"),
+                      ("X", "look straight down"),
+                      ("Y", "yaw lock / follow" + ("  (lock on)" if self.yaw_lock else "")),
+                      ("Wheel, + / -", "zoom the pane under the pointer"),
+                      ("V, click small view", "swap GimbalCam / ChaseCam")]
+        groups = [
+            ("Camera", camera),
+            ("Map", [("Click", "set the selected drone's target"),
+                     ("Click the compass", "pick a heading"),
+                     ("[  /  ]", "zoom out / in"),
+                     ("L", "labels on / off"),
+                     ("Esc", "finish drawing an area or fence")]),
+            ("Drones", [("1-9", "show and steer that drone")]),
+            ("Safety", [("F2", "safety panel: alerts, health, geofence"),
+                        ("Ctrl+H", "hold every drone"),
+                        ("Ctrl+R", "return every drone home (asks)")]
+             + ([("F9", "sim faults")] if self.on_f9 else [])),
+        ]
+        return groups
+
+    def _draw_shortcuts(self, canvas):
+        """F1: the shortcuts, over the main camera pane."""
+        x, y, w, h = self.PANES["Main"]
+        region = canvas[y:y + h, x:x + w]
+        region[:] = (22, 22, 24)  # solid, so the pane's own title doesn't show through
+        self._text(canvas, "Shortcuts", (x + 24, y + 34), 0.7, (235, 235, 235), box=False)
+        self._text(canvas, "F1 or Esc to close", (x + w - 190, y + 34), 0.5, (150, 150, 150),
+                   box=False)
+        col_x = [x + 24, x + w // 2 + 8]
+        col_y = [y + 72, y + 72]
+        for i, (title, keys) in enumerate(self._shortcut_groups()):
+            col = 0 if i in (0, 2) else 1  # Camera, Drones left; Map, Safety right
+            cy = col_y[col]
+            self._text(canvas, title, (col_x[col], cy), 0.55, (120, 200, 255), box=False)
+            cy += 24
+            for key, what in keys:
+                self._text(canvas, key, (col_x[col], cy), 0.47, (235, 235, 235), box=False)
+                self._text(canvas, what, (col_x[col] + 170, cy), 0.47, (175, 175, 175),
+                           box=False)
+                cy += 21
+            col_y[col] = cy + 16
 
     def update(self):
         """Draw the dashboard and handle input; call every few ms."""
@@ -775,6 +868,9 @@ class CameraWindows:
         if isinstance(event.widget, tk.Entry):
             return  # typing a command or height, not steering
         self._seq += 1
+        if event.keysym == "Escape" and self.show_help:
+            self._toggle_help()
+            return
         if event.keysym == "Escape" and self._drawing_mode():
             # Finish drawing (before Esc's other use, cancelling a track)
             if self.fence_drawing:
@@ -801,6 +897,8 @@ class CameraWindows:
             self._move(-90.0 - self.pitch, -self.yaw)
         elif ch == "v":
             self._swap_cameras()
+        elif ch == "y" and self.on_yaw_lock:
+            self.on_yaw_lock()
         elif ch in ("+", "="):
             self.on_zoom(self.ZOOM_STEP_PERCENT)
         elif ch in ("-", "_"):

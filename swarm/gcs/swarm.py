@@ -300,9 +300,10 @@ class SwarmControl:
             alt = max(link.position[3], default) if link.position else default
             self.plan_alts[i] = alt
         await self._ensure_airborne(i, alt)
-        # Fly there keeping the current heading; a heading asked for is only
-        # applied on arrival
-        await self._call(link.fly_to, lat, lon, alt)
+        # Fly there keeping the current heading (said explicitly: without a yaw
+        # PX4 turns the drone to face the way it flies); a heading asked for is
+        # only applied on arrival
+        await self._call(link.fly_to, lat, lon, alt, -1.0, link.heading)
         self.destinations[i] = (lat, lon)
         self.headings[i] = heading
         if wait or heading is not None:

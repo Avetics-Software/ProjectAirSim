@@ -43,6 +43,7 @@ Examples:
 
 import argparse
 import asyncio
+import csv
 import faulthandler
 import json
 import logging
@@ -75,6 +76,7 @@ from px4_sitl import Px4Sitl
 from shared_frame import SharedFrameWriter
 from moving_actors import ACTORS_HELP, MovingActorManager
 from spawned_objects import CONSOLE_HELP, ObjectSpawner
+from track_test import run_track_test
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SIM_CONFIG_DIR = os.path.join(SCRIPT_DIR, "sim_config")
@@ -342,6 +344,12 @@ class SimPayload(DroneCamera):
         self.applied_zoom = None
         self.last_gimbal_frame = None
         self.frame_counts = {"ChaseCam": 0, "GimbalCam": 0}
+        # `sim attitude`: (csv writer, file, end time) while recording
+        self.attitude_log = None
+        self.camera_rotation = None
+        self.camera_pose = None  # ((x, y, z), (w, x, y, z)) of the latest frame
+        self.pose_wanted = 0  # >0 while a test needs camera_pose
+        self._attitude_t0 = 0.0
 
     def attach(self, client, drone):
         """Follow a (re)loaded drone: subscribe to its cameras and reapply zoom."""
@@ -358,6 +366,11 @@ class SimPayload(DroneCamera):
 
     def on_gimbal_image(self, _, image_msg):
         self.frame_counts["GimbalCam"] += 1
+        if self.attitude_log is not None or self.pose_wanted:
+            # The camera's world pose (NED) when this frame was rendered
+            self.camera_rotation = tuple(image_msg[k] for k in ("rot_w", "rot_x", "rot_y", "rot_z"))
+            self.camera_pose = (tuple(image_msg[k] for k in ("pos_x", "pos_y", "pos_z")),
+                                self.camera_rotation)
         bgr = image_to_bgr(image_msg)
         self.last_gimbal_frame = bgr
         if self.selected:
@@ -375,7 +388,39 @@ class SimPayload(DroneCamera):
         focal = self.camera.focal_length(self.zoom_percent)
         return f"{focal:.1f} mm ({focal / self.camera.focal_min_mm:.1f}x)"
 
+    def record_attitude(self, seconds, path):
+        """Log the drone's attitude and the GimbalCam's actual (rendered) world
+        attitude, about 20 times a second, to a CSV: how well the camera is
+        stabilised against the drone's motion."""
+        f = open(path, "w", newline="")
+        writer = csv.writer(f)
+        writer.writerow(["t", "drone_roll", "drone_pitch", "drone_yaw",
+                         "cam_roll", "cam_pitch", "cam_yaw", "gimbal_pitch_cmd", "gimbal_yaw_cmd"])
+        self._attitude_t0 = time.monotonic()
+        self.attitude_log = (writer, f, self._attitude_t0 + seconds)
+        self._attitude_next = 0.0
+
+    def _log_attitude(self):
+        writer, f, end = self.attitude_log
+        now = time.monotonic()
+        if now >= end:
+            f.close()
+            self.attitude_log = None
+            projectairsim_log().info(f"{self.name}: attitude log written to {f.name}")
+            return
+        if now < self._attitude_next or self.camera_rotation is None or not self.drone:
+            return
+        self._attitude_next = now + 0.05
+        q = self.drone.get_ground_truth_kinematics()["pose"]["orientation"]
+        drone = [math.degrees(v) for v in quaternion_to_rpy(q["w"], q["x"], q["y"], q["z"])]
+        cam = [math.degrees(v) for v in quaternion_to_rpy(*self.camera_rotation)]
+        att = self.link.gimbal_attitude or (math.nan, math.nan)
+        writer.writerow([round(now - self._attitude_t0, 3), *(round(v, 2) for v in drone + cam),
+                         round(att[0], 2), round(att[1], 2)])
+
     def tick(self, dt):
+        if self.attitude_log is not None:
+            self._log_attitude()
         requests = self.sim_camera.zoom_requests
         while not requests.empty():
             kind, value = requests.get()
@@ -410,6 +455,9 @@ class SimPayload(DroneCamera):
 
 
 GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a new place (restarts PX4)
+  sim attitude [SECONDS] [N]            log drone N's attitude and its camera's (stabilisation)
+  sim tracktest [N] [follow|lock]       fly hard while pointing the gimbal at a ground target,
+                                        and measure how well it stays in frame
   sim cut N | sim battery N PCT | sim reset N|all
                                         simulate a lost link or low battery on drone N;
                                         reset undoes them and restarts the drone's
@@ -439,6 +487,33 @@ async def sim_command(session, line, parts):
     elif word == "actors":
         if session.actors:
             session.actors.run_command(parts[1:])
+    elif word == "sim" and len(parts) >= 2 and parts[1] == "tracktest":
+        # sim tracktest [N] [follow|lock]
+        args = parts[2:]
+        mode = next((a for a in args if a in ("follow", "lock")), "follow")
+        number = next((int(a) for a in args if a.isdigit()), 1)
+        if not 1 <= number <= len(session.station.cameras):
+            print("Usage: sim tracktest [DRONE] [follow|lock]")
+            return True
+        if session.station.companions.get(number - 1):
+            print(f"Drone{number}'s gimbal is its companion's (X); run the test on a drone without one")
+            return True
+        camera = session.station.cameras[number - 1]
+        asyncio.get_running_loop().create_task(run_track_test(
+            session, camera, mode, os.environ.get("LOG_DIR", "/tmp/projectairsim-run")))
+        print(f"Track test on {camera.name}, yaw {mode}: about a minute; results in the messages")
+    elif word == "sim" and len(parts) >= 2 and parts[1] == "attitude":
+        # sim attitude [SECONDS] [N]: how well drone N's camera is stabilised
+        try:
+            seconds = float(parts[2]) if len(parts) > 2 else 30.0
+            camera = session.station.cameras[int(parts[3]) - 1 if len(parts) > 3 else 0]
+        except (ValueError, IndexError):
+            print("Usage: sim attitude [SECONDS] [DRONE]")
+            return True
+        path = os.path.join(os.environ.get("LOG_DIR", "/tmp/projectairsim-run"),
+                            time.strftime(f"attitude_{camera.name}_%H%M%S.csv"))
+        camera.record_attitude(seconds, path)
+        print(f"Recording {camera.name}'s attitude and its camera's for {seconds:g} s to {path}")
     elif word == "sim":
         faults = session.station.panel.sim_faults
         try:

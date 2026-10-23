@@ -17,7 +17,8 @@ need it.
   `RTL ALL` asks first. **Ctrl+H** holds every drone and **Ctrl+R** returns
   them all (after the same confirmation), from anywhere, even while typing a
   command.
-- **F1** shows the full key help (it is one line otherwise). **F2** or
+- **F1** shows every shortcut over the camera pane (F1 or Esc closes it);
+  buttons with a shortcut show it when the pointer rests on them. **F2** or
   *Safety* opens the drawer.
 
 ## The safety drawer (F2)

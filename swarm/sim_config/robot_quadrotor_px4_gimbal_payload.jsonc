@@ -332,6 +332,21 @@
       "origin": {
         "xyz": "0.12 0.0 0.06",
         "rpy-deg": "0 -45 0"
+      },
+      // How the physical gimbal moves (leave out for an ideal gimbal that
+      // reaches every angle at once). Roll and pitch stay level whatever the
+      // drone does; these are typical of a ZR10-class 3-axis gimbal, set them
+      // from your own gimbal's datasheet.
+      "gimbal-settings": {
+        "max-pitch-rate-deg": 120,
+        "max-yaw-rate-deg": 120,
+        "max-roll-rate-deg": 120,
+        "pitch-min-deg": -90,
+        "pitch-max-deg": 25,
+        "yaw-min-deg": -160,     // yaw travel from the nose
+        "yaw-max-deg": 160,
+        "settling-time-s": 0.1,  // lag reaching a commanded angle
+        "yaw-follow-time-s": 0.5 // follow mode: how far the camera trails the drone's turns
       }
     }
   ],

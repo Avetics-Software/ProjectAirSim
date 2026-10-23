@@ -281,14 +281,16 @@ class VehicleLink:
         )
 
     def set_gimbal_attitude(self, pitch_deg, yaw_deg, pitch_rate_dps=math.nan,
-                            yaw_rate_dps=math.nan):
-        """Stream a gimbal setpoint. Angles are relative to the vehicle heading."""
+                            yaw_rate_dps=math.nan, yaw_lock=False):
+        """Stream a gimbal setpoint. The yaw is from the drone's nose, or with
+        yaw_lock a compass heading the gimbal holds while the drone turns."""
         q = QuaternionBase([0.0, math.radians(pitch_deg), math.radians(yaw_deg)]).q
+        flags = GIMBAL_FLAGS | (M.GIMBAL_MANAGER_FLAGS_YAW_LOCK if yaw_lock else 0)
         self._send(
             lambda mav: mav.gimbal_manager_set_attitude_send(
                 self.sysid,
                 PX4_COMPID,
-                GIMBAL_FLAGS,
+                flags,
                 0,  # gimbal device id: all
                 [float(v) for v in q],
                 math.nan,
@@ -344,7 +346,8 @@ class VehicleLink:
 
     def fly_to(self, lat, lon, alt_m, speed_mps=-1.0, heading_deg=None):
         """Fly to lat/lon at alt_m above home and hover there (PX4 Hold), facing
-        heading_deg (degrees from north) if given, else keeping its heading."""
+        heading_deg (degrees from north). Without it PX4 turns the drone to face
+        the way it flies."""
         if self.position is None:
             return None
         _, _, amsl, rel = self.position

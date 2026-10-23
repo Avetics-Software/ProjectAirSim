@@ -5,6 +5,8 @@
 
 #include "core_sim/actuators/gimbal.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 
@@ -33,6 +35,8 @@ class Gimbal::Loader {
  private:
   void LoadOriginSettings(const json& json);
 
+  void LoadGimbalSettings(const json& json);
+
   Gimbal::Impl& impl_;
 };
 
@@ -60,21 +64,43 @@ class Gimbal::Impl : public ActuatorImpl {
                             const TimeNano sim_dt_nanos);
 
   void UpdateGimbal(IController::GimbalState& new_state,
-                    const TimeNano sim_dt_nanos);
+                    const TimeNano sim_dt_nanos, float vehicle_yaw);
 
   const IController::GimbalState& GetGimbalState() const;
 
   double calcSetpoint(double dt, double lastSetpoint, double newSetpoint,
                       double newRateSetpoint);
 
+  // How a physical gimbal moves (the actuator's "gimbal-settings"). The
+  // defaults are an ideal gimbal: every commanded angle reached at once.
+  struct Dynamics {
+    float max_rate[3] = {INFINITY, INFINITY, INFINITY};      // rad/s, roll/pitch/yaw
+    float min_angle[3] = {-INFINITY, -INFINITY, -INFINITY};  // rad (yaw: from the nose)
+    float max_angle[3] = {INFINITY, INFINITY, INFINITY};
+    float settling_time = 0.0f;    // s: first-order lag reaching a commanded angle
+    float yaw_follow_time = 0.0f;  // s: in follow mode, lag behind the robot's turns
+  };
+
  private:
   friend class Gimbal::Loader;
   ActuatedTransforms actuated_transforms_;
 
   Gimbal::Loader loader_;
-  IController::GimbalState gimbal_state_;
+  IController::GimbalState gimbal_state_;  // the actual angles
 
   std::vector<Topic> topics_;
+
+  Dynamics dynamics_;
+  // Commanded angles (rates integrated). Roll and pitch are level-referenced
+  // (the camera mount doesn't inherit the robot's roll and pitch); yaw is from
+  // the nose, or a compass heading while target_yaw_is_heading_ (yaw lock).
+  float target_[3] = {NAN, NAN, NAN};
+  bool target_yaw_is_heading_ = false;
+  float heading_ = NAN;     // the camera's compass heading (rad)
+  float follow_ref_ = NAN;  // the robot's heading as the follow mode sees it
+
+  float Approach(float current, float target, int axis, float tau, float dt,
+                 bool wrap) const;
 };
 
 //------------------------------------------------------------------------------
@@ -109,9 +135,9 @@ const ActuatedTransforms& Gimbal::GetActuatedTransforms() const {
 }
 
 void Gimbal::UpdateGimbal(IController::GimbalState& new_state,
-                          const TimeNano sim_dt_nanos) {
+                          const TimeNano sim_dt_nanos, float vehicle_yaw) {
   return static_cast<Gimbal::Impl*>(pimpl_.get())
-      ->UpdateGimbal(new_state, sim_dt_nanos);
+      ->UpdateGimbal(new_state, sim_dt_nanos, vehicle_yaw);
 }
 
 const IController::GimbalState& Gimbal::GetGimbalState() const {
@@ -158,15 +184,93 @@ const IController::GimbalState& Gimbal::Impl::GetGimbalState() const {
   return gimbal_state_;
 };
 
+namespace {
+float WrapPi(float a) {
+  return std::remainder(a, 2.0f * static_cast<float>(M_PI));
+}
+}  // namespace
+
+float Gimbal::Impl::Approach(float current, float target, int axis, float tau,
+                             float dt, bool wrap) const {
+  if (!std::isfinite(target)) return current;
+  if (!std::isfinite(current)) return target;
+  const float error = wrap ? WrapPi(target - current) : target - current;
+  // First-order settling, then the slew-rate limit
+  float step = tau > 0.0f ? error * (1.0f - std::exp(-dt / tau)) : error;
+  const float max_step = dynamics_.max_rate[axis] * dt;
+  step = std::max(-max_step, std::min(max_step, step));
+  return wrap ? WrapPi(current + step) : current + step;
+}
+
 void Gimbal::Impl::UpdateGimbal(IController::GimbalState& new_state,
-                                const TimeNano sim_dt_nanos) {
-  TimeSec dt = SimClock::Get()->NanosToSec(sim_dt_nanos);
-  auto roll =
-      calcSetpoint(dt, gimbal_state_.roll, new_state.roll, new_state.roll_vel);
-  auto pitch = calcSetpoint(dt, gimbal_state_.pitch, new_state.pitch,
-                            new_state.pitch_vel);
-  auto yaw =
-      calcSetpoint(dt, gimbal_state_.yaw, new_state.yaw, new_state.yaw_vel);
+                                const TimeNano sim_dt_nanos,
+                                float vehicle_yaw) {
+  const float dt = SimClock::Get()->NanosToSec(sim_dt_nanos);
+  const auto& d = dynamics_;
+  const float actual[3] = {gimbal_state_.roll, gimbal_state_.pitch,
+                           gimbal_state_.yaw};
+  for (int i = 0; i < 3; ++i) {
+    if (!std::isfinite(target_[i])) target_[i] = actual[i];
+  }
+
+  // Yaw lock (yaw as a compass heading) needs the robot's heading; without
+  // it the commanded yaw is applied from the nose, as before
+  const bool heading_known = std::isfinite(vehicle_yaw);
+  const bool yaw_lock = new_state.yaw_lock && heading_known;
+  if (heading_known && yaw_lock != target_yaw_is_heading_) {
+    // Switching frames: keep pointing the same way
+    target_[2] = yaw_lock ? WrapPi(target_[2] + vehicle_yaw)
+                          : WrapPi(target_[2] - vehicle_yaw);
+    target_yaw_is_heading_ = yaw_lock;
+  }
+
+  // Commanded angles: an angle, a rate integrated onto the last command, or
+  // both (the rate, stopping at the angle). Roll and pitch clamped to the
+  // gimbal's travel here; yaw's travel is from the nose, applied below.
+  const float sp[3] = {new_state.roll, new_state.pitch, new_state.yaw};
+  const float vel[3] = {new_state.roll_vel, new_state.pitch_vel,
+                        new_state.yaw_vel};
+  for (int i = 0; i < 3; ++i) {
+    target_[i] = calcSetpoint(dt, target_[i], sp[i], vel[i]);
+    if (i < 2) {
+      target_[i] =
+          std::max(d.min_angle[i], std::min(d.max_angle[i], target_[i]));
+    }
+  }
+
+  // The actual angles move toward the commanded ones at the gimbal's pace
+  const float roll =
+      Approach(gimbal_state_.roll, target_[0], 0, d.settling_time, dt, false);
+  const float pitch =
+      Approach(gimbal_state_.pitch, target_[1], 1, d.settling_time, dt, false);
+  float yaw;
+  if (heading_known) {
+    if (!std::isfinite(heading_)) {
+      heading_ = WrapPi(vehicle_yaw + gimbal_state_.yaw);
+    }
+    if (!std::isfinite(follow_ref_)) follow_ref_ = vehicle_yaw;
+    // Follow mode trails the robot's turns by yaw_follow_time; the operator's
+    // own yaw commands aren't slowed by it
+    const float k = d.yaw_follow_time > 0.0f
+                        ? 1.0f - std::exp(-dt / d.yaw_follow_time)
+                        : 1.0f;
+    follow_ref_ = WrapPi(follow_ref_ + WrapPi(vehicle_yaw - follow_ref_) * k);
+    const float wanted = yaw_lock ? target_[2] : WrapPi(follow_ref_ + target_[2]);
+    heading_ = Approach(heading_, wanted, 2, d.settling_time, dt, true);
+    // The mount's yaw travel is measured from the nose
+    yaw = WrapPi(heading_ - vehicle_yaw);
+    const float clamped =
+        std::max(d.min_angle[2], std::min(d.max_angle[2], yaw));
+    if (clamped != yaw) {
+      yaw = clamped;
+      heading_ = WrapPi(vehicle_yaw + yaw);
+    }
+  } else {
+    const float target_yaw =
+        std::max(d.min_angle[2], std::min(d.max_angle[2], target_[2]));
+    yaw = Approach(gimbal_state_.yaw, target_yaw, 2, d.settling_time, dt,
+                   false);
+  }
 
   // Need to pass these on to Unreal?
   gimbal_state_.yaw_lock = new_state.yaw_lock;
@@ -180,16 +284,15 @@ void Gimbal::Impl::UpdateGimbal(IController::GimbalState& new_state,
   if (roll == gimbal_state_.roll && pitch == gimbal_state_.pitch &&
       yaw == gimbal_state_.yaw) {
     return;
-  } else {
-    gimbal_state_.roll = roll;
-    gimbal_state_.pitch = pitch;
-    gimbal_state_.yaw = yaw;
-    auto quat_output_ = TransformUtils::ToQuaternion(
-        gimbal_state_.roll, gimbal_state_.pitch, gimbal_state_.yaw);
-
-    actuated_transforms_[child_link_] =
-        ActuatedTransform(Affine3(quat_output_.toRotationMatrix()));
   }
+  gimbal_state_.roll = roll;
+  gimbal_state_.pitch = pitch;
+  gimbal_state_.yaw = yaw;
+  auto quat_output_ = TransformUtils::ToQuaternion(
+      gimbal_state_.roll, gimbal_state_.pitch, gimbal_state_.yaw);
+
+  actuated_transforms_[child_link_] =
+      ActuatedTransform(Affine3(quat_output_.toRotationMatrix()));
 }
 
 void Gimbal::Impl::UpdateActuatorOutput(const ControlSignals& control_signals,
@@ -242,6 +345,7 @@ void Gimbal::Loader::Load(const json& json) {
 
   impl_.is_loaded_ = true;
   LoadOriginSettings(json);
+  LoadGimbalSettings(json);
   impl_.logger_.LogVerbose(impl_.name_, "[%s] 'gimbal loaded.",
                            impl_.id_.c_str());
 }
@@ -260,6 +364,35 @@ void Gimbal::Loader::LoadOriginSettings(const json& json) {
     impl_.gimbal_state_.yaw = rpy.z();
   }
   impl_.logger_.LogVerbose(impl_.name_, "'gimbal origin settings' loaded.");
+}
+
+void Gimbal::Loader::LoadGimbalSettings(const json& json) {
+  // Optional "gimbal-settings": how the physical gimbal moves. Without them
+  // every commanded angle is reached at once, as by an ideal gimbal.
+  auto settings = JsonUtils::GetJsonObject(json, "gimbal-settings");
+  if (JsonUtils::IsEmpty(settings)) return;
+  auto& d = impl_.dynamics_;
+  const float deg = static_cast<float>(M_PI) / 180.0f;
+  const char* axes[3] = {"roll", "pitch", "yaw"};
+  for (int i = 0; i < 3; ++i) {
+    const std::string axis = axes[i];
+    d.max_rate[i] = JsonUtils::GetNumber<float>(
+                        settings, "max-" + axis + "-rate-deg", INFINITY) * deg;
+    d.min_angle[i] = JsonUtils::GetNumber<float>(
+                         settings, axis + "-min-deg", -INFINITY) * deg;
+    d.max_angle[i] = JsonUtils::GetNumber<float>(
+                         settings, axis + "-max-deg", INFINITY) * deg;
+  }
+  d.settling_time =
+      JsonUtils::GetNumber<float>(settings, "settling-time-s", 0.0f);
+  d.yaw_follow_time =
+      JsonUtils::GetNumber<float>(settings, "yaw-follow-time-s", 0.0f);
+  impl_.logger_.LogVerbose(
+      impl_.name_,
+      "[%s] gimbal-settings: max rate %.0f/%.0f/%.0f deg/s, settling %.2f s, "
+      "yaw follow %.2f s",
+      impl_.id_.c_str(), d.max_rate[0] / deg, d.max_rate[1] / deg,
+      d.max_rate[2] / deg, d.settling_time, d.yaw_follow_time);
 }
 
 }  // namespace projectairsim
