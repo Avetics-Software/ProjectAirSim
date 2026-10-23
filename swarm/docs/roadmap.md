@@ -25,7 +25,7 @@ Still to do:
   instead of only on the ground, and fly height layers above terrain rather
   than above home. (Margins already widen with GPS inaccuracy.) See
   [deconfliction](features/deconfliction.md#limits).
-- **The sim's own link-loss detection:** the simulator keeps PX4's link alive
+- ([#31](https://github.com/Avetics-Software/ProjectAirSim/issues/31)) **The sim's own link-loss detection:** the simulator keeps PX4's link alive
   with ground-station heartbeats of its own, so the Sim tab sends PX4's
   link-loss action on its behalf. Changing those heartbeats' type in
   `vehicle_apis/multirotor_api/src/mavlink_api.cpp` (needs a plugin rebuild)
