@@ -1,15 +1,32 @@
-# The sim's config: the drones, their companions and the ground station's
-# settings. run_cesium_sim.sh reads it (or --config FILE); the command line's
-# --drones, --pi-ip and --layer-step win over it. Real drones use the same
-# format (gcs/fleet.example.yml, python -m gcs --fleet FILE). Every value below
-# is the default; delete what you don't change.
+# The swarm's config, for the sim (run_cesium_sim.sh) and for real drones
+# (run_real.sh): the drones, how to reach them, and the ground station's
+# settings. The sim's --drones, --pi-ip and --layer-step win over it. Every
+# setting below is the default; delete what you don't change.
 
-# One entry per drone, in order: Drone1, Drone2, ... Each gets its own PX4 and
-# GimbalCam stream (rtsp://<laptop>:8554/gimbal, /gimbal2, ...).
+# --- Real drones only (run_real.sh). The sim makes its own MAVLink links. ---
+# The MAVLink link carrying every drone (radio, mesh or mavlink-router), each
+# drone with its own system id. Any pymavlink connection string, e.g.
+# udpin:0.0.0.0:14560, udpout:192.168.1.10:14550, /dev/ttyUSB0,57600.
+# 14560 rather than 14550 so QGC (which listens on 14550) can run alongside.
+mavlink: udpin:0.0.0.0:14560
+gcs_sysid: 245                  # our MAVLink system id; not 255 (QGC's)
+# home: [1.413425, 103.865000]  # map origin; else the first drone's first position
+
+# --- The drones, in order: Drone1, Drone2, ... ---
+# Real drones: name, sysid (its PX4's MAV_SYS_ID), video (its gimbal camera's
+#   stream) and companion (its Radxa running X; the camera is then X's).
+#   Optional: mavlink (this drone on its own link), chase_video (a second camera).
+# The sim: one PX4 per entry, named Drone1, Drone2, ...; it uses only
+#   `companion` (a Radxa running X's rknn-sim profile) and makes the rest itself.
 drones:
-  - {}                          # Drone1
-  # - companion: 192.168.199.99 # a drone with a Radxa running X (its camera is X's)
-  # - {}                        # a drone without one (its camera is the dashboard's, via PX4)
+  - name: Drone1
+    sysid: 1
+    # video: rtsp://192.168.144.25:8554/main
+    companion: 192.168.199.99
+  # - name: Drone2
+  #   sysid: 2
+  #   video: rtsp://192.168.144.26:8554/main
+  #   companion: 192.168.199.100
 
 swarm:
   layer_step_m: 5               # drone N flies (N-1) x this above the height asked for,

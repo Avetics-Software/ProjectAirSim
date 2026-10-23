@@ -24,7 +24,8 @@ drones:
 
 | | Sim | Real drones |
 |---|---|---|
-| Run | `./run_cesium_sim.sh --qgc` (reads `swarm/config.yml`; `--config FILE` for another) | `python -m gcs --fleet my_fleet.yml` |
+| Run | `./run_cesium_sim.sh --qgc` | `./run_real.sh` (preflight checks, then the ground station) |
+| Config | `swarm/config.yml` (`--config FILE` for another) | the same file: fill in each drone's `sysid`, `video`, `companion` and the top-level `mavlink` |
 | Settings | The same `swarm:`, `deconfliction:`, `safety:` and `controls:` sections | the same |
 | Drones | One PX4 SITL per drone, named Drone1, Drone2, ... | Your PX4s; each needs its own `MAV_SYS_ID` |
 | MAVLink | Each PX4 on its own UDP port (14030 + N) | One shared link (radio, mesh, mavlink-router), or one per drone |
@@ -51,6 +52,28 @@ Sim only, around it:
   and X can find the sim's video and zoom it. A real drone's camera does this
   itself.
 - Spawned objects, moving actors and the spotter, for something to search for.
+
+## run_real.sh
+
+```bash
+./run_real.sh                 # config.yml next to it
+./run_real.sh --check         # only the preflight checks
+./run_real.sh --config field_day.yml
+```
+
+Before starting the ground station it checks, and prints one line per check:
+
+- the config is valid for real drones (a MAVLink link, unique system ids)
+- the MAVLink link can be opened (the UDP port is free, the radio is plugged in)
+- each drone's PX4 is heard on it (listens 6 s, `--listen`)
+- each drone's video stream answers, each companion answers ping and X's
+  tracker video is up
+
+A bad config, a busy port or a missing radio stops it; anything else is a
+warning, so you can start before every drone is powered on. Each session's
+log goes to `~/swarm_logs/gcs_<date>_<time>.log` (`LOG_DIR`). It uses the
+`projectairsim` conda env's Python if present, else `python3` (`PYTHON`); a
+field laptop needs `gcs/requirements.txt` and python3-tk.
 
 ## Sharing a link
 

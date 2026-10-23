@@ -7,7 +7,8 @@ the same code:
 
 - **Sim:** `./run_cesium_sim.sh --qgc --drones 3` (settings in `swarm/config.yml`); see
   [docs/simulation.md](../docs/simulation.md).
-- **Real drones:** `python -m gcs --fleet my_fleet.yml`
+- **Real drones:** `./run_real.sh` (reads `swarm/config.yml`, runs preflight
+  checks first; `--config FILE` for another), or `python -m gcs --fleet FILE`
 
 Nothing here imports Project AirSim. To use it on a field laptop, copy this
 folder, then:
@@ -86,7 +87,8 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
 
 | File | What |
 |---|---|
-| `__main__.py` | `python -m gcs --fleet ...`: the ground station for real drones |
+| `__main__.py` | `python -m gcs --fleet ...`: the ground station for real drones (`../run_real.sh` starts it) |
+| `preflight.py` | The checks `run_real.sh` runs first: config, MAVLink link, heartbeats, video, companions |
 | `station.py` | `GroundStation` (selection, console, map, status) and `DroneCamera` |
 | `dashboard.py` | The Tk dashboard window |
 | `mavlink_link.py` | `MavConnection` (a link shared by several drones) and `VehicleLink` (one drone) |
