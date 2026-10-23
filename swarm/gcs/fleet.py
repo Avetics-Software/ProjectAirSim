@@ -2,19 +2,23 @@
 Copyright (C) 2025 IAMAI CONSULTING CORP
 MIT License.
 
-The fleet file: which drones there are and how to reach each one. See
-fleet.example.yml for every key.
+The config file: the drones, how to reach each one, and the ground station's
+settings (swarm, deconfliction, safety, controls). See fleet.example.yml for
+every key; swarm/config.yml is the sim's.
 
-Real drones read all of it. The sim (run_cesium_sim.sh --fleet) reads only how
-many drones there are and each one's companion: it makes one PX4 per drone,
-named Drone1, Drone2, ..., and works out their MAVLink ports, system ids and
-video streams itself.
+Real drones read all of it. The sim reads how many drones there are, each
+one's companion and the settings: it makes one PX4 per drone, named Drone1,
+Drone2, ..., and works out their MAVLink ports, system ids and video streams
+itself.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import yaml
+
+from .safety import SafetySettings
+from .settings import ControlSettings, DeconflictionSettings, SwarmSettings
 
 DEFAULT_GCS_SYSID = 245  # not 255, QGC's, so both can share a link
 DEFAULT_GCS_COMPID = 190  # MAV_COMP_ID_MISSIONPLANNER
@@ -37,7 +41,11 @@ class Fleet:
     gcs_sysid: int = DEFAULT_GCS_SYSID
     gcs_compid: int = DEFAULT_GCS_COMPID
     home: Optional[tuple] = None  # (lat, lon): map origin; else the first position fix
-    layer_step: float = 5.0  # swarm height layers (m)
+    # Settings sections (gcs/settings.py, gcs/safety.py); defaults if absent
+    swarm: SwarmSettings = field(default_factory=SwarmSettings)
+    deconfliction: DeconflictionSettings = field(default_factory=DeconflictionSettings)
+    safety: SafetySettings = field(default_factory=SafetySettings)
+    controls: ControlSettings = field(default_factory=ControlSettings)
 
     @property
     def companions(self):
@@ -48,9 +56,17 @@ class Fleet:
         return drone.mavlink or self.mavlink
 
 
+SECTIONS = {"swarm": SwarmSettings, "deconfliction": DeconflictionSettings,
+            "safety": SafetySettings, "controls": ControlSettings}
+TOP_KEYS = {"drones", "mavlink", "gcs_sysid", "gcs_compid", "home", "layer_step", *SECTIONS}
+
+
 def load_fleet(path):
     with open(path) as f:
         data = yaml.safe_load(f) or {}
+    unknown = set(data) - TOP_KEYS
+    if unknown:
+        raise ValueError(f"{path}: unknown key(s) {', '.join(sorted(unknown))}")
     entries = data.get("drones") or []
     if not entries:
         raise ValueError(f"{path}: no drones listed")
@@ -68,15 +84,31 @@ def load_fleet(path):
         if len(set(values)) != len(values):
             raise ValueError(f"{path}: two drones have the same {key}")
     home = data.get("home")
-    fleet = Fleet(
+    try:
+        sections = {name: cls.from_dict(data.get(name), name) for name, cls in SECTIONS.items()}
+    except ValueError as err:
+        raise ValueError(f"{path}: {err}") from None
+    if "layer_step" in data:  # the older top-level spelling
+        sections["swarm"].set("layer_step_m", data["layer_step"])
+    return Fleet(
         drones=drones,
         mavlink=data.get("mavlink"),
         gcs_sysid=int(data.get("gcs_sysid", DEFAULT_GCS_SYSID)),
         gcs_compid=int(data.get("gcs_compid", DEFAULT_GCS_COMPID)),
         home=tuple(home) if home else None,
-        layer_step=float(data.get("layer_step", 5.0)),
+        **sections,
     )
-    return fleet
+
+
+def sim_drones(fleet, drones=None, pi_ip=None):
+    """For the sim: (how many drones, {index: companion IP}). The command line's
+    --drones and --pi-ip win over the file: extra drones have no companion, and
+    --pi-ip is Drone1's companion."""
+    count = drones if drones else (len(fleet.drones) if fleet else 1)
+    companions = {i: ip for i, ip in (fleet.companions if fleet else {}).items() if i < count}
+    if pi_ip:
+        companions[0] = pi_ip
+    return count, companions
 
 
 def check_for_real_drones(fleet, path):

@@ -29,10 +29,13 @@ GIMBAL_DEVICE_COMPID = M.MAV_COMP_ID_GIMBAL
 
 def payload_connection(instance):
     """PX4 instance N's payload link. We take PX4's system id there, as part of
-    that vehicle, and the onboard-computer component, like a companion computer."""
+    that vehicle, and the onboard-computer component, like a companion computer.
+    Its heartbeat says GCS, so PX4 counts this as its ground-station link: when
+    the link is cut (the safety panel's Sim tab), PX4 runs its own link-loss
+    action, as a real drone would on losing its ground station."""
     return MavConnection(
         f"udpin:0.0.0.0:{PAYLOAD_PORT + instance}", source_system=instance + 1,
-        source_component=TRACKER_COMPID, heartbeat_type=M.MAV_TYPE_ONBOARD_CONTROLLER,
+        source_component=TRACKER_COMPID, heartbeat_type=M.MAV_TYPE_GCS,
     )
 
 

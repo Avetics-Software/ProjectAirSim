@@ -24,9 +24,12 @@ KIND_COLOURS = {
     "person": (120, 230, 120),
     "object": (170, 170, 170),
     "drone": (235, 170, 60),  # other drones of a swarm (blue)
+    "lost": (60, 60, 255),  # a drone whose link is lost, at its last position (red)
 }
 TARGET = (60, 60, 255)
 AREA = (200, 200, 0)  # search area being drawn
+FENCE = (0, 140, 255)  # geofence (orange)
+PICK = (255, 220, 120)  # heading picked on the compass, not yet sent (light blue)
 SAFE, UNSAFE = (120, 220, 120), (40, 40, 255)  # path crossings
 MIN_M_PER_PX, MAX_M_PER_PX = 0.25, 16.0
 EARTH_M_PER_DEG = 111_320.0
@@ -47,8 +50,11 @@ class MiniMap:
         self.selected_name = None  # the drone at the centre
         self.routes = {}  # drone name -> [(north, east)] its remaining route
         self.area = []  # [(north, east)] corners of the search area being drawn
+        self.fence = []  # [(north, east)] corners of the geofence
         self.crossings = []  # [(north, east, label, safe)]
         self.heading_goals = {}  # drone name -> heading (deg) it was told to face
+        self.heading_pick = None  # heading (deg) picked on the compass, not yet sent
+        self.compass = None  # (cx, cy, r) in render pixels, once drawn
         self._lock = threading.Lock()
         self._cache = None
         self._cache_key = None
@@ -125,6 +131,14 @@ class MiniMap:
             self.area = [self.to_ned(*p) for p in corners]
             self._cache_key = None
 
+    def set_fence(self, corners):
+        """Corners [(lat, lon), ...] of the geofence."""
+        if not self.home:
+            return
+        with self._lock:
+            self.fence = [self.to_ned(*p) for p in corners]
+            self._cache_key = None
+
     def set_crossings(self, crossings):
         """Predicted path crossings [(lat, lon, label, safe)]."""
         if not self.home:
@@ -133,6 +147,23 @@ class MiniMap:
             self.crossings = [(*self.to_ned(lat, lon), label, safe)
                               for lat, lon, label, safe in crossings]
             self._cache_key = None
+
+    def set_heading_pick(self, heading):
+        """The heading picked (compass click or typed), shown until sent; None hides it."""
+        with self._lock:
+            self.heading_pick = heading
+            self._cache_key = None
+
+    def compass_heading(self, x, y):
+        """Degrees from north of a click at render pixel (x, y) on the compass,
+        or None if the click is not on it."""
+        if not self.compass:
+            return None
+        cx, cy, r = self.compass
+        dx, dy = x - cx, y - cy
+        if math.hypot(dx, dy) > r + 6:
+            return None
+        return math.degrees(math.atan2(dx, -dy)) % 360.0
 
     def set_heading_goals(self, goals):
         """Headings the drones were told to face: {name: degrees from north}."""
@@ -151,6 +182,8 @@ class MiniMap:
 
     def render(self, width, height):
         key = (width, height, self.m_per_px, self.show_labels)
+        if not self._drone:
+            self.compass = None  # drawn only with a selected drone
         with self._lock:
             if self._cache is not None and self._cache_key == key:
                 return self._cache
@@ -174,7 +207,7 @@ class MiniMap:
                 continue
             visible += 1
             colour = KIND_COLOURS.get(kind, KIND_COLOURS["object"])
-            if kind == "drone":
+            if kind in ("drone", "lost"):
                 self._draw_drone(img, x, y, heading, colour, scale=0.75)
             elif kind == "object":
                 cv2.rectangle(img, (x - 3, y - 3), (x + 3, y + 3), colour, -1)
@@ -187,6 +220,7 @@ class MiniMap:
                 cv2.putText(img, name, (x + 6, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
                             colour, 1, cv2.LINE_AA)
 
+        self._draw_fence(img, px)
         self._draw_area(img, px)
         self._draw_routes(img, px)
         self._draw_targets(img, px, drone, objects)
@@ -203,6 +237,7 @@ class MiniMap:
         """The selected drone's heading against North, bottom right."""
         r = 38
         cx, cy = width - r - 14, height - r - 34
+        self.compass = (cx, cy, r)
         cv2.circle(img, (cx, cy), r + 4, (20, 20, 20), -1, cv2.LINE_AA)
         cv2.circle(img, (cx, cy), r, (110, 110, 110), 1, cv2.LINE_AA)
         for deg in range(0, 360, 30):
@@ -223,11 +258,20 @@ class MiniMap:
             cv2.line(img, (int(cx + (r - 9) * math.sin(a)), int(cy - (r - 9) * math.cos(a))),
                      (int(cx + (r + 4) * math.sin(a)), int(cy - (r + 4) * math.cos(a))),
                      TARGET, 3, cv2.LINE_AA)
+        if self.heading_pick is not None:
+            # Picked but not sent: a hollow pointer from the rim
+            a = math.radians(self.heading_pick)
+            pts = [(cx + (r + 4) * math.sin(a), cy - (r + 4) * math.cos(a)),
+                   (cx + (r - 10) * math.sin(a - 0.18), cy - (r - 10) * math.cos(a - 0.18)),
+                   (cx + (r - 10) * math.sin(a + 0.18), cy - (r - 10) * math.cos(a + 0.18))]
+            cv2.polylines(img, [np.array(pts, np.int32)], True, PICK, 2, cv2.LINE_AA)
         a = math.radians(heading)
         tip = (int(cx + (r - 6) * math.sin(a)), int(cy - (r - 6) * math.cos(a)))
         tail = (int(cx - 10 * math.sin(a)), int(cy + 10 * math.cos(a)))
         cv2.arrowedLine(img, tail, tip, DRONE, 2, cv2.LINE_AA, tipLength=0.3)
         label = f"{self.selected_name or ''} {heading % 360:03.0f} deg"
+        if self.heading_pick is not None:
+            label += f" > {self.heading_pick:03.0f}"
         (tw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
         cv2.putText(img, label, (cx - tw // 2, cy + r + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                     TEXT, 1, cv2.LINE_AA)
@@ -243,6 +287,22 @@ class MiniMap:
         cv2.polylines(img, [pts], len(pts) >= 3, AREA, 1, cv2.LINE_AA)
         for p in pts:
             cv2.circle(img, tuple(int(v) for v in p), 3, AREA, -1, cv2.LINE_AA)
+
+    def _draw_fence(self, img, px):
+        """Dashed orange outline, so it reads apart from the search area."""
+        if not self.fence:
+            return
+        pts = [np.array(px(*p), float) for p in self.fence]
+        edges = list(zip(pts, pts[1:] + pts[:1])) if len(pts) >= 3 else list(zip(pts, pts[1:]))
+        for a, b in edges:
+            length = np.linalg.norm(b - a)
+            for k in range(0, int(length), 12):
+                p1 = a + (b - a) * (k / max(length, 1e-6))
+                p2 = a + (b - a) * (min(k + 7, length) / max(length, 1e-6))
+                cv2.line(img, tuple(int(v) for v in p1), tuple(int(v) for v in p2), FENCE, 2,
+                         cv2.LINE_AA)
+        for p in pts:
+            cv2.circle(img, tuple(int(v) for v in p), 3, FENCE, -1, cv2.LINE_AA)
 
     def _draw_routes(self, img, px):
         """Each drone's remaining route, thin, in its colour."""

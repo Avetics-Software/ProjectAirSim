@@ -24,3 +24,17 @@ MPC_TKO_SPEED     3      # takeoff climb                      (default 1.5, max 
 
 # Maximum tilt in flight (deg); higher allows more speed      (default 45, max 89)
 MPC_TILTMAX_AIR   45
+
+# Simulated battery (PX4's battery_simulator): drains 100% -> 0% over
+# SIM_BAT_DRAIN seconds while armed, but never below SIM_BAT_MIN_PCT. With 35%,
+# a normal session never reaches the ground station's 30% warning; the safety
+# panel's Sim tab lowers it to test low-battery responses.
+SIM_BAT_DRAIN     1200   # s, a 20-minute flight                (default 60)
+SIM_BAT_MIN_PCT   35     # % floor                              (default 50)
+
+# Return home when the ground station's link is lost, after COM_DL_LOSS_T
+# seconds, as the real drones should (the safety panel's Sim tab cuts the link).
+# Set here at boot: the sim's robot-config "parameters" are sent as floats,
+# which PX4 rejects for integer parameters like this one.
+NAV_DLL_ACT       2      # 0 off, 1 hold, 2 return, 3 land     (default 0)
+COM_DL_LOSS_T     10     # s without the ground station         (default 10)

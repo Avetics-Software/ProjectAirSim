@@ -18,6 +18,7 @@ MAVLink to the drones' PX4s:
 import math
 import os
 import queue
+import struct
 import threading
 import time
 
@@ -34,6 +35,14 @@ M = mavutil.mavlink
 PX4_COMPID = M.MAV_COMP_ID_AUTOPILOT1
 CAMERA_COMPID = M.MAV_COMP_ID_CAMERA
 GIMBAL_FLAGS = M.GIMBAL_MANAGER_FLAGS_ROLL_LOCK | M.GIMBAL_MANAGER_FLAGS_PITCH_LOCK
+
+# Telemetry the safety monitor needs, requested at 1 Hz in case the link's
+# stream set lacks them: SYS_STATUS, GPS_RAW_INT, BATTERY_STATUS
+HEALTH_MESSAGES = (1, 24, 147)
+MISSION, FENCE = M.MAV_MISSION_TYPE_MISSION, M.MAV_MISSION_TYPE_FENCE
+INT_PARAM_TYPES = (M.MAV_PARAM_TYPE_UINT8, M.MAV_PARAM_TYPE_INT8, M.MAV_PARAM_TYPE_UINT16,
+                   M.MAV_PARAM_TYPE_INT16, M.MAV_PARAM_TYPE_UINT32, M.MAV_PARAM_TYPE_INT32)
+GPS_FIX_NAMES = {0: "none", 1: "none", 2: "2D", 3: "3D", 4: "DGPS", 5: "RTK", 6: "RTK"}
 
 # PX4 custom_mode: main mode in byte 2, sub mode (of AUTO) in byte 3
 PX4_MAIN_MODES = {1: "MANUAL", 2: "ALTCTL", 3: "POSCTL", 4: "AUTO", 5: "ACRO", 6: "OFFBOARD",
@@ -73,6 +82,9 @@ class MavConnection:
         self._send_lock = threading.Lock()
         self._subscribers = []
         self._heartbeats = [(source_component, heartbeat_type)]  # (compid, MAV_TYPE)
+        # Simulated radio outage (the sim's fault controls): while set, nothing
+        # is received and nothing sent, heartbeats included
+        self.outage = False
         self._boot = time.monotonic()
         self._stop = threading.Event()
         self._threads = [
@@ -90,9 +102,12 @@ class MavConnection:
         """Also send a heartbeat as this component (e.g. a MAVLink camera)."""
         self._heartbeats.append((compid, mav_type))
 
-    def send_as(self, compid, send):
+    def send_as(self, compid, send, bypass_outage=False):
         """send(mav) with the given source component, e.g.
-        send_as(c, lambda mav: mav.command_long_send(...))."""
+        send_as(c, lambda mav: mav.command_long_send(...)). Dropped during a
+        simulated outage unless bypass_outage (the sim's own fault injection)."""
+        if self.outage and not bypass_outage:
+            return
         with self._send_lock:
             self._mav.mav.srcComponent = compid
             send(self._mav.mav)
@@ -125,7 +140,7 @@ class MavConnection:
                 log.warning(f"MAVLink {self.url}: {err}")
                 self._stop.wait(1.0)
                 continue
-            if msg is None or msg.get_type() == "BAD_DATA":
+            if msg is None or msg.get_type() == "BAD_DATA" or self.outage:
                 continue
             for callback in self._subscribers:
                 try:
@@ -152,6 +167,17 @@ class VehicleLink:
         self.position_count = 0  # positions received, to measure the rate
         self.landed = True
         self.status_text = ""
+        self.status_severity = M.MAV_SEVERITY_INFO
+        self.status_time = 0.0  # time.monotonic() of the last STATUSTEXT
+        self.system_status = M.MAV_STATE_UNINIT  # PX4's HEARTBEAT state (CRITICAL, EMERGENCY...)
+        self.last_message_time = 0.0  # time.monotonic() of any message from PX4
+        # Health (None until reported)
+        self.battery_pct = None
+        self.battery_v = None
+        self.battery_time_s = None  # flight time left, if PX4 estimates it
+        self.gps_fix = None  # GPS_FIX_TYPE
+        self.gps_sats = None
+        self.gps_eph_m = None  # horizontal accuracy
         self.gimbal_attitude = None  # (pitch, yaw relative to the drone) in degrees
         self.gimbal_attitude_time = 0.0
         self.mission_seq = -1  # PX4's current mission item
@@ -160,7 +186,12 @@ class VehicleLink:
 
         self._acks = queue.Queue()
         self._mission_items = []  # being uploaded; PX4 requests them one by one
+        self._mission_type = MISSION  # of the upload in progress
         self._mission_ack = queue.Queue()
+        self._params = {}  # name -> value, from PARAM_VALUE
+        self._status_id = 0  # STATUSTEXT chunk id being joined
+        self._status_raw = ""  # its text so far, unstripped
+        self._param_event = threading.Condition()
         self._px4_seen = threading.Event()
         conn.subscribe(self._on_message)
 
@@ -176,6 +207,50 @@ class VehicleLink:
     @property
     def connected(self):
         return self.position_time > 0 and time.monotonic() - self.position_time < 3.0
+
+    @property
+    def link_age(self):
+        """Seconds since anything arrived from PX4 (None before the first)."""
+        return time.monotonic() - self.last_message_time if self.last_message_time else None
+
+    def _request_health_streams(self):
+        for msg_id in HEALTH_MESSAGES:
+            self._send(lambda mav, m=msg_id: mav.command_long_send(
+                self.sysid, PX4_COMPID, M.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+                m, 1_000_000, 0, 0, 0, 0, 0))
+
+    # ------------------------------------------------------------------
+    # Parameters
+
+    def set_param(self, name, value, timeout=3.0, bypass_outage=False):
+        """Set a PX4 parameter (an int value sets an integer parameter) and wait
+        for PX4 to echo it. Returns the value PX4 reports, or None."""
+        if isinstance(value, int):
+            # PX4 encodes integer parameters bytewise in the float field
+            ptype, raw = M.MAV_PARAM_TYPE_INT32, struct.unpack("<f", struct.pack("<i", value))[0]
+        else:
+            ptype, raw = M.MAV_PARAM_TYPE_REAL32, float(value)
+        with self._param_event:
+            self._params.pop(name, None)
+        self.conn.send_as(
+            self.compid,
+            lambda mav: mav.param_set_send(self.sysid, PX4_COMPID, name.encode(), raw, ptype),
+            bypass_outage=bypass_outage,
+        )
+        return self._wait_param(name, timeout)
+
+    def get_param(self, name, timeout=3.0):
+        """Read a PX4 parameter, or None if PX4 doesn't answer."""
+        with self._param_event:
+            self._params.pop(name, None)
+        self._send(lambda mav: mav.param_request_read_send(self.sysid, PX4_COMPID,
+                                                             name.encode(), -1))
+        return self._wait_param(name, timeout)
+
+    def _wait_param(self, name, timeout):
+        with self._param_event:
+            self._param_event.wait_for(lambda: name in self._params, timeout)
+            return self._params.get(name)
 
     def _send(self, send):
         self.conn.send_as(self.compid, send)
@@ -321,25 +396,44 @@ class VehicleLink:
         for lat, lon in waypoints:
             # param2: acceptance radius (m)
             items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (0, 3.0, 0, math.nan), lat, lon, alt_m))
-        self._mission_items = items
+        self._upload_items(items, MISSION, timeout, "mission")
+        self.mission_seq = self.mission_reached = -1
+        return first_waypoint, len(items)
+
+    def clear_mission(self, timeout=15.0):
+        """Remove PX4's stored mission (an empty upload)."""
+        self._upload_items([], MISSION, timeout, "mission")
+        self.mission_seq = self.mission_reached = -1
+
+    def upload_fence(self, polygon, timeout=15.0):
+        """Replace PX4's geofence with an inclusion polygon [(lat, lon), ...];
+        an empty polygon clears it. Raises if PX4 rejects it."""
+        n = len(polygon)
+        items = [(M.MAV_FRAME_GLOBAL, M.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION,
+                  (n, 0, 0, 0), lat, lon, 0.0) for lat, lon in polygon]
+        self._upload_items(items, FENCE, timeout, "geofence")
+
+    def _upload_items(self, items, mission_type, timeout, what):
+        """The MAVLink mission protocol: send the count, answer PX4's requests
+        for each item, wait for its ack."""
+        self._mission_items, self._mission_type = items, mission_type
         while not self._mission_ack.empty():
             self._mission_ack.get_nowait()
-        self._send(lambda mav: mav.mission_count_send(self.sysid, PX4_COMPID, len(items), 0))
+        self._send(lambda mav: mav.mission_count_send(self.sysid, PX4_COMPID, len(items),
+                                                      mission_type))
         try:
             result = self._mission_ack.get(timeout=timeout)
         except queue.Empty:
-            raise RuntimeError("PX4 didn't confirm the mission upload")
+            raise RuntimeError(f"PX4 didn't confirm the {what} upload")
         if result != M.MAV_MISSION_ACCEPTED:
-            raise RuntimeError(f"PX4 rejected the mission (MAV_MISSION_RESULT {result})")
-        self.mission_seq = self.mission_reached = -1
-        return first_waypoint, len(items)
+            raise RuntimeError(f"PX4 rejected the {what} (MAV_MISSION_RESULT {result})")
 
     def _send_mission_item(self, seq):
         frame, command, (p1, p2, p3, p4), lat, lon, alt = self._mission_items[seq]
         self._send(
             lambda mav: mav.mission_item_int_send(
                 self.sysid, PX4_COMPID, seq, frame, command, 0, 1, p1, p2, p3, p4,
-                int(lat * 1e7), int(lon * 1e7), alt, 0,
+                int(lat * 1e7), int(lon * 1e7), alt, self._mission_type,
             ),
         )
 
@@ -379,11 +473,17 @@ class VehicleLink:
             return
         if msg.get_srcComponent() != PX4_COMPID:
             return
+        now = time.monotonic()
         if msg_type == "HEARTBEAT":
+            if not self.last_message_time or now - self.last_message_time > 5.0:
+                # A new or restarted PX4, or a link back after an outage
+                self._request_health_streams()
             self._px4_seen.set()
             self.armed = bool(msg.base_mode & M.MAV_MODE_FLAG_SAFETY_ARMED)
             self.mode = px4_mode_name(msg.custom_mode)
-        elif msg_type == "GLOBAL_POSITION_INT":
+            self.system_status = msg.system_status
+        self.last_message_time = now
+        if msg_type == "GLOBAL_POSITION_INT":
             self.position = (msg.lat / 1e7, msg.lon / 1e7, msg.alt / 1000.0,
                              msg.relative_alt / 1000.0)
             self.velocity = (msg.vx / 100.0, msg.vy / 100.0, msg.vz / 100.0)
@@ -395,14 +495,45 @@ class VehicleLink:
             self.landed = msg.landed_state in (M.MAV_LANDED_STATE_ON_GROUND,
                                                M.MAV_LANDED_STATE_UNDEFINED)
         elif msg_type == "STATUSTEXT":
-            self.status_text = msg.text
+            text = msg.text
+            # Long texts arrive in chunks sharing an id, split anywhere (even
+            # mid-word); join them as they are
+            chunk_id, chunk = getattr(msg, "id", 0), getattr(msg, "chunk_seq", 0)
+            if chunk_id and chunk > 0 and chunk_id == self._status_id:
+                text = self._status_raw + text
+            self._status_raw = text
+            text = text.strip()
+            self._status_id = chunk_id
+            self.status_text, self.status_severity, self.status_time = text, msg.severity, now
+        elif msg_type == "SYS_STATUS":
+            if msg.battery_remaining >= 0:
+                self.battery_pct = msg.battery_remaining
+            if msg.voltage_battery != 65535:
+                self.battery_v = msg.voltage_battery / 1000.0
+        elif msg_type == "BATTERY_STATUS":
+            if msg.battery_remaining >= 0:
+                self.battery_pct = msg.battery_remaining
+            time_left = getattr(msg, "time_remaining", 0)
+            self.battery_time_s = time_left if time_left > 0 else None
+        elif msg_type == "GPS_RAW_INT":
+            self.gps_fix, self.gps_sats = msg.fix_type, msg.satellites_visible
+            self.gps_eph_m = msg.eph / 100.0 if msg.eph != 65535 else None
+        elif msg_type == "PARAM_VALUE":
+            value = msg.param_value
+            if msg.param_type in INT_PARAM_TYPES:
+                value = struct.unpack("<i", struct.pack("<f", value))[0]
+            name = msg.param_id if isinstance(msg.param_id, str) else msg.param_id.decode()
+            with self._param_event:
+                self._params[name.rstrip("\0")] = value
+                self._param_event.notify_all()
         elif msg_type == "COMMAND_ACK" and self._for_us(msg):
             self._acks.put((msg.command, msg.result))
         elif msg_type in ("MISSION_REQUEST_INT", "MISSION_REQUEST") and self._for_us(msg):
-            if getattr(msg, "mission_type", 0) == 0 and msg.seq < len(self._mission_items):
+            if (getattr(msg, "mission_type", 0) == self._mission_type
+                    and msg.seq < len(self._mission_items)):
                 self._send_mission_item(msg.seq)
         elif msg_type == "MISSION_ACK" and self._for_us(msg):
-            if getattr(msg, "mission_type", 0) == 0:
+            if getattr(msg, "mission_type", 0) == self._mission_type:
                 self._mission_ack.put(msg.type)
         elif msg_type == "MISSION_CURRENT":
             self.mission_seq = msg.seq

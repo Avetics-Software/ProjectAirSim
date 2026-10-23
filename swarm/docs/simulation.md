@@ -52,14 +52,47 @@ These are handled by `run_cesium_sim.sh`; everything else goes to
 | `--px4-params FILE` | | Extra PX4 parameters applied at boot, after `px4_params.parm`. Accepts `NAME VALUE` lines (like ArduPilot `.parm` files, `#` comments allowed) or a QGC `.params` export. Repeatable; later files win |
 | `--pi-ip IP` | | Also send MAVLink to a companion computer at `IP`, and announce the video at `rtsp://<this laptop's LAN IP>:8554/gimbal` |
 | `--pi-ports P1,P2` | 15540,15541 | Companion-computer MAVLink UDP ports (as `--serial1/2` in the old ArduPilot scripts) |
-| `--fleet FILE` | | The drones and each one's companion computer, from the same fleet file the real-drone ground station uses (see [Companions on several drones](#companions-on-several-drones)). Replaces `--drones` and `--pi-ip` |
+| `--config FILE` | `config.yml` | The drones, their companions and the ground station's settings (see [The config file](#the-config-file)); `--drones`, `--pi-ip` and `--layer-step` override it. `--fleet` is the same. (see [Companions on several drones](#companions-on-several-drones)). Replaces `--drones` and `--pi-ip` |
 
-The sim also sets `NAV_RCL_ACT`, `NAV_DLL_ACT` and `COM_OBL_RC_ACT` after PX4
-connects (no RC in simulation), so those three override your file.
+The sim also sends the robot config's `parameters` (`NAV_RCL_ACT`,
+`COM_OBL_RC_ACT`, ...) after PX4 connects (no RC in simulation). It sends them
+as floats, which PX4 accepts for integer parameters only when the value is 0,
+so set any other integer parameter in a params file instead.
 
-`px4_params.parm` (next to the launcher) is always applied first. It raises
-PX4's speed limits (18 m/s horizontal, 15 m/s cruise, faster climb and
-acceleration); edit it to taste.
+`px4_params.parm` (next to the launcher) is always applied first. It:
+
+- raises PX4's speed limits (18 m/s horizontal, 15 m/s cruise, faster climb
+  and acceleration)
+- sets the link-loss failsafe to return home after 10 s (`NAV_DLL_ACT 2`,
+  `COM_DL_LOSS_T 10`)
+- makes the simulated battery last 20 minutes armed, never below 35% on its
+  own (`SIM_BAT_DRAIN`, `SIM_BAT_MIN_PCT`)
+
+Edit it to taste. The ground station's safety panel (F2, and its Sim tab, F9)
+can cut a drone's link and drain its battery to test the responses; see
+[safety](features/safety.md).
+
+## The config file
+
+`config.yml` (next to the launcher) holds the ground station's settings, with
+every key and its default written out:
+
+| Section | What |
+|---|---|
+| `drones:` | One entry per drone, in order; `companion: IP` gives a drone a Radxa running X |
+| `swarm:` | Height layers (`layer_step_m`), default height, line spacing, search spacing, arrival distance |
+| `deconfliction:` | Separation distances, look-ahead, give-way climb and clearance |
+| `safety:` | Battery, link, GPS and geofence thresholds and responses ([safety](features/safety.md)) |
+| `controls:` | Gimbal step, zoom step and the companion's zoom pulse |
+
+The command line's `--drones`, `--pi-ip` (Drone1's companion) and
+`--layer-step` override it; `--config FILE` uses another file. Real drones use
+the same format as their fleet file (`gcs/fleet.example.yml`). A misspelt key
+is an error naming the valid ones. The start-up line says what was used:
+`Config .../config.yml: 3 drones, companions Drone1 ..., height layers 5 m`.
+
+Each time the world loads (start-up and `goto`), every drone's stored geofence
+and mission are cleared: PX4 keeps both on disk across restarts.
 
 ## Script options
 
@@ -72,7 +105,7 @@ acceleration); edit it to taste.
 | `--geoid` | 8.1 | Geoid height (m); about 8 across Singapore |
 | `--drones N` | 1 | Fly a swarm of N PX4 drones (see [Swarm](#swarm)) |
 | `--drone-spacing M` | 8 | Metres between the drones at the spawn, in a line to the right |
-| `--layer-step M` | 5 | Drone N flies (N-1) x M metres above the height asked for (0 = off) |
+| `--layer-step M` | config (5) | Drone N flies (N-1) x M metres above the height asked for (0 = off) |
 | `--objects FILE` | `config_spawned_objects.yml` | Objects to place in the world; `''` for none |
 | `--actors FILE` | `config_moving_actors.yml` | People and vehicles moving along paths; `''` for none |
 | `--camera-props FILE` | `camera_properties.json` | GimbalCam resolution, sensor and zoom lens |
@@ -366,7 +399,9 @@ other drones blue). It shows OpenStreetMap roads, moving vehicles and people
 (dots with a heading tick), static objects (grey squares), targets, routes,
 predicted path crossings and the search area being drawn. The **compass** in
 its bottom-right corner shows the selected drone's heading against North in
-degrees, with a red tick at the heading it was told to face. Positions refresh
+degrees, with a red tick at the heading it was told to face. Click the compass
+to pick a heading for *Set heading* / *Go to target* (it shows as a hollow
+pointer until sent). Positions refresh
 every second. It starts at
 2 m per pixel (about 1 km across) and zooms from 0.25 to 16 m per pixel. Roads
 cover 1.5 km around the spawn point; objects show wherever they are.
@@ -483,8 +518,8 @@ from the dashboard or QGC.
 
 ### Companions on several drones
 
-Give each drone its own companion computer with a fleet file
-(`gcs/fleet.example.yml`):
+Give each drone its own companion computer in the config file (`config.yml`,
+or another with `--config`):
 
 ```yaml
 drones:
@@ -494,7 +529,7 @@ drones:
 ```
 
 ```bash
-./run_cesium_sim.sh --qgc --fleet my_fleet.yml
+./run_cesium_sim.sh --qgc --config my_fleet.yml
 ```
 
 Drone N's PX4 sends MAVLink to its companion on UDP 15540 and 15541, and its
@@ -510,7 +545,7 @@ there are and their companions; the rest of the file is for real drones.
 | UDP 14550 ← 18570 (+N) | PX4 ↔ QGroundControl (drone N+1 of a swarm) |
 | UDP 14030 ← 14280 (+N) | PX4 ↔ this script (gimbal, MAVLink camera, swarm commands) |
 | TCP 4560 (+N) | PX4 ↔ simulator |
-| UDP 15540, 15541 ← 14590, 14591 (+10N) | PX4 ↔ companion computer (with `--pi-ip` or `--fleet`) |
+| UDP 15540, 15541 ← 14590, 14591 (+10N) | PX4 ↔ companion computer (with `--pi-ip`, or `companion:` in the config) |
 | UDP 5556, TCP 8554 on the companion | Dashboard → X commands, X's tracker video |
 | TCP 8554 | RTSP video |
 | TCP 8989 / 8990 | Simulator API |

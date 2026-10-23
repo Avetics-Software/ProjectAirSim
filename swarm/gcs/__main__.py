@@ -70,8 +70,8 @@ async def main():
             link, windows, specs[link.name].video, specs[link.name].chase_video
         ),
         companions=fleet.companions,
-        layer_step=fleet.layer_step,
         home=fleet.home,
+        config=fleet,
     )
     station.start()
     log.info(f"Ground station up for {', '.join(d.name for d in fleet.drones)}; "

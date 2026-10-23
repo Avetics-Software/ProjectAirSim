@@ -1,0 +1,48 @@
+# The sim's config: the drones, their companions and the ground station's
+# settings. run_cesium_sim.sh reads it (or --config FILE); the command line's
+# --drones, --pi-ip and --layer-step win over it. Real drones use the same
+# format (gcs/fleet.example.yml, python -m gcs --fleet FILE). Every value below
+# is the default; delete what you don't change.
+
+# One entry per drone, in order: Drone1, Drone2, ... Each gets its own PX4 and
+# GimbalCam stream (rtsp://<laptop>:8554/gimbal, /gimbal2, ...).
+drones:
+  - {}                          # Drone1
+  # - companion: 192.168.199.99 # a drone with a Radxa running X (its camera is X's)
+  # - {}                        # a drone without one (its camera is the dashboard's, via PX4)
+
+swarm:
+  layer_step_m: 5               # drone N flies (N-1) x this above the height asked for,
+                                #   so crossing routes pass at different heights; 0 = all
+                                #   at the same height
+  default_alt_m: 30             # takeoff / search height when none is given (above home)
+  formation_spacing_m: 15       # several drones sent to one point line up this far apart
+  search_spacing_m: 40          # pass spacing for `search` when none is given
+  arrive_m: 4                   # a goto has arrived within this (then turns to its heading)
+  waypoint_timeout_s: 180       # give up on a goto after this (plus 2 s per metre to fly)
+
+deconfliction:
+  separation_h_m: 6             # closer than this horizontally...
+  separation_v_m: 3             # ...and this vertically is a conflict
+  lookahead_s: 6                # predict conflicts this far ahead
+  give_way_climb_m: 6           # the drone giving way stops and climbs this much...
+  clear_h_m: 10                 # ...and resumes once this far away and not closing
+  max_gps_margin_m: 10          # cap on the extra separation for GPS inaccuracy
+
+safety:
+  battery_warn_pct: 30
+  battery_act_pct: 20
+  battery_action: rtl           # rtl | land | warn, at battery_act_pct
+  link_lost_s: 3                # no message for this long = link lost
+  min_position_rate: 2          # positions/s; fewer = weak link
+  gps_min_sats: 8
+  gps_max_eph_m: 2.5
+  fence_margin_m: 10            # warn this close to the geofence
+  fence_max_alt_m: 120          # geofence ceiling, above home
+  fence_action: rtl             # what PX4 does at the fence: warn | hold | rtl | land
+  lost_margin_m: 15             # others keep this far from a lost drone's last position
+
+controls:
+  gimbal_step_deg: 3            # each W/A/S/D press (drones without a companion)
+  zoom_step_percent: 5          # each wheel notch or +/- (drones without a companion)
+  companion_zoom_pulse_s: 0.4   # with a companion: each notch zooms this long

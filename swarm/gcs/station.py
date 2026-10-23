@@ -22,7 +22,11 @@ import time
 from .companion import CompanionLink
 from .dashboard import CameraWindows
 from .log import log
+from .mavlink_link import GPS_FIX_NAMES
 from .minimap import MiniMap, road_segments
+from .fleet import Fleet
+from .safety import CRITICAL, FENCE_ACTIONS, WARNING, SafetyMonitor, fence_check
+from .safety_panel import SafetyPanel, alert_line
 from .swarm import SWARM_HELP, SwarmControl
 from .video import VideoStream
 
@@ -32,7 +36,16 @@ ROAD_RADIUS_M = 1500.0  # OpenStreetMap roads loaded around home for the map
 STATION_HELP = """  select N                              show and steer drone N (or keys 1-9)
   gimbal PITCH YAW [N]                  point drone N's gimbal (degrees, yaw relative to
                                         the drone) [the selected drone]
-  zoom PERCENT [N]                      set the zoom (0 = widest, 100 = longest focal length)"""
+  zoom PERCENT [N]                      set the zoom (0 = widest, 100 = longest focal length)
+Safety (F2 opens the safety panel; Ctrl+H holds every drone):
+  alerts                                list active alerts
+  ack [all]                             acknowledge the most urgent alert, or all
+  fence upload | fence clear            send the fence drawn on the map to every drone /
+                                        remove it
+  fence set LAT,LON;LAT,LON;...         set the fence's corners (then fence upload)
+  safety KEY VALUE                      change a threshold or response, e.g.
+                                        safety battery_act_pct 25 (safety lists them)"""
+LINE_COLOURS = {0: (235, 235, 235), WARNING: (40, 190, 255), CRITICAL: (90, 90, 255)}
 
 
 class DroneCamera:
@@ -113,10 +126,15 @@ class GroundStation:
       extra_help: text added to `help`
       extra_objects() -> [(name, kind, north, east, heading)] for the map
       extra_status() -> lines added to the status panel
+    config: settings, with .swarm, .deconfliction, .safety and .controls
+      (gcs.fleet.Fleet from the config file); defaults if None.
+    sim_faults: the sim's fault injection (cut_link, is_cut, set_battery,
+      reset), for the safety panel's Sim tab.
     """
 
-    def __init__(self, links, make_camera, companions=None, layer_step=5.0, home=None,
-                 extra_commands=None, extra_help="", extra_objects=None, extra_status=None):
+    def __init__(self, links, make_camera, companions=None, home=None, config=None,
+                 extra_commands=None, extra_help="", extra_objects=None, extra_status=None,
+                 sim_faults=None):
         self.links = links
         self.extra_commands = extra_commands
         self.extra_help = extra_help
@@ -128,14 +146,26 @@ class GroundStation:
             initial_pitch=GIMBAL_INITIAL_PITCH, minimap=MiniMap(),
         )
         self.windows.add_controls([link.name for link in links], self._dashboard_command)
+        self.windows.on_key_log = log.debug  # key presses in the debug log
+        self.windows.on_target_picked = self._check_target
+        config = config or Fleet(drones=[])
+        self.config = config
+        self.windows.PAN_STEP_DEG = config.controls.gimbal_step_deg
+        self.windows.ZOOM_STEP_PERCENT = config.controls.zoom_step_percent
         self.dashboard_log = DashboardLog(self.windows)
         log.addHandler(self.dashboard_log)
         self.cameras = [make_camera(i, link, self.windows) for i, link in enumerate(links)]
         self.companions = {
-            i: CompanionLink(ip, name=f"{links[i].name} companion")
+            i: CompanionLink(ip, name=f"{links[i].name} companion",
+                             zoom_pulse_s=config.controls.companion_zoom_pulse_s)
             for i, ip in (companions or {}).items()
         }
-        self.swarm = SwarmControl(links, layer_step)
+        self.swarm = SwarmControl(links, config.swarm, config.deconfliction)
+        self.safety = SafetyMonitor(links, self.swarm, self.companions, config.safety)
+        self.fence_status = ""  # last geofence upload, for the panel
+        self.panel = SafetyPanel(self.windows, self, sim_faults)
+        if sim_faults:
+            self.windows.on_f9 = lambda: self.panel.open("Sim")
         self.home = None
         self._fixed_home = home  # (lat, lon) from the fleet file, or None
         self._tracker_frame_time = 0.0
@@ -165,11 +195,26 @@ class GroundStation:
         with self.windows._lock:
             self.windows._frames.clear()
 
+    # Who steers a drone's camera: its companion's X if it has one (the
+    # dashboard's keys go to X, see CameraWindows._companion_key), otherwise
+    # the ground station through PX4's gimbal manager. Every direct gimbal or
+    # zoom command passes here, so none can take the camera away from X.
+
+    def x_controls(self, index, what="gimbal"):
+        """True (and says so) if drone `index`'s camera belongs to its companion."""
+        companion = self.companions.get(index)
+        if companion:
+            print(f"{self.links[index].name}'s {what} is controlled by its companion (X at "
+                  f"{companion.ip}): use W/A/S/D, G and the zoom keys or wheel with it selected")
+        return bool(companion)
+
     def steer(self, pitch_deg, yaw_deg):
-        self.current.steer(pitch_deg, yaw_deg)
+        if not self.x_controls(self.selected):
+            self.current.steer(pitch_deg, yaw_deg)
 
     def nudge_zoom(self, delta_percent):
-        self.current.nudge_zoom(delta_percent)
+        if not self.x_controls(self.selected, "zoom"):
+            self.current.nudge_zoom(delta_percent)
 
     def tick(self, dt):
         for camera in self.cameras:
@@ -230,22 +275,22 @@ class GroundStation:
         centre = None
         for i, link in enumerate(self.links):
             mark = ">" if i == self.selected and len(self.links) > 1 else " "
+            colour = LINE_COLOURS[self.safety.drone_severity(i)]
             if link.position is None or self.home is None:
-                drone_lines.append(f"{mark}{link.name}  no MAVLink yet")
+                drone_lines.append((f"{mark}{link.name}  no MAVLink yet", colour))
                 continue
             lat, lon, _, rel = link.position
             north, east = minimap.to_ned(lat, lon)
             heading = link.heading or 0.0
+            lost = i in self.swarm.lost
             if i == self.selected:
                 centre = (north, east, heading)
             else:
-                objects.append((link.name, "drone", north, east, heading))
-            stale = "" if link.connected else "   LINK LOST"
-            drone_lines.append(
+                objects.append((link.name, "lost" if lost else "drone", north, east, heading))
+            drone_lines.append((
                 f"{mark}{link.name}  {link.mode:<8} {'armed' if link.armed else 'disarmed':<8} "
-                f"height {rel:5.1f} m   heading {heading:3.0f}   "
-                f"speed {math.hypot(*link.velocity[:2]):4.1f} m/s{stale}"
-            )
+                f"{rel:5.1f} m  hdg {heading:3.0f}  {math.hypot(*link.velocity[:2]):4.1f} m/s  "
+                f"{self._health_tokens(link, lost)}", colour))
         minimap.update(centre, objects, selected_name=self.links[self.selected].name)
         swarm = self.swarm
         name = lambda i: self.links[i].name  # noqa: E731
@@ -260,8 +305,117 @@ class GroundStation:
                 f"{'video ok' if companion.video_ok else 'no video yet'}"
                 f"{', tracking' if companion.tracking else ''}"
             )
+        minimap.set_fence(self.windows.fence)
         extra = list(self.extra_status()) if self.extra_status else []
         self.windows.status_lines = drone_lines + extra
+
+    @staticmethod
+    def _health_tokens(link, lost):
+        """Battery, GPS and (if late) link age, compact, for the status line."""
+        if lost:
+            return f"LINK LOST {link.link_age:.0f}s"
+        bat = "bat ?" if link.battery_pct is None else f"bat {link.battery_pct:.0f}%"
+        gps = "" if link.gps_fix is None else (
+            f"  GPS {GPS_FIX_NAMES.get(link.gps_fix, link.gps_fix)} {link.gps_sats}")
+        age = link.link_age
+        late = f"  link {age:.1f}s" if age is not None and age > 1.0 else ""
+        return bat + gps + late
+
+    # ------------------------------------------------------------------
+    # Safety
+
+    def _check_safety(self):
+        self.safety.evaluate()
+        self.windows.alert_line = alert_line(self.safety)
+        self.panel.refresh()
+
+    async def _run_safety(self, period=0.5):
+        while True:
+            await asyncio.sleep(period)
+            try:
+                self._check_safety()
+            except Exception as err:
+                log.warning(f"Safety check failed: {err}")
+
+    def _check_target(self, geo):
+        """Warn at once about a map target PX4 will refuse: outside the fence."""
+        if len(self.safety.fence) >= 3 and not fence_check(self.safety.fence, *geo)[0]:
+            self.windows.log("That target is outside the uploaded geofence: PX4 will refuse "
+                             "to fly there")
+
+    def upload_fence(self, corners):
+        """Send the geofence to every drone, with the ceiling and PX4's action
+        from the safety settings; an empty fence removes it. Runs in the background."""
+        corners = list(corners)
+        if 0 < len(corners) < 3:
+            log.warning("A geofence needs at least 3 corners")
+            return
+        s = self.safety.settings
+        self.safety.fence = corners
+        self.windows.set_fence(corners)
+        self.fence_status = "uploading..."
+
+        async def upload():
+            done = []
+            for link in self.links:
+                if link.position is None or link.link_age is None or link.link_age > 3.0:
+                    log.warning(f"{link.name}: no link; geofence not uploaded")
+                    continue
+                try:
+                    await asyncio.to_thread(link.upload_fence, corners)
+                    if corners:
+                        await asyncio.to_thread(link.set_param, "GF_ACTION",
+                                                FENCE_ACTIONS[s.fence_action])
+                        await asyncio.to_thread(link.set_param, "GF_MAX_VER_DIST",
+                                                float(s.fence_max_alt_m))
+                    done.append(link.name)
+                except Exception as err:
+                    log.warning(f"{link.name}: geofence upload failed: {err}")
+            what = "removed from" if not corners else "uploaded to"
+            self.fence_status = (f"{what} {', '.join(done)} at {time.strftime('%H:%M:%S')}"
+                                 if done else "upload failed")
+            log.info(f"Geofence {what} {len(done)} of {len(self.links)} drones")
+
+        asyncio.get_running_loop().create_task(upload())
+
+    async def _safety_command(self, word, parts):
+        """alerts, ack, fence, safety: True if it was one."""
+        if word == "alerts":
+            alerts = self.safety.ordered()
+            for a in alerts:
+                ack = " (acknowledged)" if a.acked else ""
+                print(f"{'CRITICAL' if a.severity == CRITICAL else 'warning '} {a.text}{ack}")
+            if not alerts:
+                print("No active alerts")
+        elif word == "ack":
+            if len(parts) > 1 and parts[1].lower() == "all":
+                self.safety.ack()
+            else:
+                alert, _ = self.safety.most_urgent()
+                if alert:
+                    self.safety.ack(alert.key)
+            self.windows.alert_line = alert_line(self.safety)
+        elif word == "fence" and len(parts) == 2 and parts[1].lower() in ("upload", "clear"):
+            self.upload_fence(self.windows.fence if parts[1].lower() == "upload" else [])
+        elif word == "fence" and len(parts) >= 3 and parts[1].lower() == "set":
+            try:
+                corners = [tuple(float(v) for v in p.split(",")) for p in
+                           "".join(parts[2:]).split(";") if p]
+                self.windows.set_fence(corners)
+                print(f"Fence: {len(corners)} corners; 'fence upload' sends it")
+            except ValueError:
+                print("Usage: fence set LAT,LON;LAT,LON;...")
+        elif word == "safety":
+            s = self.safety.settings
+            if len(parts) == 3:
+                try:
+                    s.set(parts[1], parts[2])
+                except (AttributeError, ValueError) as err:
+                    print(f"safety {parts[1]}: {err}")
+            print("  ".join(f"{k}={v}" for k, v in vars(s).items()))
+        else:
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Console
@@ -290,14 +444,22 @@ class GroundStation:
             except (ValueError, IndexError):
                 print("Usage: gimbal PITCH YAW [DRONE]")
                 return
+            if self.x_controls(self.cameras.index(camera)):
+                return
             camera.steer(pitch, yaw)
             if camera.selected:
                 self.windows.pitch, self.windows.yaw = pitch, yaw
         elif word == "zoom" and len(parts) in (2, 3):
             try:
-                self._camera_arg(parts, 2).set_zoom(max(0.0, min(100.0, float(parts[1]))))
+                camera = self._camera_arg(parts, 2)
+                percent = max(0.0, min(100.0, float(parts[1])))
             except (ValueError, IndexError):
                 print("Usage: zoom PERCENT [DRONE]")
+                return
+            if not self.x_controls(self.cameras.index(camera), "zoom"):
+                camera.set_zoom(percent)
+        elif await self._safety_command(word, parts):
+            pass
         elif await self.swarm.run_command(parts):
             pass
         elif self.extra_commands and await self.extra_commands(line, parts):
@@ -366,6 +528,7 @@ class GroundStation:
             self.start_ui()
         self._tasks.append(asyncio.create_task(self._run_console()))
         self._tasks.append(asyncio.create_task(self._run_map()))
+        self._tasks.append(asyncio.create_task(self._run_safety()))
         self.swarm.start()
 
     def close(self):

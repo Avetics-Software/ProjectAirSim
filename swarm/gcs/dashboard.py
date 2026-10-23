@@ -14,6 +14,7 @@ import threading
 import time
 
 import tkinter as tk
+from tkinter import messagebox
 
 import cv2
 import numpy as np
@@ -75,6 +76,8 @@ class CameraWindows:
     LOG_LINES = 200
     # Control bar colours
     BG, FG, FIELD, ACCENT = "#1e1f22", "#e6e6e6", "#2b2d31", "#3d6fb6"
+    DANGER = "#a52a2a"
+    DRAWER_WIDTH = 360
 
     def __init__(self, on_gimbal, on_zoom, initial_pitch=-45.0, minimap=None,
                  on_select=None):
@@ -87,7 +90,17 @@ class CameraWindows:
         self.pitch = initial_pitch
         self.yaw = 0.0
         self.zoom_text = ""
-        self.status_lines = []  # set by the caller
+        # Set by the caller: each a str, or (str, BGR colour) to colour the line
+        self.status_lines = []
+        self.alert_line = None  # (text, BGR colour) shown at the top of the status panel
+        self.show_help = False  # F1: the full key help in the status panel
+        self.fence = []  # geofence corners (lat, lon) being drawn
+        self.fence_drawing = False  # map clicks add fence corners (safety panel)
+        self.on_fence_changed = None  # called after a fence corner is added
+        self.on_f9 = None  # F9: the sim's fault controls, if any
+        self.on_key_log = None  # called with "key X down/up", for the debug log
+        self.on_target_picked = None  # called with (lat, lon) when a map target is set
+        self.on_fence_drawing_changed = None  # called when fence drawing starts or stops
         self.main_cam = "GimbalCam"  # shown in the big pane; the other is small
         # With a companion the big pane is always its Tracker video and this one
         # of GimbalCam/ChaseCam goes in the small pane
@@ -179,6 +192,23 @@ class CameraWindows:
                            bg=self.BG, fg=self.FG, selectcolor=self.FIELD,
                            activebackground=self.BG, activeforeground=self.FG,
                            highlightthickness=0).pack(side=tk.LEFT, padx=16)
+        # Emergency buttons, always visible at the right, and the safety drawer
+        for text, command in (("RTL ALL", self._rtl_all), ("HOLD ALL", self._hold_all)):
+            tk.Button(row, text=text, command=command, bg=self.DANGER, fg="white",
+                      activebackground="#d04040", activeforeground="white", relief=tk.FLAT,
+                      padx=12, pady=3, highlightthickness=0,
+                      font=("DejaVu Sans", 10, "bold")).pack(side=tk.RIGHT, padx=2)
+        self._safety_button = button(row, "Safety (F2)", self.toggle_drawer)
+        self._safety_button.pack(side=tk.RIGHT, padx=(2, 12))
+        # The drawer docks at the right of the camera canvas when open
+        self.drawer = tk.Frame(self.root, bg=self.BG, width=self.DRAWER_WIDTH)
+        self.drawer.pack_propagate(False)
+        self.drawer_open = False
+        self.root.bind_all("<Control-h>", lambda e: self._hold_all())
+        self.root.bind_all("<Control-r>", lambda e: self._rtl_all())
+        self.root.bind_all("<F1>", lambda e: self._toggle_help())
+        self.root.bind_all("<F2>", lambda e: self.toggle_drawer())
+        self.root.bind_all("<F9>", lambda e: self.on_f9 and self.on_f9())
 
         # Row 2: flight buttons
         row = tk.Frame(bar, bg=self.BG)
@@ -189,6 +219,8 @@ class CameraWindows:
                  insertbackground=self.FG, relief=tk.FLAT).pack(side=tk.LEFT, padx=(4, 10))
         label(row, "Heading (deg)").pack(side=tk.LEFT)
         self._heading_var = tk.StringVar(value="")
+        # Typed or picked on the compass, the heading shows on the compass
+        self._heading_var.trace_add("write", lambda *_: self._show_heading_pick())
         tk.Entry(row, textvariable=self._heading_var, width=5, bg=self.FIELD, fg=self.FG,
                  insertbackground=self.FG, relief=tk.FLAT).pack(side=tk.LEFT, padx=(4, 10))
         for text, action in (("Take off", "takeoff"), ("Go to target", "goto"),
@@ -233,6 +265,8 @@ class CameraWindows:
         self._entry.bind("<Return>", lambda e: self._send_entry())
         self._entry.bind("<Up>", lambda e: self._history_step(-1))
         self._entry.bind("<Down>", lambda e: self._history_step(1))
+        self._entry.bind("<Control-h>", lambda e: self._hold_all())  # not Tk's backspace
+        self._entry.bind("<Control-r>", lambda e: self._rtl_all())
         self._history, self._history_pos = [], 0
         button(row, "Send", self._send_entry).pack(side=tk.LEFT)
         button(row, "Help", lambda: self.on_command("help")).pack(side=tk.LEFT, padx=2)
@@ -241,6 +275,63 @@ class CameraWindows:
         self._log = tk.Text(bar, height=5, bg="#141517", fg="#c8c8c8", relief=tk.FLAT,
                             font=("DejaVu Sans Mono", 9), state=tk.DISABLED, takefocus=False)
         self._log.pack(fill=tk.X, padx=8, pady=(2, 8))
+
+    # ------------------------------------------------------------------
+    # Safety
+
+    def _hold_all(self):
+        self.log("HOLD ALL")
+        self.on_command("all hold")
+        return "break"  # Ctrl+H: not a backspace in the command box
+
+    def _rtl_all(self):
+        if messagebox.askyesno("Return all", "Send every drone home (RTL)?", parent=self.root):
+            self.log("RTL ALL")
+            self.on_command("all rtl")
+        return "break"
+
+    def toggle_drawer(self, show=None):
+        """Open or close the safety drawer at the right of the cameras."""
+        show = not self.drawer_open if show is None else show
+        if show and not self.drawer_open:
+            self.drawer.pack(side=tk.RIGHT, fill=tk.Y, before=self.label)
+        elif not show and self.drawer_open:
+            self.drawer.pack_forget()
+            self.set_fence_drawing(False)  # map clicks set targets again
+        self.drawer_open = show
+        self._safety_button.configure(bg=self.ACCENT if show else self.FIELD)
+        self._seq += 1
+
+    def _toggle_help(self):
+        self.show_help = not self.show_help
+        self._seq += 1
+
+    def set_fence_drawing(self, on):
+        """Map clicks add geofence corners (on) or set targets (off)."""
+        if on == self.fence_drawing:
+            return
+        self.fence_drawing = on
+        if on and hasattr(self, "_drawing"):
+            self._drawing.set(False)  # not the search area at the same time
+        self.log("Geofence drawing: click corners on the map; Esc when done" if on
+                 else "Geofence drawing off: map clicks set targets")
+        if self.on_fence_drawing_changed:
+            self.on_fence_drawing_changed()
+        self._seq += 1
+
+    def _drawing_mode(self):
+        """What a map click adds now, if not a target."""
+        if self.fence_drawing:
+            return "geofence"
+        if hasattr(self, "_drawing") and self._drawing.get():
+            return "search area"
+        return None
+
+    def set_fence(self, corners):
+        self.fence = list(corners)
+        if self.minimap:
+            self.minimap.set_fence(self.fence)
+        self._seq += 1
 
     def drone_name(self, number):
         names = getattr(self, "_drone_names", [])
@@ -268,6 +359,16 @@ class CameraWindows:
         """Show a message in the control bar (any thread)."""
         self._messages.append(text)
 
+    def _show_heading_pick(self):
+        if not self.minimap:
+            return
+        try:
+            text = self._heading_var.get().strip()
+            self.minimap.set_heading_pick(float(text) % 360.0 if text else None)
+        except ValueError:
+            self.minimap.set_heading_pick(None)
+        self._seq += 1
+
     def _fly(self, action):
         who = "all" if self._all_var.get() else str(self.selected)
         alt = self._alt_var.get().strip() or "30"
@@ -283,7 +384,8 @@ class CameraWindows:
         elif action == "heading":
             heading = self._heading_var.get().strip()
             if not heading:
-                self.log("Type a heading in degrees from north (0 = N, 90 = E) first")
+                self.log("Click the compass, or type a heading in degrees from north "
+                         "(0 = N, 90 = E), first")
                 return
             self.on_command(f"{who} heading {heading}")
         else:
@@ -461,6 +563,8 @@ class CameraWindows:
             self._cancel_track()
 
     def _on_key_release(self, event):
+        if self.on_key_log:
+            self.on_key_log(f"key {event.keysym} up")
         if not self.companion or isinstance(event.widget, tk.Entry):
             return
         axis = {"w": "PITCH", "s": "PITCH", "a": "YAW", "d": "YAW"}.get(
@@ -483,14 +587,32 @@ class CameraWindows:
             self._swap_cameras()
         elif pane == "Minimap" and self.minimap:
             px, py, pw, ph = self.PANES["Minimap"]
+            bearing = self.minimap.compass_heading(x - px, y - py)
+            if bearing is not None and hasattr(self, "_heading_var"):
+                # On the compass: pick a heading (to the nearest 5 deg); it is
+                # sent with Set heading or Go to target
+                heading = round(bearing / 5.0) * 5 % 360
+                self._heading_var.set(f"{heading:.0f}")
+                self.log(f"Heading {heading:03.0f} deg picked: press Set heading, or Go to "
+                         "target to turn there on arrival")
+                return
             geo = self.minimap.pixel_to_geo(x - px, y - py, pw, ph)
-            if geo and hasattr(self, "_drawing") and self._drawing.get():
+            if geo and self.fence_drawing:
+                self.set_fence(self.fence + [geo])
+                n = len(self.fence)
+                self.log(f"Geofence corner {n}" + (" (need 3)" if n < 3 else
+                         ": Esc when done, then Upload in the Geofence tab"))
+                if self.on_fence_changed:
+                    self.on_fence_changed()
+            elif geo and hasattr(self, "_drawing") and self._drawing.get():
                 self.area.append(geo)
                 self._update_area()
             elif geo:
                 self.targets[self.selected] = geo
                 self.minimap.set_picked(self.drone_name(self.selected), geo)
                 self._show_target()
+                if self.on_target_picked:
+                    self.on_target_picked(geo)
 
     def _on_wheel(self, wx, wy, step):
         self._seq += 1
@@ -543,8 +665,9 @@ class CameraWindows:
             state = "tracking" if self.companion and self.companion.tracking else "click or drag to track"
             return f"{self.title} Tracker (companion {self.companion.ip if self.companion else ''})  {state}"
         if cam == "GimbalCam":
+            via = "X" if self.companion else "PX4"  # who steers this camera
             return (f"{self.title} GimbalCam  pitch {self.pitch:+.0f}  yaw {self.yaw:+.0f}  "
-                    f"{self.zoom_text}")
+                    f"{self.zoom_text}  (via {via})")
         return f"{self.title} ChaseCam" + (
             f"  {self.chase_zoom:.1f}x digital" if self.chase_zoom > 1 else "")
 
@@ -573,20 +696,45 @@ class CameraWindows:
         m = self.PANES["Minimap"]
         if self.minimap:
             canvas[m[1]:m[1] + m[3], m[0]:m[0] + m[2]] = self.minimap.render(m[2], m[3])
+            mode = self._drawing_mode()
+            if mode:
+                # Map clicks don't set targets now: say so, on the map itself
+                text = f"Drawing {mode}: click corners, Esc when done"
+                cv2.rectangle(canvas, (m[0] + 1, m[1] + 1), (m[0] + m[2] - 2, m[1] + 26),
+                              (0, 90, 160) if mode == "geofence" else (90, 90, 0), -1)
+                self._text(canvas, text, (m[0] + 10, m[1] + 19), 0.5, box=False)
 
         x, y, w, h = self.PANES["Status"]
         canvas[y:y + h, x:x + w] = (24, 24, 24)
-        help_lines = [
-            "Gimbal: W/S tilt  A/D pan  C centre  X down   Camera zoom: +/-   "
-            "Map: [ ]  L labels  click = target",
-            "Mouse wheel zooms the pane under the pointer.  V or click the small camera: swap",
-        ]
-        if self.companion:
-            help_lines.append("Companion: in Tracker click / drag a box to track, right-click or "
-                              "Esc cancel, arrows nudge, G centre gimbal")
-        for i, line in enumerate(self.status_lines + [""] + help_lines):
-            self._text(canvas, line, (x + 12, y + 26 + 22 * i), 0.5,
-                       (170, 170, 170) if line in help_lines else (235, 235, 235), box=False)
+        lines = []  # (text, colour)
+        if self.alert_line:
+            text, colour = self.alert_line
+            cv2.rectangle(canvas, (x + 1, y + 1), (x + w - 2, y + 30), (30, 30, 50), -1)
+            self._text(canvas, text, (x + 12, y + 22), 0.55, colour, box=False)
+            top = y + 56
+        else:
+            top = y + 26
+        for line in self.status_lines:
+            lines.append(line if isinstance(line, tuple) else (line, (235, 235, 235)))
+        grey = (150, 150, 150)
+        if self.show_help:
+            lines += [("", grey),
+                      ("Gimbal: W/S tilt  A/D pan  C centre  X down   Camera zoom: +/-   "
+                       "Map: [ ]  L labels  click = target", grey),
+                      ("Mouse wheel zooms the pane under the pointer.  V or click the small "
+                       "camera: swap", grey),
+                      ("Safety: F2 panel  Ctrl+H hold all  Ctrl+R return all   F1 hides this help",
+                       grey)]
+            if self.companion:
+                lines.append(("Companion: in Tracker click / drag a box to track, right-click "
+                              "or Esc cancel, arrows nudge, G centre gimbal", grey))
+        else:
+            lines += [("", grey), ("F1 keys help   F2 safety and alerts   Ctrl+H hold all   "
+                                   "Ctrl+R return all", grey)]
+        for i, (line, colour) in enumerate(lines):
+            if top + 22 * i > y + h - 6:
+                break
+            self._text(canvas, line, (x + 12, top + 22 * i), 0.5, colour, box=False)
 
         for px, py, pw, ph in self.PANES.values():
             cv2.rectangle(canvas, (px, py), (px + pw - 1, py + ph - 1), self.BORDER, 1)
@@ -622,9 +770,19 @@ class CameraWindows:
         self.root.update()
 
     def _on_key(self, event):
+        if self.on_key_log:
+            self.on_key_log(f"key {event.keysym} down")
         if isinstance(event.widget, tk.Entry):
             return  # typing a command or height, not steering
         self._seq += 1
+        if event.keysym == "Escape" and self._drawing_mode():
+            # Finish drawing (before Esc's other use, cancelling a track)
+            if self.fence_drawing:
+                self.set_fence_drawing(False)
+            else:
+                self._drawing.set(False)
+                self.log("Search area drawing off: map clicks set targets")
+            return
         ch = event.char.lower() if event.char else ""
         step = self.PAN_STEP_DEG
         if self.companion and self._companion_key(ch or (event.keysym or "").lower(), event.keysym):

@@ -20,6 +20,7 @@ a number (`2`), a list (`1,3`) or `all`.
 | `status` | Each drone's mode, arming, height, position, position rate and current task |
 | `select N` | Show and steer drone N in the dashboard (or keys 1-9) |
 | `gimbal PITCH YAW [N]`, `zoom PERCENT [N]` | Point or zoom a drone's camera (default: the selected one) |
+| `alerts`, `ack`, `fence ...`, `safety ...` | Alerts, the geofence and safety settings; see [safety](safety.md) |
 | `help` | Every command |
 
 A new command for a drone replaces what it was doing. The sim adds its own
@@ -36,6 +37,10 @@ The same without typing:
 - **Go to target**: click the minimap to set the selected drone's target,
   then press it. With a *Heading*, the drone turns to it on arrival.
   **Set heading** turns the drone in place.
+- **Heading**: type it, or click the minimap's compass (bottom right) on the
+  direction you want; it rounds to 5° and fills the box. The picked heading
+  shows on the compass as a hollow pointer (and `> 135` by the drone's
+  heading) until you send it with *Set heading* or *Go to target*.
 - **Search area**: draw the area on the minimap and press it (see
   [area search](area-search.md)).
 - **Messages** below show replies, warnings and what each drone is doing.

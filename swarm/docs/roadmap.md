@@ -6,22 +6,30 @@ GitHub issue in [Avetics-Software/ProjectAirSim](https://github.com/Avetics-Soft
 
 ## 1. Safety
 
-- ([#8](https://github.com/Avetics-Software/ProjectAirSim/issues/8)) **Drone health in the status panel:** battery, GPS fix and satellites,
-  link quality and PX4's warnings, next to the mode and height shown today.
-- ([#9](https://github.com/Avetics-Software/ProjectAirSim/issues/9)) **Alerts:** a short list of what needs attention now (low battery, link
-  lost, geofence breach, predicted conflict), instead of messages scrolling
-  past in the log.
-- ([#10](https://github.com/Avetics-Software/ProjectAirSim/issues/10), [#11](https://github.com/Avetics-Software/ProjectAirSim/issues/11)) **Responses on the ground:**
-  - a lost link is shown but nothing reacts; check each PX4's data-link-loss
-    action, or add a ground policy
-  - low battery: return home, and hand the drone's remaining work to others
-  - **hold all / return all** buttons for emergencies
-- ([#12](https://github.com/Avetics-Software/ProjectAirSim/issues/12)) **Geofence:** upload one to every drone from the ground station.
-- ([#13](https://github.com/Avetics-Software/ProjectAirSim/issues/13)) **Deconfliction that survives a lost link:** run the separation monitor on
-  the companions, with drones telling each other their positions, instead of
-  only on the ground. Also account for GPS error and latency, and fly height
-  layers above terrain rather than above home. See
+Done ([safety](features/safety.md)):
+
+- ([#8](https://github.com/Avetics-Software/ProjectAirSim/issues/8)) **Drone health** on each status line and in the safety drawer:
+  battery, GPS, link, PX4's link-loss action and messages.
+- ([#9](https://github.com/Avetics-Software/ProjectAirSim/issues/9)) **Alerts:** the alert line, and the drawer's alert list with
+  acknowledgement and history.
+- ([#10](https://github.com/Avetics-Software/ProjectAirSim/issues/10)) **Responses:** low battery returns the drone home (or lands
+  it); a lost drone is kept clear of at its last position. The sim's Sim tab
+  cuts links and drains batteries to test them.
+- ([#11](https://github.com/Avetics-Software/ProjectAirSim/issues/11)) **HOLD ALL / RTL ALL** buttons and Ctrl+H.
+- ([#12](https://github.com/Avetics-Software/ProjectAirSim/issues/12)) **Geofence** drawn on the map and uploaded to every PX4.
+
+Still to do:
+
+- ([#13](https://github.com/Avetics-Software/ProjectAirSim/issues/13)) **Deconfliction that survives a lost link:** run the separation
+  monitor on the companions, with drones telling each other their positions,
+  instead of only on the ground, and fly height layers above terrain rather
+  than above home. (Margins already widen with GPS inaccuracy.) See
   [deconfliction](features/deconfliction.md#limits).
+- **The sim's own link-loss detection:** the simulator keeps PX4's link alive
+  with ground-station heartbeats of its own, so the Sim tab sends PX4's
+  link-loss action on its behalf. Changing those heartbeats' type in
+  `vehicle_apis/multirotor_api/src/mavlink_api.cpp` (needs a plugin rebuild)
+  would let PX4 detect it itself.
 
 ## 2. Tasking that adapts in flight
 

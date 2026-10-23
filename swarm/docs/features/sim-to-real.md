@@ -24,7 +24,8 @@ drones:
 
 | | Sim | Real drones |
 |---|---|---|
-| Run | `./run_cesium_sim.sh --qgc --fleet my_fleet.yml` | `python -m gcs --fleet my_fleet.yml` |
+| Run | `./run_cesium_sim.sh --qgc` (reads `swarm/config.yml`; `--config FILE` for another) | `python -m gcs --fleet my_fleet.yml` |
+| Settings | The same `swarm:`, `deconfliction:`, `safety:` and `controls:` sections | the same |
 | Drones | One PX4 SITL per drone, named Drone1, Drone2, ... | Your PX4s; each needs its own `MAV_SYS_ID` |
 | MAVLink | Each PX4 on its own UDP port (14030 + N) | One shared link (radio, mesh, mavlink-router), or one per drone |
 | Video | The sim's GimbalCam over RTSP (`/gimbal`, `/gimbal2`, ...) | Each drone's `video:` stream; `chase_video:` for a second camera |
@@ -32,8 +33,8 @@ drones:
 | Zoom | The sim's camera field of view | `MAV_CMD_SET_CAMERA_ZOOM` to the drone's MAVLink camera |
 | Extra | Objects, moving actors, `goto` a new location | |
 
-The sim reads only how many drones there are and their companions; the rest
-of the file is for real drones.
+The sim reads the drones' companions and the settings sections; the MAVLink,
+system id and video keys are for real drones.
 
 ## What is shared, and what isn't
 

@@ -111,6 +111,27 @@ class Px4Sitl:
                 self.proc.wait()
         self.proc = None
 
+    # PX4's simulated hardware, which can be restarted while it runs. Not the
+    # modules linking PX4 to the simulator (simulator_mavlink, pwm_out_sim):
+    # restarting those drops the drone from the sim until the scene reloads.
+    HARDWARE_MODULES = ("battery_simulator", "system_power_simulator")
+
+    def restart_modules(self, modules=HARDWARE_MODULES, timeout=15):
+        """Stop and start PX4 modules (through PX4's shell). Returns what failed."""
+        failed = []
+        for module in modules:
+            for action in ("stop", "start"):
+                try:
+                    out = subprocess.run(
+                        [f"{self.bin}-{module}", "--instance", str(self.instance), action],
+                        cwd=self.rootfs, capture_output=True, text=True, timeout=timeout,
+                    )
+                    if action == "start" and out.returncode != 0:
+                        failed.append(f"{module}: {(out.stdout + out.stderr).strip()[-120:]}")
+                except subprocess.TimeoutExpired:
+                    failed.append(f"{module} {action}: timed out")
+        return failed
+
     def _log_has(self, text):
         try:
             with open(self.log_path) as f:

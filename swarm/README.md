@@ -29,6 +29,7 @@ drones as one swarm.
 | Keeping drones apart | Nothing; each PX4 knows nothing of the others | [Height layers, a crossing check and a separation monitor](docs/features/deconfliction.md) |
 | Vision and tracking | Shows video | [Click-to-track and gimbal control through X](docs/features/vision-tracking.md) on each drone's companion |
 | Commanding many drones | Mostly one at a time | [`all takeoff`, `1,3 goto`, one-click buttons](docs/features/swarm-commands.md) |
+| Safety across the swarm | Per-vehicle warnings, one vehicle at a time | [Every drone's health on one screen, alerts, hold-all / return-all, low-battery and lost-link responses, a geofence for all](docs/features/safety.md) |
 | Testing | Separate from any simulation | [The same code flies the sim and real drones](docs/features/sim-to-real.md) |
 | Extending | C++/Qt, a large codebase | [A small Python package](docs/features/architecture.md): detections, ReID and new search patterns go straight in |
 
@@ -43,6 +44,7 @@ ground station never fights QGC for control.
 - [Ground station](gcs/README.md): running it against real drones, the fleet
   file, what to check before flying
 - Features:
+  [safety](docs/features/safety.md) ·
   [area search](docs/features/area-search.md) ·
   [deconfliction](docs/features/deconfliction.md) ·
   [vision and tracking](docs/features/vision-tracking.md) ·
@@ -61,6 +63,7 @@ ground station never fights QGC for control.
 | `payload_mavlink.py`, `payload_video.py`, `camera_properties.*` | The simulated gimbal camera: MAVLink camera, RTSP video, lens and zoom |
 | `spawned_objects.py`, `moving_actors.py`, `actor_editor.*`, `config_*.yml` | Objects, and people and vehicles moving along roads, to search for |
 | `spotter_control.py`, `shared_frame.py` | The spotter: a person walked around the world, with a first-person view |
+| `config.yml` | The drones, their companions and the ground station's settings (swarm, deconfliction, safety, controls) |
 | `sim_config/` | Scene and robot configs (the `_custom` ones are generated each run) |
 | `docs/` | This documentation |
 

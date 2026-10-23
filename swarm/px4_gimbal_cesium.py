@@ -51,6 +51,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -62,9 +63,9 @@ from projectairsim.types import Pose, Quaternion, Vector3
 from projectairsim.utils import load_scene_config_as_dict, projectairsim_log, quaternion_to_rpy
 
 from camera_properties import CameraProperties
-from gcs.fleet import load_fleet
+from gcs.fleet import Fleet, load_fleet, sim_drones
 from gcs.log import log as gcs_log
-from gcs.mavlink_link import VehicleLink
+from gcs.mavlink_link import M, VehicleLink
 from gcs.minimap import road_segments
 from gcs.station import DroneCamera, GroundStation
 from gcs.swarm import search_demo
@@ -127,8 +128,9 @@ def parse_args():
     parser.add_argument(
         "--drones",
         type=int,
-        default=1,
-        help="number of PX4 drones (a swarm); each gets its own PX4 instance",
+        default=None,
+        help="number of PX4 drones (a swarm), each with its own PX4 instance "
+        "(default: as many as the config file lists)",
     )
     parser.add_argument(
         "--drone-spacing",
@@ -144,16 +146,21 @@ def parse_args():
         "video and sends it click-to-track and gimbal commands.",
     )
     parser.add_argument(
+        "--config",
         "--fleet",
-        help="fleet file (gcs/fleet.example.yml): the number of drones and each one's "
-        "companion computer. Replaces --drones and --companion.",
+        dest="config",
+        default=os.path.join(SCRIPT_DIR, "config.yml"),
+        help="config file: the drones, their companions and the ground station's "
+        "settings (default: config.yml here; gcs/fleet.example.yml has every key). "
+        "--drones, --companion and --layer-step override it",
     )
     parser.add_argument(
         "--layer-step",
         type=float,
-        default=5.0,
+        default=None,
         help="drone N flies (N-1) x this many metres above the height asked for, so "
-        "drones whose paths cross pass at different heights (default 5; 0 = off)",
+        "drones whose paths cross pass at different heights (default: the config "
+        "file's swarm: layer_step_m, 5; 0 = off)",
     )
     parser.add_argument(
         "--actors",
@@ -402,7 +409,12 @@ class SimPayload(DroneCamera):
         projectairsim_log().info(f"Saved {path}")
 
 
-GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a new place (restarts PX4)"""
+GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a new place (restarts PX4)
+  sim cut N | sim battery N PCT | sim reset N|all
+                                        simulate a lost link or low battery on drone N;
+                                        reset undoes them and restarts the drone's
+                                        simulated hardware in PX4 (also the safety
+                                        panel's Sim tab, F9)"""
 SIM_HELP = CONSOLE_HELP + "\n" + ACTORS_HELP + "\n" + GOTO_HELP
 
 
@@ -427,6 +439,27 @@ async def sim_command(session, line, parts):
     elif word == "actors":
         if session.actors:
             session.actors.run_command(parts[1:])
+    elif word == "sim":
+        faults = session.station.panel.sim_faults
+        try:
+            count = len(session.station.links)
+            if parts[1] in ("reset", "restore") and parts[2].lower() == "all":
+                drones = range(count)
+            else:
+                drones = [int(parts[2]) - 1]
+                if not 0 <= drones[0] < count:
+                    raise IndexError
+            for i in drones:
+                if parts[1] == "cut":
+                    faults.cut_link(i, True)
+                elif parts[1] == "battery":
+                    faults.set_battery(i, float(parts[3]))
+                elif parts[1] in ("reset", "restore"):
+                    faults.reset(i)
+                else:
+                    raise ValueError
+        except (IndexError, ValueError):
+            print("Usage: sim cut N | sim battery N PCT | sim reset N|all")
     elif session.spawner:
         session.spawner.run_command(line)
     return True
@@ -534,8 +567,11 @@ async def wait_while_sim_alive(session):
     projectairsim_log().info("Simulator closed")
 
 
-async def fly_gimbal_demo(drone, link):
-    link.take_gimbal_control()
+async def fly_gimbal_demo(drone, link, sweep=True):
+    """Take off, sweep the gimbal for a minute and land. With a companion
+    computer the gimbal is X's, so the sweep is skipped (sweep=False)."""
+    if sweep:
+        link.take_gimbal_control()
     drone.enable_api_control()
 
     # PX4 refuses to arm until its estimator has converged (a few seconds)
@@ -556,14 +592,17 @@ async def fly_gimbal_demo(drone, link):
         north=0.0, east=0.0, down=-40.0, velocity=4.0
     ))
 
-    projectairsim_log().info("Sweeping gimbal for 60 s")
-    t0 = time.monotonic()
-    while (t := time.monotonic() - t0) < 60.0:
-        pitch, yaw = gimbal_setpoint(t)
-        link.set_gimbal_attitude(pitch, yaw)
-        await asyncio.sleep(0.05)  # 20 Hz setpoint stream
-
-    link.set_gimbal_attitude(-90.0, 0.0)
+    if sweep:
+        projectairsim_log().info("Sweeping gimbal for 60 s")
+        t0 = time.monotonic()
+        while (t := time.monotonic() - t0) < 60.0:
+            pitch, yaw = gimbal_setpoint(t)
+            link.set_gimbal_attitude(pitch, yaw)
+            await asyncio.sleep(0.05)  # 20 Hz setpoint stream
+        link.set_gimbal_attitude(-90.0, 0.0)
+    else:
+        projectairsim_log().info("Hovering for 60 s; the gimbal is the companion's (X)")
+        await asyncio.sleep(60.0)
 
     projectairsim_log().info("Landing")
     await (await drone.land_async())
@@ -668,6 +707,7 @@ class Session:
 
             for link in self.station.links:
                 link.wait_for_px4()
+            await self._clear_stored_plans()
             self.station.swarm.start()
 
             # Ground lookups only see Cesium's collision once the sim is running
@@ -689,6 +729,25 @@ class Session:
                 )
         finally:
             self.loading = False
+
+    async def _clear_stored_plans(self):
+        """Start without a geofence or a mission. PX4 keeps both on disk across
+        restarts, so ones from an earlier session would otherwise still be
+        there: a fence refusing targets outside it, a mission a "start mission"
+        would fly, neither shown on the dashboard."""
+        links = self.station.links
+        for what, clear in (("geofence", lambda link: link.upload_fence([])),
+                            ("mission", lambda link: link.clear_mission())):
+            results = await asyncio.gather(
+                *(asyncio.to_thread(clear, link) for link in links), return_exceptions=True
+            )
+            failed = [f"{link.name} ({err})" for link, err in zip(links, results) if err]
+            if failed:
+                projectairsim_log().warning(f"Couldn't clear the {what} on {', '.join(failed)}")
+        projectairsim_log().info("Geofence and missions cleared on every drone")
+        self.station.safety.fence = []
+        self.station.windows.set_fence([])
+        self.station.fence_status = ""
 
     def _load_map_roads(self):
         """Centre the map on the scene's home, with its OpenStreetMap roads
@@ -730,6 +789,101 @@ def drone_url(url, index):
     return url if index == 0 or not url else f"{url}{index + 1}"
 
 
+class SimFaults:
+    """The safety panel's Sim tab: faults injected into the sim's drones to
+    test the ground station's and PX4's responses."""
+
+    NORMAL_DRAIN_S, NORMAL_FLOOR_PCT = 1200.0, 35.0  # as in px4_params.parm
+    FAST_DRAIN_S = 30.0
+
+    def __init__(self, connections, links, px4s):
+        self.connections = connections
+        self.links = links
+        self.px4s = px4s  # Px4Sitl per drone
+
+    def is_cut(self, i):
+        return self.connections[i].outage
+
+    def cut_link(self, i, cut):
+        """Stop (or restart) all MAVLink between the ground station and drone i's
+        PX4, like a radio dropping out.
+
+        PX4 can't notice by itself in the sim: the simulator sends it GCS
+        heartbeats of its own on its control link (mavlink_api.cpp), so PX4
+        never loses "a ground station". This stands in for PX4's link-loss
+        failsafe: after COM_DL_LOSS_T it sends PX4 its NAV_DLL_ACT action."""
+        if not cut:
+            self.connections[i].outage = False
+            projectairsim_log().warning(f"Sim: {self.links[i].name} link restored")
+            return
+        if self.connections[i].outage:
+            return
+        link = self.links[i]
+
+        def run():
+            # Read PX4's own setting while the link is still up
+            action = link.get_param("NAV_DLL_ACT", timeout=1.0)
+            delay = link.get_param("COM_DL_LOSS_T", timeout=1.0) or 10.0
+            self.connections[i].outage = True
+            projectairsim_log().warning(f"Sim: {link.name} link CUT")
+            deadline = time.monotonic() + delay
+            while time.monotonic() < deadline:
+                if not self.connections[i].outage:
+                    return  # restored in time
+                time.sleep(0.2)
+            command = {1: (M.MAV_CMD_DO_SET_MODE, M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 4, 3),
+                       2: (M.MAV_CMD_NAV_RETURN_TO_LAUNCH,),
+                       3: (M.MAV_CMD_NAV_LAND,)}.get(int(action or 0))
+            if command is None or not link.armed:
+                return
+            params = list(command[1:]) + [0.0] * (7 - len(command[1:]))
+            link.conn.send_as(link.compid, lambda mav: mav.command_long_send(
+                link.sysid, 1, command[0], 0, *params), bypass_outage=True)
+            projectairsim_log().warning(
+                f"Sim: {link.name} without its ground station for {delay:.0f} s: PX4's "
+                f"link-loss failsafe (NAV_DLL_ACT {int(action)}) acts")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def set_battery(self, i, pct):
+        """Bring drone i's simulated battery to pct within seconds, and keep it
+        there while armed (it resets to full when disarmed)."""
+        self._set_params(i, [("SIM_BAT_MIN_PCT", float(pct)), ("SIM_BAT_DRAIN", self.FAST_DRAIN_S)])
+        projectairsim_log().warning(f"Sim: {self.links[i].name} battery set to {pct}%")
+
+    def restore(self, i):
+        """Undo the faults: reconnect, and the battery back to normal."""
+        self.cut_link(i, False)
+        self._set_params(i, [("SIM_BAT_MIN_PCT", self.NORMAL_FLOOR_PCT),
+                             ("SIM_BAT_DRAIN", self.NORMAL_DRAIN_S)])
+
+    def reset(self, i):
+        """restore(), and restart drone i's simulated hardware in PX4 (the
+        battery and power simulators), e.g. after PX4's battery simulator has
+        hung and PX4 refuses to arm with "Battery unhealthy". Restarting all of
+        PX4 isn't possible without reloading the scene for every drone (goto)."""
+        self.restore(i)
+        name = self.links[i].name
+
+        def run():
+            failed = self.px4s[i].restart_modules()
+            if failed:
+                projectairsim_log().warning(f"Sim: {name} reset: {'; '.join(failed)}")
+            else:
+                projectairsim_log().info(f"Sim: {name} reset (link, battery, PX4's simulated "
+                                         "hardware)")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _set_params(self, i, params):
+        # In the background: PX4's confirmation can't arrive while the link is cut
+        def run():
+            for name, value in params:
+                self.links[i].set_param(name, value, timeout=1.0, bypass_outage=True)
+
+        threading.Thread(target=run, daemon=True).start()
+
+
 def share_sim_logging():
     """The ground station logs to Project AirSim's log file and terminal too."""
     gcs_log.setLevel(logging.DEBUG)
@@ -742,12 +896,18 @@ async def main():
     args = parse_args()
     quiet_terminal(args.verbose)
     share_sim_logging()
-    if args.fleet:
-        fleet = load_fleet(args.fleet)
-        args.drones = len(fleet.drones)
-        companions = fleet.companions
-    else:
-        companions = {0: args.companion} if args.companion else {}
+    # The config file, then the command line on top
+    config = load_fleet(args.config) if os.path.exists(args.config) else Fleet(drones=[])
+    args.drones, companions = sim_drones(config if config.drones else None, args.drones,
+                                         args.companion)
+    if args.layer_step is not None:
+        config.swarm.layer_step_m = args.layer_step
+    projectairsim_log().info(
+        f"Config {args.config if os.path.exists(args.config) else '(defaults)'}: "
+        f"{args.drones} drone{'s' if args.drones != 1 else ''}"
+        + (f", companions {', '.join(f'Drone{i + 1} {ip}' for i, ip in companions.items())}"
+           if companions else "")
+        + f", height layers {config.swarm.layer_step_m:g} m")
     if args.scene and args.drones != 1:
         raise SystemExit("--drones needs a generated Cesium scene; it can't be used with --scene")
     camera = CameraProperties(args.camera_props if os.path.exists(args.camera_props) else None)
@@ -779,11 +939,13 @@ async def main():
             links,
             lambda i, link, windows: SimPayload(link, windows, sim_cameras[i], rtsps[i], camera),
             companions=companions,
-            layer_step=args.layer_step,
+
             extra_commands=lambda line, parts: sim_command(session, line, parts),
             extra_help=SIM_HELP,
             extra_objects=lambda: sim_objects(session),
             extra_status=lambda: sim_status(session),
+            config=config,
+            sim_faults=SimFaults(connections, links, session.px4s),
         )
         session.station = station
         projectairsim_log().addHandler(station.dashboard_log)
@@ -803,7 +965,7 @@ async def main():
             )
             await wait_while_sim_alive(session)
         elif args.drones == 1:
-            await fly_gimbal_demo(session.drones[0], links[0])
+            await fly_gimbal_demo(session.drones[0], links[0], sweep=0 not in companions)
         else:
             home = session.world.home_geo_point
             heading = DEFAULT_HEADING if args.heading is None else args.heading

@@ -44,6 +44,20 @@ The status panel shows whether each companion's video is arriving and
 whether it is tracking. The GimbalCam title shows the gimbal's real angle,
 reported by PX4, since X is the one moving it.
 
+## Who controls the camera
+
+| | Drone with a companion | Drone without |
+|---|---|---|
+| Gimbal | **X**, through PX4's gimbal manager: the dashboard's keys go to X | The ground station, through PX4's gimbal manager |
+| Zoom | **X** (`ZOOM:IN/OUT`), forwarded by PX4 to the camera | The ground station (in the sim, the sim camera directly) |
+| Console `gimbal` / `zoom` | Refused, with a pointer to the keys | Steer / zoom directly |
+| GimbalCam title | `(via X)` | `(via PX4)` |
+
+So the ground station never takes the camera from X. X keeps it too: with
+`MAVLINK_RECLAIM_GIMBAL` (on in `rknn-sim`) it takes the gimbal back when PX4
+hands it away around takeoff and return-home, and it repeats a held jog every
+0.5 s, as PX4 drops a gimbal rate that isn't refreshed within 2 s.
+
 ## How it works
 
 `gcs/companion.py` speaks X's ground-station protocol, the same as A5X's

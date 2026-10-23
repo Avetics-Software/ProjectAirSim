@@ -10,7 +10,7 @@
 #   ./run_cesium_sim.sh --qgc --spotter                   # fly from QGC, with a spotter
 #   ./run_cesium_sim.sh --qgc --drones 3                  # a swarm of 3 PX4 drones
 #   ./run_cesium_sim.sh --px4-params my.params --pi-ip 192.168.199.73 --qgc
-#   ./run_cesium_sim.sh --qgc --fleet my_fleet.yml        # drones and companions from a file
+#   ./run_cesium_sim.sh --qgc --config my_config.yml      # another config file
 #
 # Launcher options (everything else goes to px4_gimbal_cesium.py, see --help):
 #   --vehicle quad|vtol    airframe (default quad; vtol is not available yet)
@@ -22,9 +22,11 @@
 #                          UDP ports --pi-ports (default 15540,15541), and
 #                          announce the video at rtsp://<this laptop>:8554/gimbal
 #   --pi-ports P1[,P2...]  companion-computer MAVLink ports
-#   --fleet FILE           the drones and each one's companion computer, as for
-#                          the real-drone ground station (gcs/fleet.example.yml);
-#                          replaces --drones and --pi-ip
+#   --config FILE          the drones, their companions and the ground station's
+#                          settings [config.yml next to this script]; the same
+#                          format as the real-drone ground station's fleet file
+#                          (gcs/fleet.example.yml). --drones, --pi-ip and
+#                          --layer-step override it. (--fleet is the same.)
 #   --edit-actors          first open the map editor for the moving actors
 #                          (actor_editor.py) in the browser; the sim starts
 #                          after you press "Save & start"
@@ -62,7 +64,7 @@ main() {
     [ -f "$SCRIPT_DIR/px4_params.parm" ] && PX4_PARAM_FILES+=("$SCRIPT_DIR/px4_params.parm")
     PI_IP=""
     PI_PORTS="15540,15541"
-    FLEET=""
+    CONFIG="$SCRIPT_DIR/config.yml"
     EDIT_ACTORS=0
     SCRIPT_ARGS=()
     while [ $# -gt 0 ]; do
@@ -71,7 +73,7 @@ main() {
             --px4-params) PX4_PARAM_FILES+=("$(realpath "$2")"); shift 2 ;;
             --pi-ip) PI_IP="$2"; shift 2 ;;
             --pi-ports) PI_PORTS="$2"; shift 2 ;;
-            --fleet) FLEET="$(realpath "$2")"; SCRIPT_ARGS+=(--fleet "$FLEET"); shift 2 ;;
+            --config|--fleet) CONFIG="$(realpath "$2")"; shift 2 ;;
             --edit-actors) EDIT_ACTORS=1; shift ;;
             *) SCRIPT_ARGS+=("$1"); shift ;;
         esac
@@ -128,24 +130,28 @@ main() {
         (cd "$SCRIPT_DIR" && "$PYTHON" actor_editor.py "${EDITOR_ARGS[@]}")
     fi
 
-    # Each drone's PX4 connects to the sim on TCP 4560 + its index
-    DRONES=1
+    # The drones and their companions: the config file, with --drones and
+    # --pi-ip on top (the same rule px4_gimbal_cesium.py applies)
+    DRONES_ARG=""
     i=0
     while [ $i -lt ${#SCRIPT_ARGS[@]} ]; do
-        [ "${SCRIPT_ARGS[$i]}" = "--drones" ] && DRONES="${SCRIPT_ARGS[$((i + 1))]}"
+        [ "${SCRIPT_ARGS[$i]}" = "--drones" ] && DRONES_ARG="${SCRIPT_ARGS[$((i + 1))]}"
         i=$((i + 1))
     done
-    COMPANIONS="$PI_IP"
-    if [ -n "$FLEET" ]; then
-        # The fleet file sets the drones and their companion computers
-        read -r DRONES COMPANIONS < <(cd "$SCRIPT_DIR" && "$PYTHON" -c '
-import sys
-from gcs.fleet import load_fleet
-fleet = load_fleet(sys.argv[1])
-print(len(fleet.drones), ",".join(d.companion or "-" for d in fleet.drones))
-' "$FLEET")
-        PI_IP=""
+    SCRIPT_ARGS=(--config "$CONFIG" ${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"})
+    read -r DRONES COMPANIONS < <(cd "$SCRIPT_DIR" && "$PYTHON" -c '
+import os, sys
+from gcs.fleet import load_fleet, sim_drones
+path, drones, pi_ip = sys.argv[1], sys.argv[2], sys.argv[3]
+fleet = load_fleet(path) if os.path.exists(path) else None
+count, companions = sim_drones(fleet, int(drones) if drones else None, pi_ip or None)
+print(count, ",".join(companions.get(i, "-") for i in range(count)))
+' "$CONFIG" "$DRONES_ARG" "$PI_IP")
+    if [ -z "${DRONES:-}" ]; then
+        echo "Couldn't read the config file $CONFIG (see the error above)" >&2
+        exit 1
     fi
+    # Each drone's PX4 connects to the sim on TCP 4560 + its index
     PORTS="8989 8990"
     for ((n = 0; n < DRONES; n++)); do PORTS="$PORTS $((4560 + n))"; done
     for port in $PORTS; do

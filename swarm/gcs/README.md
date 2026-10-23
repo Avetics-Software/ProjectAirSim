@@ -5,7 +5,7 @@ the Cesium sim, for real PX4 drones. It reaches the drones only through MAVLink,
 their video streams and their companions' UDP, so the sim and real drones run
 the same code:
 
-- **Sim:** `./run_cesium_sim.sh --qgc --drones 3` (or `--fleet`); see
+- **Sim:** `./run_cesium_sim.sh --qgc --drones 3` (settings in `swarm/config.yml`); see
   [docs/simulation.md](../docs/simulation.md).
 - **Real drones:** `python -m gcs --fleet my_fleet.yml`
 
@@ -19,7 +19,9 @@ python -m gcs --fleet my_fleet.yml     # from the folder that contains gcs/
 
 ## The fleet file
 
-`fleet.example.yml` has every key. In short:
+`fleet.example.yml` shows the drone keys; the settings sections (`swarm:`,
+`deconfliction:`, `safety:`, `controls:`) are the same as in the sim's
+`../config.yml`, which lists every key with its default. In short:
 
 ```yaml
 mavlink: udpin:0.0.0.0:14550     # the link carrying every drone (radio, mesh, mavlink-router)
@@ -53,6 +55,11 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
   can watch and take over at any time.
 - **Deconfliction:** height layers, the crossing check and the separation
   monitor, as in the sim.
+- **Safety:** each drone's battery, GPS and link on its status line, alerts,
+  `HOLD ALL` / `RTL ALL` (Ctrl+H holds all), low-battery and lost-link
+  responses, and a geofence uploaded to every PX4. The drawer (F2) has the
+  detail; thresholds go in the fleet file's `safety:` section. See
+  [docs/features/safety.md](../docs/features/safety.md).
 - **Cameras:** the selected drone's `video` in the GimbalCam pane and
   `chase_video` (if any) in the ChaseCam pane. Without a companion, W/A/S/D
   steer the gimbal through PX4's gimbal manager and the zoom keys send
@@ -65,10 +72,12 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
 - **Firmware.** Gimbal control assumes PX4 with its gimbal manager
   (`MNT_MODE_IN=4`, `MNT_MODE_OUT=2`). An ArduPilot drone, or a gimbal driven
   directly by the companion (e.g. a DS60), needs checking first.
-- **The separation monitor runs on the ground.** It works only while the link
-  holds, and it was tuned on the sim's clean GPS. Treat it as advisory, on top
-  of each drone's own failsafes (geofence, data-link-loss action), not as the
-  safety system.
+- **Set each PX4's own failsafes:** `NAV_DLL_ACT` / `COM_DL_LOSS_T` (link
+  loss), the battery thresholds and `COM_LOW_BAT_ACT`, and upload the
+  geofence. The ground station's responses and separation monitor come on top
+  and only work while the link holds; the monitor was tuned on the sim's clean
+  GPS (its margins widen with reported GPS inaccuracy). Treat them as advisory,
+  not as the safety system.
 - **Link bandwidth.** The monitor needs positions several times a second from
   every drone. A low-rate radio shared by many drones may not deliver that;
   watch the `position N/s` rate in `status`.
@@ -82,9 +91,11 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
 | `dashboard.py` | The Tk dashboard window |
 | `mavlink_link.py` | `MavConnection` (a link shared by several drones) and `VehicleLink` (one drone) |
 | `swarm.py`, `search_planner.py` | Swarm commands, area search, deconfliction |
+| `safety.py`, `safety_panel.py` | Health alerts and responses; the safety drawer (F2) |
 | `companion.py`, `video.py` | X on a companion computer; RTSP video readers |
 | `minimap.py`, `road_routes.py` | The map and its OpenStreetMap roads |
-| `fleet.py`, `fleet.example.yml` | The fleet file |
+| `fleet.py`, `fleet.example.yml` | The fleet file: drones and settings sections |
+| `settings.py` | Swarm, deconfliction and control settings (sections of the fleet file) |
 
 The sim launcher (`px4_gimbal_cesium.py`) builds a `GroundStation` with sim
 cameras (`SimPayload`) and adds its own commands, map objects and status

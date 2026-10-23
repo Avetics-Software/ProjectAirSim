@@ -8,8 +8,11 @@ catching what the one before can miss.
 
 Drone N flies (N − 1) × 5 m above the height asked for: `all takeoff 30` puts
 Drone1 at 30 m, Drone2 at 35 m, Drone3 at 40 m. Routes that cross then pass at
-different heights. Set the step with `--layer-step` in the sim or `layer_step`
-in the fleet file (0 turns it off).
+different heights. Set the step as `layer_step_m` in the config file's
+`swarm:` section (`swarm/config.yml` in the sim, the fleet file for real
+drones), or with `--layer-step` in the sim; 0 puts every drone at the height
+asked for. The separations, look-ahead and give-way distances below are the
+config file's `deconfliction:` section.
 
 ## 2. Crossing check, when a route is planned
 

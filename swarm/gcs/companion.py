@@ -28,12 +28,13 @@ from .video import VideoStream
 COMMAND_PORT = 5556  # X's GCS_INPUT_PORT: tracking, control and heartbeat
 TRACKER_PORT = 8554  # the companion's MediaMTX
 HEARTBEAT_PERIOD_S = 0.2
-ZOOM_PULSE_S = 0.4  # one wheel notch zooms this long, then ZOOM:STOP
+ZOOM_PULSE_S = 0.4  # one wheel notch zooms this long, then ZOOM:STOP (controls: setting)
 
 
 class CompanionLink:
-    def __init__(self, ip, name="companion", port=COMMAND_PORT):
+    def __init__(self, ip, name="companion", port=COMMAND_PORT, zoom_pulse_s=ZOOM_PULSE_S):
         self.ip = ip
+        self.zoom_pulse_s = zoom_pulse_s
         self.name = name
         self.addr = (ip, port)
         self.tracker_url = f"rtsp://{ip}:{TRACKER_PORT}/tracker"
@@ -50,6 +51,8 @@ class CompanionLink:
     # Commands
 
     def send(self, text):
+        if not text.startswith("HEARTBEAT"):
+            log.debug(f"{self.name} <- {text}")  # what the operator sent, for the log
         try:
             self.sock.sendto(text.encode(), self.addr)
         except OSError as err:
@@ -87,7 +90,7 @@ class CompanionLink:
         self.send("ZOOM:IN" if step > 0 else "ZOOM:OUT")
         if self._zoom_timer:
             self._zoom_timer.cancel()
-        self._zoom_timer = threading.Timer(ZOOM_PULSE_S, lambda: self.send("ZOOM:STOP"))
+        self._zoom_timer = threading.Timer(self.zoom_pulse_s, lambda: self.send("ZOOM:STOP"))
         self._zoom_timer.daemon = True
         self._zoom_timer.start()
 
