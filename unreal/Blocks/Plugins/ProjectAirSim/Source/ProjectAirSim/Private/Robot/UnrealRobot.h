@@ -77,6 +77,9 @@ class AUnrealRobot : public AActor {
 
   const microsoft::projectairsim::Kinematics& GetKinematics() const;
 
+  // The robot's name in the scene config (e.g. "Drone1")
+  const std::string& GetRobotId() const { return SimRobot.GetID(); }
+
   bool SetNextStreamingCapture();
 
   UUnrealCamera* GetActiveStreamingCamera();

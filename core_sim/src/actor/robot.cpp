@@ -1409,12 +1409,17 @@ void Robot::Impl::UpdateActuators(const TimeNano sim_time,
   // Initialize container to publish rotor parameters
   std::vector<RotorInfo> rotor_info_vec;
 
+  // The robot's heading, for gimbals holding a compass heading (yaw lock)
+  // or smoothly following the robot's turns
+  const float vehicle_yaw =
+      TransformUtils::ToRPY(kinematics_.pose.orientation).z();
+
   // Update non-tilt actuators
   for (auto& actuator : actuators_) {
     if (actuator->GetType() == ActuatorType::kGimbal) {
       auto gimbal_signal = controller_->GetGimbalSignal(actuator->GetId());
       auto gimbal = static_cast<Gimbal&>(*actuator);
-      gimbal.UpdateGimbal(gimbal_signal, sim_dt_nanos);
+      gimbal.UpdateGimbal(gimbal_signal, sim_dt_nanos, vehicle_yaw);
     } else if (actuator->GetType() != ActuatorType::kTilt) {
       // Do pre-processing specific to actuator type
       if (actuator->GetType() == ActuatorType::kRotor) {

@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 
+#include "Containers/Ticker.h"
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
 #include "Renderers/GISRenderer.h"
@@ -53,8 +54,20 @@ class PROJECTAIRSIM_API AUnrealSimLoader {
 
 #ifdef ENABLE_CESIUM
   void ConfigureCesiumTileset(ACesium3DTileset* CesiumTile,
-                              projectairsim::GeoPoint& HomeGeoPoint,
-                              FString TilesetDir);
+                              microsoft::projectairsim::GeoPoint& HomeGeoPoint,
+                              float TilesAltitudeOffset, FString TilesetDir);
+
+  // Hidden, collision-only bare-earth terrain (Cesium World Terrain) that
+  // moving objects drive on where trees or bridges overhang the road
+  void SpawnBareEarthTerrain(microsoft::projectairsim::GeoPoint& HomeGeoPoint,
+                             float TilesAltitudeOffset);
+
+  // Photorealistic tiles are unlit and so cast no shadows; turn shadows on
+  // for each tile as it loads, so tree canopies and buildings shade the
+  // objects under them
+  void StartTileShadows(ACesium3DTileset* CesiumTile);
+
+  void DestroyCesiumTilesets();
 #endif
 
   void SetUnrealEngineSettings();
@@ -82,6 +95,12 @@ class PROJECTAIRSIM_API AUnrealSimLoader {
   AUnrealScene* UnrealScene;
   AGISRenderer* GISRenderer;
   AUnrealSimTopicData* UnrealSimTopicData;
+
+#ifdef ENABLE_CESIUM
+  // Tilesets of the loaded scene, destroyed when it unloads
+  TArray<TWeakObjectPtr<ACesium3DTileset>> CesiumTilesets;
+  FTSTicker::FDelegateHandle TileShadowTicker;
+#endif
 
   std::ofstream SimLogFile;
 

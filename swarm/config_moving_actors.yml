@@ -1,0 +1,77 @@
+# People and vehicles that move around the Cesium world along paths.
+#
+# Each actor is spawned on the ground at the start of its path, then moved by
+# the sim every frame (it pauses with the sim). Fields:
+#   name:       unique name in the sim; also its identity in the ground-truth log
+#   kind:       person or vehicle; picks the defaults below
+#   a path, one of:
+#     waypoints:    [[lat, lon], ...] at least two points to walk/drive along.
+#                   Vehicles follow roads, runways and taxiways between them
+#                   (people walk straight); set follow_roads: true/false to
+#                   change that. A waypoint more than 50 m from a road, or a
+#                   leg the roads don't connect, is driven straight.
+#     route:        {from: [lat, lon], to: [lat, lon]} shortest way between two
+#                   points along OpenStreetMap roads (vehicles) or footpaths
+#                   (people); vehicles keep left
+#     random_route: {length_m: 1000, start: [lat, lon], start_radius_m: 400,
+#                   seed: 0} a random drive/walk along OpenStreetMap roads or
+#                   footpaths, from `start` or from somewhere within
+#                   start_radius_m of the drone's home. All fields optional;
+#                   the same name and seed always give the same route.
+#   count:      with random_route, spawn this many (named NAME_1, NAME_2, ...)
+#   mode:       loop (back to the first point), pingpong (back and forth) or
+#               once (stop at the end)    [default loop for waypoints, pingpong
+#               for road routes]. A vehicle on roads drives back by its own
+#               legal route (one-way streets, left lane) rather than reversing
+#               over its outbound path, so pingpong and loop both make it lap
+#               the round trip.
+#   Vehicles drive in the kerb-side (leftmost) lane, using OSM's lane counts.
+#   speed:      m/s
+#   start_delay: seconds to stand still before setting off        [default 0]
+#   asset:      Unreal asset to spawn (type `assets` in the run console to list)
+#   length:     scale so the longest horizontal side is this many metres
+#   scale:      [x, y, z] scale instead of length
+#   file:       your own .glb/.gltf model instead of asset (static, no animation)
+#   yaw_offset: degrees between the mesh's forward and the direction of travel
+#   align_to_ground: tilt with the slope (vehicles)
+#   walk_animation, idle_animation, animation_speed: for skeletal meshes; the
+#               walk animation plays at speed / animation_speed
+# Anything left out comes from `defaults` for the actor's kind.
+#
+# Edit this file while the sim is running and type `actors reload` to apply it.
+
+defaults:
+  person: {asset: SKM_Manny_Simple, speed: 1.4, yaw_offset: -90, walk_animation: MF_Unarmed_Walk_Fwd,
+    idle_animation: MM_Idle, animation_speed: 1.6}
+  vehicle: {asset: SKM_SportsCar, length: 4.5, speed: 10, align_to_ground: true}
+actors:
+- name: Vehicle1
+  kind: vehicle
+  speed: 15
+  mode: loop
+  waypoints:
+  - [1.415689, 103.866675]
+  - [1.417282, 103.867734]
+  - [1.416381, 103.869182]
+  - [1.414786, 103.868142]
+- name: Vehicle2
+  kind: vehicle
+  speed: 12
+  start_delay: 10
+  route:
+    from: [1.409005, 103.862289]
+    to: [1.415268, 103.866441]
+  mode: pingpong
+- name: Traffic
+  kind: vehicle
+  speed: 12
+  mode: loop
+  waypoints:
+  - [1.41, 103.860551]
+  - [1.411169, 103.861458]
+- name: Courier
+  kind: vehicle
+  speed: 15
+  route:
+    from: [1.4166, 103.8618]
+    to: [1.40894, 103.860691]

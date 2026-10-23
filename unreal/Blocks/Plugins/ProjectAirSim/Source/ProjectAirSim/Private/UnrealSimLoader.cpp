@@ -22,6 +22,7 @@
 #ifdef ENABLE_CESIUM
 #include "Cesium3DTileset.h"
 #include "CesiumGeoreference.h"
+#include "World/PathFollowerComponent.h"
 #endif
 
 namespace projectairsim = microsoft::projectairsim;
@@ -233,29 +234,114 @@ FString AUnrealSimLoader::ResolveTilesDirectory(
 #ifdef ENABLE_CESIUM
 void AUnrealSimLoader::ConfigureCesiumTileset(
     ACesium3DTileset* CesiumTile, projectairsim::GeoPoint& HomeGeoPoint,
-    FString TilesetDir) {
-  CesiumTile->Url = FString("file:///" + TilesetDir);
+    float TilesAltitudeOffset, FString TilesetDir) {
+  // ResolveTilesDirectory() appends a trailing slash meant for tile folders
+  TilesetDir.RemoveFromEnd(TEXT("/"));
+
+  // Tileset source:
+  //   ion://<asset id>   streamed from Cesium ion; token from CESIUM_ION_TOKEN
+  //   http(s)://...      streamed from a tileset.json URL
+  //   anything else      a local tileset.json file or its directory
+  if (TilesetDir.StartsWith(TEXT("ion://"))) {
+    const int64 AssetId = FCString::Atoi64(*TilesetDir.RightChop(6));
+    CesiumTile->SetTilesetSource(ETilesetSource::FromCesiumIon);
+    CesiumTile->SetIonAssetID(AssetId);
+
+    const FString IonToken =
+        FPlatformMisc::GetEnvironmentVariable(TEXT("CESIUM_ION_TOKEN"));
+    if (!IonToken.IsEmpty()) {
+      CesiumTile->SetIonAccessToken(IonToken);
+    } else {
+      UnrealLogger::Log(projectairsim::LogLevel::kWarning,
+                        TEXT("[AUnrealSimLoader] CESIUM_ION_TOKEN is not set; "
+                             "falling back to the project's default Cesium "
+                             "ion token."));
+    }
+  } else if (TilesetDir.StartsWith(TEXT("http://")) ||
+             TilesetDir.StartsWith(TEXT("https://"))) {
+    CesiumTile->SetTilesetSource(ETilesetSource::FromUrl);
+    CesiumTile->SetUrl(TilesetDir);
+  } else {
+    if (!TilesetDir.EndsWith(TEXT(".json"))) {
+      TilesetDir += TEXT("/tileset.json");
+    }
+    CesiumTile->SetTilesetSource(ETilesetSource::FromUrl);
+    CesiumTile->SetUrl(FString("file:///") + TilesetDir);
+  }
 
   // Disable culling and lower LODs since sensors might be independent from
   // frustum.
   CesiumTile->EnableFrustumCulling = false;
   CesiumTile->EnforceCulledScreenSpaceError = true;
-  CesiumTile->CulledScreenSpaceError = CesiumTile->MaximumScreenSpaceError;
+  CesiumTile->CulledScreenSpaceError =
+      CesiumTile->GetMaximumScreenSpaceError();
+
+  // Put the home geo point at the Unreal origin. Tiles use WGS84 ellipsoid
+  // heights, so add the geoid height (tiles-altitude-offset) to the home
+  // altitude to keep the ground at the home point near Z = 0.
+  ACesiumGeoreference* Georeference =
+      ACesiumGeoreference::GetDefaultGeoreference(UnrealWorld);
+  Georeference->SetOriginLongitudeLatitudeHeight(
+      FVector(HomeGeoPoint.longitude, HomeGeoPoint.latitude,
+              HomeGeoPoint.altitude + TilesAltitudeOffset));
+  CesiumTile->SetGeoreference(Georeference);
+
+  // Scenes can start paused (which pauses the Unreal game); keep streaming
+  // tiles and building their collision meanwhile so the ground is there when
+  // the simulation resumes
+  CesiumTile->SetTickableWhenPaused(true);
+  Georeference->SetTickableWhenPaused(true);
 
   auto CesiumRot = FRotator(
       0, 90, 0);  // to match cesium's ENU RHS coords with our NEU LHS coords.
-  auto CesiumLoc =
-      FVector(0.f, 0.f, 8844.f);  // TODO: can we get rid of this magic num and
-                                  // smartly pick a height for the tileset?
   UGameplayStatics::FinishSpawningActor(CesiumTile,
-                                        FTransform(CesiumRot, CesiumLoc));
+                                        FTransform(CesiumRot, FVector::ZeroVector));
+  CesiumTilesets.Add(CesiumTile);
+}
 
-  CesiumTile->Georeference->OriginLatitude = HomeGeoPoint.latitude;
-  CesiumTile->Georeference->OriginLongitude = HomeGeoPoint.longitude;
-  CesiumTile->Georeference->OriginHeight = HomeGeoPoint.altitude;
-  CesiumTile->Georeference->KeepWorldOriginNearCamera =
-      false;  // TODO: to maintain precision we should look into making this
-              // work.
+void AUnrealSimLoader::SpawnBareEarthTerrain(
+    projectairsim::GeoPoint& HomeGeoPoint, float TilesAltitudeOffset) {
+  auto Terrain = UnrealWorld->SpawnActorDeferred<ACesium3DTileset>(
+      ACesium3DTileset::StaticClass(), FTransform(), nullptr, nullptr,
+      ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+  // Only object-type queries for kBareEarthObjectType see it: it blocks no
+  // trace channel, so drones, cameras and ground lookups ignore it
+  Terrain->BodyInstance.SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+  Terrain->BodyInstance.SetObjectType(kBareEarthObjectType);
+  Terrain->BodyInstance.SetResponseToAllChannels(ECR_Ignore);
+  Terrain->SetActorHiddenInGame(true);
+  Terrain->Tags.Add(TEXT("ProjectAirSimBareEarth"));
+  // Cesium World Terrain: ellipsoid heights like the photorealistic tiles
+  ConfigureCesiumTileset(Terrain, HomeGeoPoint, TilesAltitudeOffset,
+                         TEXT("ion://1"));
+}
+
+void AUnrealSimLoader::StartTileShadows(ACesium3DTileset* CesiumTile) {
+  TWeakObjectPtr<ACesium3DTileset> Tileset(CesiumTile);
+  FTSTicker::GetCoreTicker().RemoveTicker(TileShadowTicker);
+  TileShadowTicker = FTSTicker::GetCoreTicker().AddTicker(
+      FTickerDelegate::CreateLambda([Tileset](float) {
+        if (!Tileset.IsValid()) return false;
+        TArray<UPrimitiveComponent*> Primitives;
+        Tileset->GetComponents(Primitives);
+        for (UPrimitiveComponent* Primitive : Primitives) {
+          if (!Primitive->CastShadow || !Primitive->bCastDynamicShadow) {
+            Primitive->bCastDynamicShadow = true;
+            Primitive->SetCastShadow(true);
+          }
+        }
+        return true;
+      }),
+      0.5f);
+}
+
+void AUnrealSimLoader::DestroyCesiumTilesets() {
+  FTSTicker::GetCoreTicker().RemoveTicker(TileShadowTicker);
+  TileShadowTicker.Reset();
+  for (const TWeakObjectPtr<ACesium3DTileset>& Tileset : CesiumTilesets) {
+    if (Tileset.IsValid()) Tileset->Destroy();
+  }
+  CesiumTilesets.Reset();
 }
 #endif
 
@@ -378,17 +464,30 @@ void AUnrealSimLoader::LoadUnrealScene() {
                   UnrealWorld->SpawnActorDeferred<ACesium3DTileset>(
                       ACesium3DTileset::StaticClass(), FTransform(), nullptr,
                       nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-              ConfigureCesiumTileset(CesiumTile, HomeGeoPoint, TilesDir);
+              ConfigureCesiumTileset(CesiumTile, HomeGeoPoint,
+                                     Scene.GetTilesAltitudeOffset(), TilesDir);
+              if (Scene.GetSegmentationSettings().initialize_ids) {
+                // Tiles stream in long after the segmentation IDs are
+                // initialized. Render every one into the custom depth pass as
+                // background (ID 0) so they hide segmented objects behind
+                // them; the segmentation image is otherwise not occluded.
+                FCustomDepthParameters CustomDepth;
+                CustomDepth.RenderCustomDepth = true;
+                CustomDepth.CustomDepthStencilValue = 0;
+                CesiumTile->SetCustomDepthParameters(CustomDepth);
+              }
+              StartTileShadows(CesiumTile);
+              SpawnBareEarthTerrain(HomeGeoPoint,
+                                    Scene.GetTilesAltitudeOffset());
               break;
 #else
               UnrealLogger::Log(
                   projectairsim::LogLevel::kTrace,
                   TEXT(
-                      "[AUnrealSimLoader] Integration with CesiumForUnreal is "
-                      "only enabled by default on Windows, defaulting to "
-                      "CustomGIS. For experimental support in other platforms, "
-                      "define ENABLE_CESIUM in ProjectAirSim.Build.cs before "
-                      "building."));
+                      "[AUnrealSimLoader] CesiumForUnreal was not found at "
+                      "build time, defaulting to CustomGIS. Install it in "
+                      "Plugins/CesiumForUnreal next to the ProjectAirSim "
+                      "plugin and rebuild to enable CesiumGIS scenes."));
 
           // will fall through to CustomGIS, since Cesium wasn't enabled.
 #endif
@@ -472,6 +571,11 @@ void AUnrealSimLoader::UnloadUnrealScene() {
           UnrealScene->Destroy();
           UnrealScene = nullptr;
         }
+
+#ifdef ENABLE_CESIUM
+        // Destroy the Cesium tilesets; otherwise each reload adds another
+        DestroyCesiumTilesets();
+#endif
 
         // Destroy GIS rendering actors if they exist
         if (GISRenderer) {
