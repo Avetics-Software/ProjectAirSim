@@ -1,0 +1,67 @@
+# From the sim to real drones
+
+The ground station in `gcs/` doesn't know whether its drones are simulated.
+It reaches them only through what a real drone offers too: MAVLink to PX4,
+video streams, and the companion computers' UDP. So whatever is flown and
+tuned in the Cesium sim at Seletar is the same code that flies the real swarm.
+
+## The same fleet file for both
+
+A fleet file lists the drones and how to reach each one
+([`gcs/fleet.example.yml`](../../gcs/fleet.example.yml) has every key):
+
+```yaml
+mavlink: udpin:0.0.0.0:14550        # the link carrying every drone
+drones:
+  - name: Drone1
+    sysid: 1
+    video: rtsp://192.168.144.25:8554/main
+    companion: 192.168.199.99
+  - name: Drone2
+    sysid: 2
+    companion: 192.168.199.100
+```
+
+| | Sim | Real drones |
+|---|---|---|
+| Run | `./run_cesium_sim.sh --qgc --fleet my_fleet.yml` | `python -m gcs --fleet my_fleet.yml` |
+| Drones | One PX4 SITL per drone, named Drone1, Drone2, ... | Your PX4s; each needs its own `MAV_SYS_ID` |
+| MAVLink | Each PX4 on its own UDP port (14030 + N) | One shared link (radio, mesh, mavlink-router), or one per drone |
+| Video | The sim's GimbalCam over RTSP (`/gimbal`, `/gimbal2`, ...) | Each drone's `video:` stream; `chase_video:` for a second camera |
+| Companions | `companion:` (PX4 sends it MAVLink on 15540/15541) | `companion:` |
+| Zoom | The sim's camera field of view | `MAV_CMD_SET_CAMERA_ZOOM` to the drone's MAVLink camera |
+| Extra | Objects, moving actors, `goto` a new location | |
+
+The sim reads only how many drones there are and their companions; the rest
+of the file is for real drones.
+
+## What is shared, and what isn't
+
+Shared, in `gcs/`: the dashboard, swarm commands, area search,
+deconfliction, the companion link, the map and status. All of it works from
+MAVLink telemetry; in the sim the map's drone positions come from PX4's GPS
+estimate, not the sim's ground truth, just as they would on real drones.
+
+Sim only, around it:
+
+- `px4_gimbal_cesium.py` loads the Cesium world, starts a PX4 per drone and
+  builds the ground station with sim cameras (`SimPayload`).
+- `payload_mavlink.py` pretends to be each drone's MAVLink camera, so QGC
+  and X can find the sim's video and zoom it. A real drone's camera does this
+  itself.
+- Spawned objects, moving actors and the spotter, for something to search for.
+
+## Sharing a link
+
+On a real fleet, one radio or mesh usually carries every drone. `gcs/`
+opens each link once and picks out each drone's messages by its system id.
+Replies addressed to someone else (QGC's mission uploads, say) are ignored,
+and the ground station identifies itself as system 245, not 255, so QGC can
+share the link at the same time.
+
+## Before flying it for real
+
+See [gcs/README.md](../../gcs/README.md#before-flying-it-for-real):
+gimbal control assumes PX4's gimbal manager; the separation monitor is
+advisory and depends on the link; and it needs several positions per second
+from every drone, so check the rate in `status` on your radio.

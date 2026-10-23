@@ -1,8 +1,9 @@
-# PX4 gimbal drone in a Cesium world
+# Simulation guide: PX4 drones in a Cesium world
 
 Flies a PX4 quadrotor with a gimbaled payload camera (GimbalCam) over real-world
 Google 3D tiles streamed through Cesium for Unreal. The default spawn is Seletar
-Airport's runway, Singapore.
+Airport's runway, Singapore. For what the project is and its other docs, see the
+[README](../README.md).
 
 ## Prerequisites
 
@@ -20,7 +21,7 @@ Airport's runway, Singapore.
 ## Running
 
 ```bash
-cd ~/Documents/ProjectAirSim/client/python/example_user_scripts
+cd ~/Documents/ProjectAirSim/swarm
 ./run_cesium_sim.sh [options]
 ```
 
@@ -283,7 +284,7 @@ nothing about the other drones), so the swarm does it in three layers:
 
 The dashboard, swarm control and deconfliction are the ground station in
 `gcs/`, which flies real PX4 drones with the same code; see
-[gcs/README.md](gcs/README.md).
+[gcs/README.md](../gcs/README.md).
 
 The dashboard shows the selected drone's cameras; the minimap shows all drones
 (the selected one yellow, the others blue), where each is heading and its

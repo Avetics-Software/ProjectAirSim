@@ -47,7 +47,7 @@ set -euo pipefail
 main() {
 
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+    REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
     UE_ROOT="${UE_ROOT:-$HOME/UnrealEngine-5.7}"
     PX4_DIR="${PX4_DIR:-$HOME/Documents/PX4-Autopilot}"

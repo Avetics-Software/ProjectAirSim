@@ -6,7 +6,7 @@ their video streams and their companions' UDP, so the sim and real drones run
 the same code:
 
 - **Sim:** `./run_cesium_sim.sh --qgc --drones 3` (or `--fleet`); see
-  [README_cesium_gimbal.md](../README_cesium_gimbal.md).
+  [docs/simulation.md](../docs/simulation.md).
 - **Real drones:** `python -m gcs --fleet my_fleet.yml`
 
 Nothing here imports Project AirSim. To use it on a field laptop, copy this
@@ -38,7 +38,7 @@ Every drone needs a unique `MAV_SYS_ID` on its PX4.
 
 ## What it does on real drones
 
-The same dashboard and commands as the sim (see the sim README's *Swarm* and
+The same dashboard and commands as the sim (see the sim guide's *Swarm* and
 *Camera and gimbal* sections):
 
 - **Status and map:** each drone's mode, arming, height, heading and speed,

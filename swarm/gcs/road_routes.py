@@ -26,7 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-# Next to the gcs package (example_user_scripts/osm_cache in the repo), shared
+# Next to the gcs package (swarm/osm_cache in the repo), shared
 # by the sim's moving actors and the ground station's map
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "osm_cache")
 # The main Overpass server, then a mirror; both get busy at times

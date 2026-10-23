@@ -14,7 +14,7 @@ UE_ROOT="${UE_ROOT:-$HOME/UnrealEngine-5.7}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$UE_ROOT/Templates/TemplateResources/High/Characters/Content/Mannequins"
 # The template assets reference /Game/Characters/Mannequins/..., so keep that path
-DEST="$SCRIPT_DIR/../../../unreal/Blocks/Content/Characters/Mannequins"
+DEST="$SCRIPT_DIR/../unreal/Blocks/Content/Characters/Mannequins"
 
 if [ ! -d "$SRC" ]; then
     echo "Mannequin template not found at $SRC; set UE_ROOT to your UE 5.7 install." >&2
