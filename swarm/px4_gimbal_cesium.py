@@ -70,11 +70,12 @@ from gcs.mavlink_link import M, VehicleLink
 from gcs.minimap import road_segments
 from gcs.station import DroneCamera, GroundStation
 from gcs.swarm import search_demo
+from gt_capture import GroundTruthRecorder, add_segmentation_capture, kind_of_asset
 from payload_mavlink import SimCamera, payload_connection
 from payload_video import RtspStreamer, image_to_bgr
 from px4_sitl import Px4Sitl
 from shared_frame import SharedFrameWriter
-from moving_actors import ACTORS_HELP, MovingActorManager
+from moving_actors import ACTORS_HELP, GROUND_TRUTH_KEEP, MovingActorManager
 from spawned_objects import CONSOLE_HELP, ObjectSpawner
 from track_test import run_track_test
 
@@ -210,6 +211,21 @@ def parse_args():
         "under the drone (default 90)",
     )
     parser.add_argument(
+        "--ground-truth",
+        nargs="?",
+        const=os.path.join(os.path.dirname(SCRIPT_DIR), "datasets", "sim_gt"),
+        metavar="DIR",
+        help="save labelled GimbalCam frames from every drone (YOLO labels, plus "
+        "each box's actor for scoring tracking and ReID) under DIR "
+        "[datasets/sim_gt in the ProjectAirSim checkout]; see gt_capture.py. Costs a second render per GimbalCam",
+    )
+    parser.add_argument(
+        "--gt-rate",
+        type=float,
+        default=2.0,
+        help="labelled frames saved per second per drone with --ground-truth (default 2)",
+    )
+    parser.add_argument(
         "--scene",
         help="load this scene config from sim_config/ as-is instead of building "
         "one from --lat/--lon",
@@ -230,14 +246,16 @@ def lookup_ground_alt(lat, lon):
         return 0.0
 
 
-def build_robot(camera, index=0):
+def build_robot(camera, index=0, ground_truth=False):
     """Write the payload robot config for drone `index` (0-based) and return its
     name. Each drone talks to its own PX4 instance, whose ports are offset by
-    the index."""
+    the index. ground_truth: the GimbalCam also renders segmentation."""
     with open(os.path.join(SIM_CONFIG_DIR, TEMPLATE_ROBOT)) as f:
         robot = commentjson.load(f)
     sensors = {s["id"]: s for s in robot["sensors"]}
     camera.apply_to_camera_config(sensors["GimbalCam"])
+    if ground_truth:
+        add_segmentation_capture(sensors["GimbalCam"])
     px4 = robot["controller"]["px4-settings"]
     px4["tcp-port"] += index
     px4["control-port"] += index
@@ -297,6 +315,9 @@ def build_scene(args, robot_configs):
     scene["actors"][0:1] = drones
     scene["home-geo-point"] = {"latitude": lat, "longitude": lon, "altitude": ground_alt}
     scene["tiles-altitude-offset"] = args.geoid
+    # Only ground-truth capture uses segmentation. Its IDs put the Cesium tiles
+    # in the custom depth pass too (to occlude), which costs GPU otherwise wasted
+    scene.setdefault("segmentation", {})["initialize-ids"] = bool(args.ground_truth)
     if args.spotter:
         # Carries the spotter's first-person camera; spotter_control.py moves it
         scene["actors"].append(
@@ -349,6 +370,7 @@ class SimPayload(DroneCamera):
         self.camera_rotation = None
         self.camera_pose = None  # ((x, y, z), (w, x, y, z)) of the latest frame
         self.pose_wanted = 0  # >0 while a test needs camera_pose
+        self.ground_truth = None  # GroundTruthRecorder with --ground-truth
         self._attitude_t0 = 0.0
 
     def attach(self, client, drone):
@@ -436,6 +458,8 @@ class SimPayload(DroneCamera):
         ):
             focal = self.camera.focal_length(self.zoom_percent)
             self.drone.set_field_of_view("GimbalCam", 0, self.camera.hfov_deg(focal))
+            if self.ground_truth:
+                self.ground_truth.set_fov(self.drone, self.camera.hfov_deg(focal))
             self.applied_zoom = self.zoom_percent
             self.sim_camera.publish_zoom(self.zoom_percent)
 
@@ -458,6 +482,7 @@ GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a ne
   sim attitude [SECONDS] [N]            log drone N's attitude and its camera's (stabilisation)
   sim tracktest [N] [follow|lock]       fly hard while pointing the gimbal at a ground target,
                                         and measure how well it stays in frame
+  gt                                    --ground-truth: frames and boxes saved so far
   sim cut N | sim battery N PCT | sim reset N|all
                                         simulate a lost link or low battery on drone N;
                                         reset undoes them and restarts the drone's
@@ -487,6 +512,9 @@ async def sim_command(session, line, parts):
     elif word == "actors":
         if session.actors:
             session.actors.run_command(parts[1:])
+    elif word == "gt":
+        print(session.ground_truth.status() if session.ground_truth
+              else "Ground-truth capture is off (start with --ground-truth)")
     elif word == "sim" and len(parts) >= 2 and parts[1] == "tracktest":
         # sim tracktest [N] [follow|lock]
         args = parts[2:]
@@ -541,13 +569,21 @@ async def sim_command(session, line, parts):
 
 
 async def run_ground_truth(session):
-    """Log where the moving actors are, for scoring detection and ReID."""
+    """Log where the moving actors are, for scoring detection and ReID, and
+    keep --ground-truth's labels in step with actors spawned or deleted."""
+    next_refresh = 0.0
     while True:
         if not session.loading and session.actors:
             try:
                 session.actors.log_ground_truth()
             except Exception as err:  # e.g. the scene is reloading under us
                 projectairsim_log().debug(f"Ground-truth log skipped: {err}")
+        if not session.loading and session.ground_truth and time.monotonic() >= next_refresh:
+            next_refresh = time.monotonic() + 2.0
+            try:
+                session.refresh_ground_truth()
+            except Exception as err:
+                projectairsim_log().debug(f"Ground-truth labels not refreshed: {err}")
         await asyncio.sleep(0.05)
 
 
@@ -698,13 +734,14 @@ class Session:
         # Each PX4 also opens MAVLink links to its drone's companion computer
         self.px4s = [Px4Sitl(i, pi_ip=companions.get(i, "")) for i in range(drones)]
         self.robot_configs = (
-            None if args.scene else [build_robot(camera, i) for i in range(drones)]
+            None if args.scene else [build_robot(camera, i, bool(args.ground_truth)) for i in range(drones)]
         )
         self.object_counts = {}
         self.world = None
         self.drones = []
         self.spawner = None
         self.actors = None
+        self.ground_truth = None  # GroundTruthRecorder with --ground-truth
         self.spotter = None
         self.loading = False
         # The spotter window runs in its own process, which can't receive camera
@@ -788,12 +825,23 @@ class Session:
             # Ground lookups only see Cesium's collision once the sim is running
             self.spawner = ObjectSpawner(self.world, args.objects)
             self.spawner.spawn_from_config()
+            if args.ground_truth and self.ground_truth is None:
+                self.ground_truth = GroundTruthRecorder(
+                    self.world, args.ground_truth, rate_hz=args.gt_rate
+                )
             if args.actors:
+                # With --ground-truth, the actor log goes beside the labelled
+                # frames, every one of them (one per scene load)
                 self.actors = MovingActorManager(
-                    self.world, args.actors, os.environ.get("LOG_DIR", "/tmp/projectairsim-run"),
+                    self.world, args.actors,
+                    self.ground_truth.dir if self.ground_truth
+                    else os.environ.get("LOG_DIR", "/tmp/projectairsim-run"),
                     camera=("Drone1", "GimbalCam"),
+                    keep_logs=None if self.ground_truth else GROUND_TRUTH_KEEP,
                 )
                 self.actors.spawn_from_config()
+            if args.ground_truth:
+                self._start_ground_truth()
             self._load_map_roads()
 
             if args.spotter:
@@ -836,6 +884,28 @@ class Session:
             projectairsim_log().warning(f"Minimap has no roads: {err}")
         self.station.set_home(home["latitude"], home["longitude"], roads)
 
+    def _start_ground_truth(self):
+        """Label the new scene's actors and record every drone's GimbalCam."""
+        self.ground_truth.new_scene(self.world)
+        for payload, drone in zip(self.station.cameras, self.drones):
+            self.ground_truth.attach(self.client, drone)
+            payload.ground_truth = self.ground_truth
+            payload.applied_zoom = None  # reapplies the FOV, the segmentation's with it
+        self.refresh_ground_truth()
+
+    def refresh_ground_truth(self):
+        """Keep the recorder's segmentation IDs in step with what is spawned:
+        moving actors, and static objects that are vehicles or people."""
+        kinds = {name: a["kind"] for name, a in (self.actors.actors if self.actors else {}).items()}
+        others = []
+        for name, source in (self.spawner.sources if self.spawner else {}).items():
+            kind = kind_of_asset(source)
+            if kind:
+                kinds[name] = kind
+            else:
+                others.append(name)
+        self.ground_truth.refresh(kinds, others)
+
     def _stop_spotter(self):
         if self.spotter:
             self.spotter.terminate()
@@ -845,6 +915,8 @@ class Session:
         self._stop_spotter()
         if self.actors:
             self.actors.close()
+        if self.ground_truth:
+            self.ground_truth.close()
         for px4 in self.px4s:
             px4.stop()
         if self.pov_frames:
@@ -985,6 +1057,8 @@ async def main():
         + f", height layers {config.swarm.layer_step_m:g} m")
     if args.scene and args.drones != 1:
         raise SystemExit("--drones needs a generated Cesium scene; it can't be used with --scene")
+    if args.scene and args.ground_truth:
+        raise SystemExit("--ground-truth needs a generated Cesium scene; it can't be used with --scene")
     camera = CameraProperties(args.camera_props if os.path.exists(args.camera_props) else None)
     projectairsim_log().info(f"GimbalCam {camera.describe()}")
 

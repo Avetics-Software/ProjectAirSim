@@ -114,6 +114,8 @@ and mission are cleared: PX4 keeps both on disk across restarts.
 | `--rtsp-url URL` | `rtsp://127.0.0.1:8554/gimbal` | Where the GimbalCam video is published |
 | `--rtsp-advertise-url URL` | same as `--rtsp-url` | Video address announced to QGC and the Pi (set by `--pi-ip`) |
 | `--no-rtsp` | off | Don't publish video |
+| `--ground-truth [DIR]` | off (`datasets/sim_gt/` in the ProjectAirSim checkout) | Save labelled GimbalCam frames from every drone (see [Labelled frames](#labelled-frames-for-detection-tracking-and-reid)) |
+| `--gt-rate HZ` | 2 | Labelled frames saved per second per drone |
 | `--tile-wait SEC` | 90 | Longest time to wait for the ground under the drone to load |
 | `--scene FILE` | | Load a scene from `sim_config/` as-is instead of building one from `--lat/--lon` |
 
@@ -250,6 +252,65 @@ show the CSV on a map. Columns:
 
 The same check is available to scripts as
 `world.get_object_visibility(robot, camera, names)`.
+
+### Labelled frames for detection, tracking and ReID
+
+`--ground-truth [DIR]` saves every drone's GimbalCam frames with a box around
+each person and vehicle in view: YOLO labels for training a detector, and each
+box tagged with the actor's name, which is the same across frames and across
+drones, for scoring tracking and re-identification.
+
+```bash
+./run_cesium_sim.sh --qgc --drones 2 --ground-truth            # ProjectAirSim/datasets/sim_gt/<time>/
+./run_cesium_sim.sh --qgc --ground-truth ~/data/gt --gt-rate 5
+```
+
+The boxes come from a segmentation image the GimbalCam renders beside its
+picture, where each actor has an ID of its own. So a box fits what is actually
+drawn: a car half behind a building gets a box around the visible half, a car
+inside a building or fully under a roof gets none, and one cut by the frame edge
+gets a box up to the edge. The segmentation zooms with the camera.
+
+Labelled: the moving actors, and placed objects whose asset or model file name
+says they are a vehicle or a person (`car`, `vehicle`, `truck`, `van`, `bus`;
+`manny`, `quinn`, `mannequin`, `person`, `human`). Objects spawned or deleted
+while it runs are picked up within 2 s. Type `gt` to see how much has been saved.
+
+Output, in `DIR/<YYYYmmdd_HHMMSS>/`:
+
+| File | Contents |
+|---|---|
+| `images/<drone>_s<scene>_<sim ns>.jpg` | The frame. `<scene>` counts `goto` reloads |
+| `labels/<same name>.txt` | YOLO boxes, `class cx cy w h` normalised 0-1; class 0 person, 1 car |
+| `classes.txt` | The class names, in order |
+| `boxes.csv` | Every box: `sim_time`, `drone`, `frame`, `actor` (identity), `class`, `x1 y1 x2 y2` (pixels), visible `pixels`, `truncated` (cut by the frame edge) |
+| `frames.csv` | Every frame: `sim_time`, `drone`, `frame`, size, box count, the camera's world position and orientation (NED, quaternion) and horizontal FOV |
+| `ground_truth_<time>.csv` | Where every moving actor was (the log described above), one per scene load. With `--ground-truth` it goes here instead of `/tmp/projectairsim-run/`, and none are deleted |
+
+Frames with nobody in view are skipped, except one in ten (hard negatives).
+Images and labels share a name, the layout Ultralytics expects; list several
+runs' `images/` folders in a `data.yaml`, and keep whole runs (flights or
+places) for validation rather than random frames, which are near-copies of
+their neighbours.
+
+**Reviewing a capture** after the sim has stopped:
+
+```bash
+python gt_playback.py                                   # the newest capture
+python gt_playback.py ../datasets/sim_gt/<time> --drone 2 --only-boxes
+python gt_playback.py --only-boxes --save review.mp4    # to a video instead
+```
+
+Each frame is shown with its boxes and actor names (one colour per actor),
+beside a north-up map of the actors' paths, where each actor was (filled when
+boxed in this frame) and each drone camera's position and heading. Keys: space
+play/pause, arrow keys (or a/d) step, `.` `,` jump 10, `1`-`9` one drone, `0`
+all, `b` frames with boxes only, `+` `-` speed, `q` quit. Parked objects are
+boxed but not on the map, which only has the moving actors.
+
+It costs a second render per GimbalCam, so leave it off when not collecting.
+Without it the scene doesn't initialise segmentation IDs at all, which also
+saves the Cesium tiles' custom-depth pass.
 
 ## Swarm
 

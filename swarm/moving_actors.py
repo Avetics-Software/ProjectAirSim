@@ -152,10 +152,12 @@ def expand_actors(config):
 
 
 class MovingActorManager:
-    def __init__(self, world, config_path, log_dir=None, camera=None):
+    def __init__(self, world, config_path, log_dir=None, camera=None, keep_logs=GROUND_TRUTH_KEEP):
         """camera: (robot name, camera id) whose view the ground-truth log
-        scores visibility from, e.g. ("Drone1", "GimbalCam")."""
+        scores visibility from, e.g. ("Drone1", "GimbalCam"). keep_logs: how
+        many ground-truth logs to keep in log_dir (None: all)."""
         self.world = world
+        self.keep_logs = keep_logs
         self.camera = camera
         self.config_path = config_path
         # A spawner of its own, so `delete all` / `reload` for static objects
@@ -267,9 +269,10 @@ class MovingActorManager:
         if not self.log_dir or not self.actors:
             return
         os.makedirs(self.log_dir, exist_ok=True)
-        old = sorted(glob.glob(os.path.join(self.log_dir, "ground_truth_*.csv")))
-        for path in old[: max(len(old) - (GROUND_TRUTH_KEEP - 1), 0)]:
-            os.remove(path)
+        if self.keep_logs is not None:
+            old = sorted(glob.glob(os.path.join(self.log_dir, "ground_truth_*.csv")))
+            for path in old[: max(len(old) - (self.keep_logs - 1), 0)]:
+                os.remove(path)
         path = os.path.join(self.log_dir, f"ground_truth_{time.strftime('%Y%m%d_%H%M%S')}.csv")
         self.log_file = open(path, "w", newline="")
         self.log_writer = csv.writer(self.log_file)

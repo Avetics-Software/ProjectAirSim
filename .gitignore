@@ -415,5 +415,6 @@ AGENTS.md
 swarm/sim_config/scene_px4_gimbal_cesium_custom.jsonc
 swarm/sim_config/robot_quadrotor_px4_gimbal_payload_custom*.jsonc
 swarm/osm_cache/
+datasets/
 swarm/gcs.log
 swarm/*.yml.bak

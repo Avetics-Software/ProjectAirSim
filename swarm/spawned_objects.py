@@ -30,6 +30,7 @@ class ObjectSpawner:
         self.world = world
         self.config_path = config_path
         self.spawned = {}  # name -> description
+        self.sources = {}  # name -> the asset or model file it was spawned from
 
     # ------------------------------------------------------------------
     # Config file
@@ -120,6 +121,7 @@ class ObjectSpawner:
             self._rest_on_ground(name, ground - height)
         self._set_heading(name, heading)
 
+        self.sources[name] = source
         self.spawned[name] = f"{source} at {lat:.6f}, {lon:.6f}, heading {heading:.0f}"
         projectairsim_log().info(f"Spawned {name}: {self.spawned[name]}")
         return name
@@ -165,6 +167,7 @@ class ObjectSpawner:
             return
         self.world.destroy_object(name)
         self.spawned.pop(name, None)
+        self.sources.pop(name, None)
         projectairsim_log().info(f"Deleted {name}")
 
     # ------------------------------------------------------------------

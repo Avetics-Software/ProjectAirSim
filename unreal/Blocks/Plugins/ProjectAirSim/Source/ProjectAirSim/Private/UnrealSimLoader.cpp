@@ -466,6 +466,16 @@ void AUnrealSimLoader::LoadUnrealScene() {
                       nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
               ConfigureCesiumTileset(CesiumTile, HomeGeoPoint,
                                      Scene.GetTilesAltitudeOffset(), TilesDir);
+              if (Scene.GetSegmentationSettings().initialize_ids) {
+                // Tiles stream in long after the segmentation IDs are
+                // initialized. Render every one into the custom depth pass as
+                // background (ID 0) so they hide segmented objects behind
+                // them; the segmentation image is otherwise not occluded.
+                FCustomDepthParameters CustomDepth;
+                CustomDepth.RenderCustomDepth = true;
+                CustomDepth.CustomDepthStencilValue = 0;
+                CesiumTile->SetCustomDepthParameters(CustomDepth);
+              }
               StartTileShadows(CesiumTile);
               SpawnBareEarthTerrain(HomeGeoPoint,
                                     Scene.GetTilesAltitudeOffset());
