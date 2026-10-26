@@ -131,6 +131,25 @@ def _return_path(opts, network, points):
     return roads.route(points[-1][:2], points[0][:2])
 
 
+def trim_path(points, start_m=0.0, end_m=0.0):
+    """A path ([north, east] or [north, east, flag] points) without its first
+    start_m metres and its last end_m metres, cut between points."""
+    def cut(pts, metres):
+        if metres <= 0:
+            return pts
+        for i in range(1, len(pts)):
+            a, b = pts[i - 1], pts[i]
+            length = math.dist(a[:2], b[:2])
+            if length >= metres:
+                f = metres / length
+                point = [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])] + list(b[2:3])
+                return [point] + pts[i:]
+            metres -= length
+        raise ValueError("the path is shorter than start_at_m + stop_short_m")
+    points = cut(points, start_m)
+    return list(reversed(cut(list(reversed(points)), end_m)))
+
+
 def expand_actors(config):
     """Config entries with defaults applied and `count` copies expanded, as
     (kind, opts) pairs in spawn order."""
@@ -169,9 +188,20 @@ class MovingActorManager:
         self.log_writer = None
         self.last_log = 0.0
         self.networks = {}  # kind -> RoadNetwork around home
+        self.generation = 0  # reloads so far
 
     # ------------------------------------------------------------------
     # Spawning
+
+    def reload(self, config_path=None):
+        """Respawn every actor from the start of its path, from config_path
+        (from now on) or the current config file."""
+        if config_path:
+            self.config_path = config_path
+        self.generation += 1  # new meshes: their ground-truth labels must be redone
+        self.close()
+        self.delete("all")
+        self.spawn_from_config()
 
     def spawn_from_config(self):
         if not self.config_path or not os.path.exists(self.config_path):
@@ -197,6 +227,12 @@ class MovingActorManager:
             projectairsim_log().warning(f"{opts['name']}: {note}")
         # [north, east] or [north, east, 1] on bridges
         ned_path = [self._to_ned(p[0], p[1]) + list(p[2:3]) for p in geo_path]
+        start_m, end_m = float(opts.get("start_at_m", 0)), float(opts.get("stop_short_m", 0))
+        if start_m or end_m:
+            # Part of the path, e.g. cars of a convoy waiting in formation along
+            # one shared route rather than stacked at its start
+            ned_path = trim_path(ned_path, start_m, end_m)
+            geo_path = [list(self._to_geo(*p[:2])) + list(p[2:3]) for p in ned_path]
         yaw_offset = float(opts.get("yaw_offset", 0.0))
         (n0, e0), (n1, e1) = ned_path[0][:2], ned_path[1][:2]
         heading = math.degrees(math.atan2(e1 - e0, n1 - n0))
@@ -335,9 +371,7 @@ class MovingActorManager:
             elif cmd in ("pause", "resume"):
                 self.world.pause_object_paths(cmd == "pause")
             elif cmd == "reload":
-                self.close()
-                self.delete("all")
-                self.spawn_from_config()
+                self.reload()
             elif cmd == "delete" and len(args) == 2:
                 self.delete(args[1])
             else:

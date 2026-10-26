@@ -77,6 +77,8 @@ from px4_sitl import Px4Sitl
 from shared_frame import SharedFrameWriter
 from moving_actors import ACTORS_HELP, GROUND_TRUTH_KEEP, MovingActorManager
 from spawned_objects import CONSOLE_HELP, ObjectSpawner
+from experiment_recorder import ExperimentRecorder
+from mission_track import MissionTrack
 from track_test import run_track_test
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -371,6 +373,7 @@ class SimPayload(DroneCamera):
         self.camera_pose = None  # ((x, y, z), (w, x, y, z)) of the latest frame
         self.pose_wanted = 0  # >0 while a test needs camera_pose
         self.ground_truth = None  # GroundTruthRecorder with --ground-truth
+        self.frame_taps = []  # callables given every GimbalCam image (a recording)
         self._attitude_t0 = 0.0
 
     def attach(self, client, drone):
@@ -393,6 +396,8 @@ class SimPayload(DroneCamera):
             self.camera_rotation = tuple(image_msg[k] for k in ("rot_w", "rot_x", "rot_y", "rot_z"))
             self.camera_pose = (tuple(image_msg[k] for k in ("pos_x", "pos_y", "pos_z")),
                                 self.camera_rotation)
+        for tap in self.frame_taps:
+            tap(image_msg)
         bgr = image_to_bgr(image_msg)
         self.last_gimbal_frame = bgr
         if self.selected:
@@ -491,6 +496,75 @@ GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a ne
 SIM_HELP = CONSOLE_HELP + "\n" + ACTORS_HELP + "\n" + GOTO_HELP
 
 
+def reset_actors_for_mission(session):
+    """Before each `mission start`: the moving actors start again from where
+    they began (their paths are seeded), so every run sees the same scene."""
+    missions = session.station.missions
+    if session.actors:
+        # The mission's own traffic, or the usual actors (--actors)
+        wanted = (missions.mission.actors if missions.mission else None) or session.args.actors
+        if wanted != session.actors.config_path or session.actors.actors:
+            projectairsim_log().info(f"Mission start: moving actors from {os.path.basename(wanted)} "
+                                     "back to their start")
+            session.actors.reload(wanted)
+            if session.ground_truth:
+                session.refresh_ground_truth()
+    if session.ground_truth and missions.mission:
+        session.ground_truth.note_run(missions.mission.name, missions.run_id, "start")
+
+
+def run_tag(session):
+    """'<mission>_<run>_' while a mission runs, to tag measurement files with it."""
+    missions = session.station.missions if session.station else None
+    if missions and missions.flying and missions.mission:
+        return f"{missions.mission.name}_{missions.run_id}_"
+    return ""
+
+
+def record_mission(session, event, mission, run_id, indices):
+    """Record a mission run that asks for it (`record:` in the mission file;
+    experiment_recorder.py), from its start until just after its end."""
+    loop = asyncio.get_running_loop()
+    if event == "start":
+        wanted = [i for i in indices if i in mission.record]
+        if not wanted:
+            return
+        if session.recording:
+            loop.create_task(session.recording.stop())
+        recorder = ExperimentRecorder(session, mission, run_id, wanted,
+                                      session.station.missions.run_dir)
+        recorder.start()
+        session.recording = recorder
+    elif event == "end" and session.recording and session.recording.run_id == run_id:
+        recorder, session.recording = session.recording, None
+        loop.create_task(recorder.stop())
+
+
+def mission_track(session, index, spec, run_id):
+    """A mission's `track` step on drone `index` (spec None: tracking ended):
+    lock the tracker onto the target and score it (mission_track.py)."""
+    missions = session.station.missions
+    old = session.mission_tracks.pop(index, None)
+    loop = asyncio.get_running_loop()
+    if old:
+        loop.create_task(old.stop())
+    name = session.station.links[index].name
+    if session.ground_truth and missions.mission:
+        target = f" {spec['target']}" if spec and spec["target"] else ""
+        session.ground_truth.note_run(missions.mission.name, run_id,
+                                      f"track{target}" if spec else "track off", name)
+    if not spec:
+        return
+    try:
+        track = MissionTrack(session, index, spec, missions.mission.name, run_id,
+                             missions.run_dir)
+        track.start()
+    except ValueError as err:
+        projectairsim_log().warning(f"{name}: can't track: {err}")
+        return
+    session.mission_tracks[index] = track
+
+
 async def sim_command(session, line, parts):
     """The sim's own console commands, after the ground station's; anything
     else goes to the object spawner, which reports what it doesn't know."""
@@ -528,7 +602,8 @@ async def sim_command(session, line, parts):
             return True
         camera = session.station.cameras[number - 1]
         asyncio.get_running_loop().create_task(run_track_test(
-            session, camera, mode, os.environ.get("LOG_DIR", "/tmp/projectairsim-run")))
+            session, camera, mode, os.environ.get("LOG_DIR", "/tmp/projectairsim-run"),
+            run_tag(session)))
         print(f"Track test on {camera.name}, yaw {mode}: about a minute; results in the messages")
     elif word == "sim" and len(parts) >= 2 and parts[1] == "attitude":
         # sim attitude [SECONDS] [N]: how well drone N's camera is stabilised
@@ -539,7 +614,7 @@ async def sim_command(session, line, parts):
             print("Usage: sim attitude [SECONDS] [DRONE]")
             return True
         path = os.path.join(os.environ.get("LOG_DIR", "/tmp/projectairsim-run"),
-                            time.strftime(f"attitude_{camera.name}_%H%M%S.csv"))
+                            run_tag(session) + time.strftime(f"attitude_{camera.name}_%H%M%S.csv"))
         camera.record_attitude(seconds, path)
         print(f"Recording {camera.name}'s attitude and its camera's for {seconds:g} s to {path}")
     elif word == "sim":
@@ -742,6 +817,9 @@ class Session:
         self.spawner = None
         self.actors = None
         self.ground_truth = None  # GroundTruthRecorder with --ground-truth
+        self.mission_tracks = {}  # drone index -> MissionTrack during a mission's track step
+        self.recording = None  # ExperimentRecorder of the mission run being recorded
+        self._labelled_generation = 0  # the actors' reload whose meshes are labelled
         self.spotter = None
         self.loading = False
         # The spotter window runs in its own process, which can't receive camera
@@ -868,6 +946,7 @@ class Session:
             if failed:
                 projectairsim_log().warning(f"Couldn't clear the {what} on {', '.join(failed)}")
         projectairsim_log().info("Geofence and missions cleared on every drone")
+        self.station.missions.invalidate()
         self.station.safety.fence = []
         self.station.windows.set_fence([])
         self.station.fence_status = ""
@@ -897,6 +976,10 @@ class Session:
         """Keep the recorder's segmentation IDs in step with what is spawned:
         moving actors, and static objects that are vehicles or people."""
         kinds = {name: a["kind"] for name, a in (self.actors.actors if self.actors else {}).items()}
+        if self.actors and self.actors.generation != self._labelled_generation:
+            # Respawned actors are new meshes under the same names: label them again
+            self.ground_truth.forget(self.actors.actors)
+            self._labelled_generation = self.actors.generation
         others = []
         for name, source in (self.spawner.sources if self.spawner else {}).items():
             kind = kind_of_asset(source)
@@ -1095,6 +1178,10 @@ async def main():
             extra_status=lambda: sim_status(session),
             config=config,
             sim_faults=SimFaults(connections, links, session.px4s),
+            before_mission=lambda: reset_actors_for_mission(session),
+            on_mission_track=lambda i, spec, run_id: mission_track(session, i, spec, run_id),
+            on_mission_run=lambda event, mission, run_id, indices: record_mission(
+                session, event, mission, run_id, indices),
         )
         session.station = station
         projectairsim_log().addHandler(station.dashboard_log)

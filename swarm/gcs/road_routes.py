@@ -200,6 +200,27 @@ class RoadNetwork:
         """Nodes on roads random routes may use (not runways or taxiways)."""
         return [n for n, edges in self.edges.items() if any(e[3] > 0 for e in edges)]
 
+    def junctions(self, min_degree=3, merge_m=15.0):
+        """Road junctions: [(lat, lon, roads meeting, distance from the
+        network's centre in m)], nearest first. Nodes within merge_m of one
+        another (a junction of dual carriageways) count as one."""
+        neighbours = {}
+        for a, edges in self.edges.items():
+            for b, _, _, weight in edges:
+                if weight > 0:
+                    neighbours.setdefault(a, set()).add(b)
+                    neighbours.setdefault(b, set()).add(a)
+        nodes = sorted((n for n, nb in neighbours.items() if len(nb) >= min_degree),
+                       key=lambda n: math.hypot(*self.nodes[n]))
+        found = []
+        for n in nodes:
+            point = self.nodes[n]
+            if any(math.dist(point, self.nodes[m]) < merge_m for m, _ in found):
+                continue
+            found.append((n, len(neighbours[n])))
+        return [(*self._to_geo(*self.nodes[n]), degree, math.hypot(*self.nodes[n]))
+                for n, degree in found]
+
     # Routes -------------------------------------------------------------
     def _snap(self, lat, lon, label):
         """The network point nearest lat/lon, refusing points far off the roads
@@ -375,9 +396,15 @@ def main():
                         help="instead, the shortest route from --lat/--lon to here")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--geojson", default="routes.geojson")
+    parser.add_argument("--junctions", type=int, metavar="N",
+                        help="instead, list the N road junctions nearest --lat/--lon")
     args = parser.parse_args()
 
     net = RoadNetwork(args.lat, args.lon, args.radius, args.kind)
+    if args.junctions:
+        for lat, lon, degree, dist in net.junctions()[:args.junctions]:
+            print(f"{lat:.6f}, {lon:.6f}  {degree} roads, {dist:.0f} m away")
+        return
     rng = random.Random(args.seed)
     if args.to:
         routes = [net.route([args.lat, args.lon], args.to)]

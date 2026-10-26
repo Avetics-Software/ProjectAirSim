@@ -28,6 +28,9 @@
 #   Vehicles drive in the kerb-side (leftmost) lane, using OSM's lane counts.
 #   speed:      m/s
 #   start_delay: seconds to stand still before setting off        [default 0]
+#   start_at_m, stop_short_m: start this far along the path, stop this far
+#               before its end (mode once): e.g. a convoy's cars sharing one
+#               route, each waiting at its place in the formation      [0]
 #   asset:      Unreal asset to spawn (type `assets` in the run console to list)
 #   length:     scale so the longest horizontal side is this many metres
 #   scale:      [x, y, z] scale instead of length

@@ -1,0 +1,36 @@
+# MOT experiment: a convoy of 5 identical cars drives up a road while a drone
+# flies beside it, a little slower, with its camera fixed (no gimbal
+# tracking): the cars drift through the frame from behind, closing up and
+# passing one another's place in the image, and the detector and ByteTrack
+# must keep each car's ID. Recorded frame by frame with the drone's metadata
+# and the true boxes (start the sim with --ground-truth):
+# runs/mot_convoy_<run>/. See docs/features/mot-experiments.md.
+#
+#   mission load mot_convoy   then   mission upload 1   then   mission start 1
+#
+# Timeline from `mission start`:
+#   ~50 s  drone at its start, 60 m north-west of the road at 40 m, camera at
+#          the road (90 deg right of the nose, 34 deg down)
+#   52 s   the convoy (scenarios/convoy.yml, 12 m/s) sets off behind it
+#   ~55 s  the drone flies up the road at 9 m/s: the convoy catches up at
+#          3 m/s, so each car spends about 30 s in the frame; the cars are in
+#          view from about 57 s to 107 s, all five together about 78-87 s
+#   ~115 s home
+mission: mot_convoy
+origin: home
+speed: 12
+record: true
+actors: scenarios/convoy.yml
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 40
+      - goto: {lat: 1.415249, lon: 103.867762, alt: 40}
+        heading: 33
+      - gimbal: {pitch: -34, yaw: 90}
+        hold: 5
+      - goto: {lat: 1.418924, lon: 103.870185, alt: 40}
+        speed: 9
+      - hold: 3
+      - rtl: true

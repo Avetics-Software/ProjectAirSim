@@ -28,6 +28,9 @@ Output, under OUT_DIR/<YYYYmmdd_HHMMSS>/:
                                 world pose (NED) and horizontal FOV
   ground_truth_<time>.csv       where every moving actor was, one per scene
                                 load (moving_actors.py writes it here)
+  mission_runs.csv              when each ground-station mission run started
+                                and ended (sim time), and track steps, so
+                                frames can be matched to a run
 
 gt_playback.py plays a capture back with its boxes and a map.
 
@@ -145,6 +148,9 @@ class GroundTruthRecorder:
         self.last_saved = {}  # drone -> sim time (ns) of its last saved frame
         self.empty_skipped = {}  # drone -> empty frames since the last kept one
         self.counts = {"frames": 0, "boxes": 0}
+        # drone -> callable(stamp, scene msg, seg msg, names_by_id, kinds) given
+        # EVERY paired frame, whatever the rate (an experiment recording)
+        self.taps = {}
         self._lock = threading.Lock()
 
         self.dir = os.path.join(os.path.expanduser(out_dir), time.strftime("%Y%m%d_%H%M%S"))
@@ -179,6 +185,12 @@ class GroundTruthRecorder:
         self.background = set()
         self.background_painted = False
         self.scene += 1
+
+    def forget(self, names):
+        """Their meshes were replaced (respawned under the same names): label
+        them again at the next refresh."""
+        for name in names:
+            self.ids.pop(name, None)
 
     def refresh(self, actor_kinds, others=()):
         """Give each actor in `actor_kinds` (name -> kind) a segmentation ID of
@@ -244,8 +256,10 @@ class GroundTruthRecorder:
         pending = self.pending.get(drone)
         if pending is None:
             return
+        tap = self.taps.get(drone)
         with self._lock:
-            if stamp - self.last_saved.get(drone, -self.period_ns) < self.period_ns:
+            due = stamp - self.last_saved.get(drone, -self.period_ns) >= self.period_ns
+            if not due and not tap:
                 return  # not due yet: skip the pairing, and the decode
             pair = pending.setdefault(stamp, {})
             pair[kind] = msg
@@ -256,8 +270,13 @@ class GroundTruthRecorder:
             del pending[stamp]
             for old in [s for s in pending if s < stamp]:
                 del pending[old]
-            self.last_saved[drone] = stamp
+            if due:
+                self.last_saved[drone] = stamp
             names_by_id, kinds, scene = self.names_by_id, self.kinds, self.scene
+        if tap:
+            tap(stamp, pair["scene"], pair["seg"], names_by_id, kinds)
+        if not due:
+            return
         try:
             self._work.put_nowait((drone, scene, stamp, pair["scene"], pair["seg"], names_by_id, kinds))
         except queue.Full:
@@ -311,6 +330,18 @@ class GroundTruthRecorder:
         self._frames_file.flush()
         self.counts["frames"] += 1
         self.counts["boxes"] += len(boxes)
+
+    def note_run(self, mission, run_id, event, drone=""):
+        """Mark a mission run's start/end or a track step at the current sim
+        time, so its frames can be picked out of the capture."""
+        path = os.path.join(self.dir, "mission_runs.csv")
+        new = not os.path.exists(path)
+        with open(path, "a", newline="") as f:
+            out = csv.writer(f)
+            if new:
+                out.writerow(["sim_time", "mission", "run", "event", "drone"])
+            out.writerow([f"{self.world.get_sim_time() / 1e9:.3f}", mission, run_id, event,
+                          drone])
 
     def status(self):
         return f"{self.counts['frames']} frames, {self.counts['boxes']} boxes in {self.dir}"
