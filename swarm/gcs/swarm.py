@@ -89,6 +89,10 @@ class SwarmControl:
         self.destinations = {}  # index -> (lat, lon) it is flying to now
         self.plans = {}  # index -> [(lat, lon), ...] its remaining route
         self.plan_alts = {}  # index -> height (m above home) of that route
+        self.plan_max_alts = {}  # scripted routes may change height between waypoints
+        # index -> (item, "RTL" or "LAND"): a mission's own last step, so its
+        # mode change there isn't taken for a failsafe
+        self.mission_ends = {}
         self.crossings = []  # [(lat, lon, text, safe)] predicted crossings
         self.giving_way = {}  # index -> what to resume once clear
         self.headings = {}  # index -> heading asked for with its last goto
@@ -250,11 +254,13 @@ class SwarmControl:
     def _set_plan(self, i, points, alt):
         self.plans[i] = list(points)
         self.plan_alts[i] = alt
+        self.plan_max_alts[i] = alt
         self.destinations[i] = points[0] if points else None
 
     def _clear_plan(self, i):
         self.plans.pop(i, None)
         self.plan_alts.pop(i, None)
+        self.plan_max_alts.pop(i, None)
         self.destinations.pop(i, None)
 
     async def _arm_and(self, i, action, *args):
@@ -299,6 +305,7 @@ class SwarmControl:
             default = self.cfg.default_alt_m
             alt = max(link.position[3], default) if link.position else default
             self.plan_alts[i] = alt
+            self.plan_max_alts[i] = alt
         await self._ensure_airborne(i, alt)
         # Fly there keeping the current heading (said explicitly: without a yaw
         # PX4 turns the drone to face the way it flies); a heading asked for is

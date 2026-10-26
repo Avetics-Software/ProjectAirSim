@@ -52,6 +52,8 @@ ground station never fights QGC for control.
   [sim to real](docs/features/sim-to-real.md) ·
   [architecture](docs/features/architecture.md)
 - [Roadmap](docs/roadmap.md): what is still missing, in priority order
+- [Repeatable missions](docs/features/missions.md): uploaded flights with aircraft
+  headings, camera pitch/yaw, and per-run logs
 
 ## Layout
 
@@ -70,3 +72,11 @@ ground station never fights QGC for control.
 
 The Unreal project and the Project AirSim client this builds on are in
 `../unreal/` and `../client/python/projectairsim/`.
+
+## Playback (to view the ground truth bounding boxes)
+
+```bash
+conda activate projectairsim
+cd swarm
+python gt_playback.py ../datasets/sim_gt/20261023_144412 --drone 2 --only-boxes
+```

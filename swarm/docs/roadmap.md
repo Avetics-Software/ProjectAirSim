@@ -42,6 +42,20 @@ Still to do:
 - ([#17](https://github.com/Avetics-Software/ProjectAirSim/issues/17)) **More patterns:** expanding square and sector searches; orbiting and
   following a target.
 
+- ([#32](https://github.com/Avetics-Software/ProjectAirSim/issues/32)) **Repeatable scripted missions:** native PX4 missions with
+  aircraft headings, camera pitch/yaw and ROI, X standing down while the
+  mission holds the camera, `track` steps that hand it to a tracker (moving
+  target, moving drone, scored against ground truth in the sim), and run
+  comparisons. Validated in the sim; see [missions](features/missions.md).
+  A live Radxa (X) run and real drones are still pending.
+
+- **MOT experiments** ([guide](features/mot-experiments.md)): scripted traffic
+  (convoy, junction, drone motion) recorded frame by frame with the drone's
+  metadata and true boxes, replayed through X's detector and ByteTrack
+  (`mot_replay.py`), scored for ID switches with their causes (`mot_eval.py`).
+  Found and fixed: X's ByteTrack gave a new ID after a single missed
+  detection. Pending: the Radxa runs and ByteTrack tuning.
+
 ## 3. Targets and tracking
 
 - ([#7](https://github.com/Avetics-Software/ProjectAirSim/issues/7)) **Detections on the map:** each X's detections, geolocated (X already
@@ -64,7 +78,7 @@ Still to do:
 - ([#21](https://github.com/Avetics-Software/ProjectAirSim/issues/21)) **The map:** satellite imagery, free pan and zoom (it now follows the
   selected drone), measuring distances.
 - ([#22](https://github.com/Avetics-Software/ProjectAirSim/issues/22)) **Joystick or gamepad**, as A5X's `laptop_client.py` has.
-- ([#23](https://github.com/Avetics-Software/ProjectAirSim/issues/23)) **Save and reload** search areas and plans.
+- ([#23](https://github.com/Avetics-Software/ProjectAirSim/issues/23)) **Save and reload** search areas, targets and geofences. Scripted flight plans are #32.
 - ([#24](https://github.com/Avetics-Software/ProjectAirSim/issues/24)) **X's gains with zoom:** have the camera report its zoom to X, so tracking
   doesn't overshoot when zoomed in.
 

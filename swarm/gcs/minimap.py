@@ -53,6 +53,7 @@ class MiniMap:
         self.fence = []  # [(north, east)] corners of the geofence
         self.crossings = []  # [(north, east, label, safe)]
         self.heading_goals = {}  # drone name -> heading (deg) it was told to face
+        self.mission_cameras = []  # (north, east, label) of planned camera steps
         self.heading_pick = None  # heading (deg) picked on the compass, not yet sent
         self.compass = None  # (cx, cy, r) in render pixels, once drawn
         self._lock = threading.Lock()
@@ -171,6 +172,13 @@ class MiniMap:
             self.heading_goals = dict(goals)
             self._cache_key = None
 
+    def set_mission_cameras(self, steps):
+        if not self.home:
+            return
+        with self._lock:
+            self.mission_cameras = [(*self.to_ned(lat, lon), label) for lat, lon, label in steps]
+            self._cache_key = None
+
     def select(self, name):
         with self._lock:
             self.selected_name = name
@@ -223,6 +231,11 @@ class MiniMap:
         self._draw_fence(img, px)
         self._draw_area(img, px)
         self._draw_routes(img, px)
+        for n, e, label in self.mission_cameras:
+            x, y = px(n, e)
+            cv2.circle(img, (x, y), 5, PICK, 1, cv2.LINE_AA)
+            cv2.putText(img, label, (x + 6, y + 12), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.3, PICK, 1, cv2.LINE_AA)
         self._draw_targets(img, px, drone, objects)
         self._draw_crossings(img, px)
         if drone:

@@ -41,6 +41,7 @@ class CompanionLink:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.video = VideoStream(self.tracker_url, f"{name} tracker")
         self.tracking = False  # a target has been sent and not cancelled
+        self.mission_active = False  # block operator gimbal commands during a mission
         self.track_point = None  # (x, y) in tracker pixels
         self._stop = threading.Event()
         self._zoom_timer = None
@@ -51,6 +52,8 @@ class CompanionLink:
     # Commands
 
     def send(self, text):
+        if self.mission_active and text.startswith(("CLICK:", "BOX:", "PITCH:", "YAW:", "GIMBAL:")):
+            return
         if not text.startswith("HEARTBEAT"):
             log.debug(f"{self.name} <- {text}")  # what the operator sent, for the log
         try:
@@ -59,6 +62,8 @@ class CompanionLink:
             log.debug(f"{self.name}: send {text!r} failed: {err}")
 
     def click(self, x, y):
+        if self.mission_active:
+            return
         self.send(f"CLICK:{int(x)},{int(y)}")
         self.tracking, self.track_point = True, (int(x), int(y))
 
@@ -96,6 +101,20 @@ class CompanionLink:
 
     def center_gimbal(self):
         self.send("GIMBAL:CENTER")
+
+    def set_mission_active(self, active):
+        """Stop a selected track and held jog before handing the camera to PX4.
+
+        X itself must use MAVLINK_STAND_DOWN_IN_MISSION so autonomous tracking
+        and re-claims stop even if the ground station disconnects.
+        """
+        if active == self.mission_active:
+            return
+        if active:
+            self.cancel()
+            self.jog("PITCH", "STOP")
+            self.jog("YAW", "STOP")
+        self.mission_active = active
 
     # ------------------------------------------------------------------
     # Background

@@ -38,3 +38,8 @@ SIM_BAT_MIN_PCT   35     # % floor                              (default 50)
 # which PX4 rejects for integer parameters like this one.
 NAV_DLL_ACT       2      # 0 off, 1 hold, 2 return, 3 land     (default 0)
 COM_DL_LOSS_T     10     # s without the ground station         (default 10)
+
+# Missions (gcs/mission.py): a mission's look_at (ROI) steers the camera only;
+# the drone keeps the mission's headings. 0 (PX4's default) turns the drone
+# to face the point instead. Set it on real drones too.
+MIS_MNT_YAW_CTL   1      # ROI: 1 = gimbal yaw, 0 = vehicle yaw (default 0)

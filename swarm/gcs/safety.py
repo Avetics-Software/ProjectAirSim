@@ -241,6 +241,9 @@ class SafetyMonitor:
 
     def _check_failsafe(self, i, link, found):
         commanded = self.swarm.last_action.get(i)
+        end = self.swarm.mission_ends.get(i)
+        if commanded == "mission" and end and link.mission_seq >= end[0] and link.mode == end[1]:
+            return  # the mission's own ending
         if link.armed and link.mode in ("RTL", "LAND") and commanded not in ("rtl", "land"):
             found[f"failsafe:{i}"] = (i, WARNING, f"{link.name}: PX4 switched to {link.mode} "
                                       "on its own (a failsafe?)")
@@ -264,7 +267,7 @@ class SafetyMonitor:
         if len(self.fence) < 3:
             return
         for i, plan in self.swarm.plans.items():
-            alt = self.swarm.plan_alts.get(i)
+            alt = self.swarm.plan_max_alts.get(i, self.swarm.plan_alts.get(i))
             outside = [p for p in plan or [] if not fence_check(self.fence, *p[:2])[0]]
             if outside or (alt is not None and alt > self.settings.fence_max_alt_m):
                 what = (f"{len(outside)} of its waypoints are outside the geofence" if outside

@@ -54,6 +54,9 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
   area searches uploaded as PX4 missions, from the control bar or by typing
   commands (`help` lists them). The commands go to PX4 like QGC's would, so QGC
   can watch and take over at any time.
+- **Repeatable missions:** upload YAML plans with aircraft heading and camera
+  pitch/yaw or ROI, start them across the swarm, and compare run logs. X stands
+  down with the matching companion configuration. See [missions](../docs/features/missions.md).
 - **Deconfliction:** height layers, the crossing check and the separation
   monitor, as in the sim.
 - **Safety:** each drone's battery, GPS and link on its status line, alerts,

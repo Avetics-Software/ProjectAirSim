@@ -15,6 +15,7 @@ import contextlib
 import io
 import logging
 import math
+import os
 import sys
 import threading
 import time
@@ -24,6 +25,7 @@ from .dashboard import CameraWindows
 from .log import log
 from .mavlink_link import GPS_FIX_NAMES
 from .minimap import MiniMap, road_segments
+from .mission import MISSION_HELP, MissionControl
 from .fleet import Fleet
 from .safety import CRITICAL, FENCE_ACTIONS, WARNING, SafetyMonitor, fence_check
 from .safety_panel import SafetyPanel, alert_line
@@ -146,11 +148,20 @@ class GroundStation:
       (gcs.fleet.Fleet from the config file); defaults if None.
     sim_faults: the sim's fault injection (cut_link, is_cut, set_battery,
       reset), for the safety panel's Sim tab.
+    before_mission: callable (sync or async) run before each `mission start`,
+      e.g. the sim resetting its moving actors so runs repeat.
+    run_dir: where mission runs are logged [runs/ next to the gcs package].
+    on_mission_track(i, spec, run_id): called when drone i's mission hands its
+      camera to a tracker (a `track` step) and with spec None when it takes
+      it back; the sim locks the tracker onto the target and scores it.
+    on_mission_run(event, mission, run_id, indices): called when a mission run
+      starts ("start") and when it has ended ("end"), e.g. to record it.
     """
 
     def __init__(self, links, make_camera, companions=None, home=None, config=None,
                  extra_commands=None, extra_help="", extra_objects=None, extra_status=None,
-                 sim_faults=None):
+                 sim_faults=None, before_mission=None, run_dir=None, on_mission_track=None,
+                 on_mission_run=None):
         self.links = links
         self.extra_commands = extra_commands
         self.extra_help = extra_help
@@ -179,6 +190,12 @@ class GroundStation:
         }
         self.swarm = SwarmControl(links, config.swarm, config.deconfliction)
         self.safety = SafetyMonitor(links, self.swarm, self.companions, config.safety)
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.missions = MissionControl(
+            links, self.swarm, lambda: self.home, run_dir or os.path.join(base, "runs"),
+            search_dirs=[os.path.join(base, "missions")], before_start=before_mission,
+            default_alt=config.swarm.default_alt_m, companions=self.companions,
+            on_track=on_mission_track, on_run=on_mission_run)
         self.fence_status = ""  # last geofence upload, for the panel
         self.panel = SafetyPanel(self.windows, self, sim_faults)
         if sim_faults:
@@ -225,8 +242,24 @@ class GroundStation:
                   f"{companion.ip}): use W/A/S/D, G and the zoom keys or wheel with it selected")
         return bool(companion)
 
+    def mission_has_camera(self, index):
+        """True while drone `index` flies a mission that holds its gimbal: in
+        MISSION mode, with PX4's autopilot in control of the gimbal (or not yet
+        reported). A `track` step hands the gimbal back. X uses the same rule
+        to stand down (MAVLINK_STAND_DOWN_IN_MISSION)."""
+        link = self.links[index]
+        return link.mode == "MISSION" and link.autopilot_has_gimbal is not False
+
+    def mission_controls(self, index):
+        """True (and says so) if drone `index`'s mission steers its gimbal."""
+        if self.mission_has_camera(index):
+            self.windows.log(f"{self.links[index].name} is flying a mission, which steers "
+                             "its gimbal: hold it (or mission stop) to steer by hand")
+            return True
+        return False
+
     def steer(self, pitch_deg, yaw_deg):
-        if not self.x_controls(self.selected):
+        if not self.x_controls(self.selected) and not self.mission_controls(self.selected):
             self.current.steer(pitch_deg, yaw_deg)
 
     def nudge_zoom(self, delta_percent):
@@ -234,6 +267,8 @@ class GroundStation:
             self.current.nudge_zoom(delta_percent)
 
     def tick(self, dt):
+        for i, companion in self.companions.items():
+            companion.set_mission_active(self.mission_has_camera(i))
         for camera in self.cameras:
             camera.tick(dt)
         self.windows.zoom_text = self.current.zoom_text()
@@ -312,7 +347,7 @@ class GroundStation:
             drone_lines.append((
                 f"{mark}{link.name}  {link.mode:<8} {'armed' if link.armed else 'disarmed':<8} "
                 f"{rel:5.1f} m  hdg {heading:3.0f}  {math.hypot(*link.velocity[:2]):4.1f} m/s  "
-                f"{self._health_tokens(link, lost)}", colour))
+                f"{self._health_tokens(link, lost)}{self._mission_progress(i)}", colour))
         minimap.update(centre, objects, selected_name=self.links[self.selected].name)
         swarm = self.swarm
         name = lambda i: self.links[i].name  # noqa: E731
@@ -320,6 +355,12 @@ class GroundStation:
         minimap.set_routes({name(i): swarm.route(i) for i in swarm.plans})
         minimap.set_crossings(swarm.crossings)
         minimap.set_heading_goals({name(i): h for i, h in swarm.headings.items() if h is not None})
+        mission = self.missions.mission
+        minimap.set_mission_cameras([
+            (lat, lon, f"{name(i)} {text}")
+            for i in sorted(self.missions.uploaded)
+            for lat, lon, text in (mission.drones[i].camera_steps if mission else [])
+        ])
 
         for i, companion in self.companions.items():
             drone_lines.append(
@@ -330,6 +371,13 @@ class GroundStation:
         minimap.set_fence(self.windows.fence)
         extra = list(self.extra_status()) if self.extra_status else []
         self.windows.status_lines = drone_lines + extra
+
+    def _mission_progress(self, i):
+        missions = self.missions
+        if i not in missions.flying:
+            return ""
+        return (f"  {missions.mission.name} {self.links[i].mission_seq + 1}/"
+                f"{len(missions.mission.drones[i].items)}")
 
     @staticmethod
     def _health_tokens(link, lost):
@@ -363,6 +411,8 @@ class GroundStation:
         if self.companions.get(self.selected):
             self.windows.log(f"{self.current.name}'s gimbal is X's: its yaw lock is X's "
                              "MAVLINK_YAW_LOCK setting")
+            return
+        if self.mission_controls(self.selected):
             return
         camera = self.current
         camera.set_yaw_lock(not camera.yaw_lock)
@@ -454,7 +504,8 @@ class GroundStation:
     # Console
 
     def help_text(self):
-        return "\n".join(t for t in (self.extra_help, STATION_HELP, SWARM_HELP) if t)
+        return "\n".join(t for t in (self.extra_help, STATION_HELP, MISSION_HELP, SWARM_HELP)
+                         if t)
 
     def _camera_arg(self, parts, index):
         """The camera of the drone number at parts[index], else the selected one."""
@@ -477,7 +528,8 @@ class GroundStation:
             except (KeyError, ValueError, IndexError):
                 print("Usage: gimbal lock on|off [DRONE]")
                 return
-            if not self.x_controls(self.cameras.index(camera)):
+            index = self.cameras.index(camera)
+            if not self.x_controls(index) and not self.mission_controls(index):
                 camera.set_yaw_lock(on)
                 print(f"{camera.name} gimbal: yaw {'lock' if on else 'follow'}")
         elif word == "gimbal" and len(parts) in (3, 4):
@@ -487,7 +539,8 @@ class GroundStation:
             except (ValueError, IndexError):
                 print("Usage: gimbal PITCH YAW [DRONE]")
                 return
-            if self.x_controls(self.cameras.index(camera)):
+            index = self.cameras.index(camera)
+            if self.x_controls(index) or self.mission_controls(index):
                 return
             camera.steer(pitch, yaw)
             if camera.selected:
@@ -502,6 +555,8 @@ class GroundStation:
             if not self.x_controls(self.cameras.index(camera), "zoom"):
                 camera.set_zoom(percent)
         elif await self._safety_command(word, parts):
+            pass
+        elif await self.missions.run_command(parts):
             pass
         elif await self.swarm.run_command(parts):
             pass
@@ -575,6 +630,7 @@ class GroundStation:
         self.swarm.start()
 
     def close(self):
+        self.missions.close()
         for task in self._tasks:
             task.cancel()
         self.swarm.stop()

@@ -39,6 +39,8 @@ GIMBAL_FLAGS = M.GIMBAL_MANAGER_FLAGS_ROLL_LOCK | M.GIMBAL_MANAGER_FLAGS_PITCH_L
 # Telemetry the safety monitor needs, requested at 1 Hz in case the link's
 # stream set lacks them: SYS_STATUS, GPS_RAW_INT, BATTERY_STATUS
 HEALTH_MESSAGES = (1, 24, 147)
+GIMBAL_ATTITUDE_MSG = 285  # GIMBAL_DEVICE_ATTITUDE_STATUS
+GIMBAL_MANAGER_STATUS_MSG = 281  # who controls the gimbal
 MISSION, FENCE = M.MAV_MISSION_TYPE_MISSION, M.MAV_MISSION_TYPE_FENCE
 INT_PARAM_TYPES = (M.MAV_PARAM_TYPE_UINT8, M.MAV_PARAM_TYPE_INT8, M.MAV_PARAM_TYPE_UINT16,
                    M.MAV_PARAM_TYPE_INT16, M.MAV_PARAM_TYPE_UINT32, M.MAV_PARAM_TYPE_INT32)
@@ -180,8 +182,11 @@ class VehicleLink:
         self.gps_eph_m = None  # horizontal accuracy
         self.gimbal_attitude = None  # (pitch, yaw relative to the drone) in degrees
         self.gimbal_attitude_time = 0.0
+        self.gimbal_owner = None  # (sysid, compid) in primary control of the gimbal
         self.mission_seq = -1  # PX4's current mission item
         self.mission_reached = -1  # the last mission item PX4 reached
+        self.mission_state = 0  # MAVLink MISSION_STATE (0 on older firmware)
+        self.mission_time = 0.0
         self.zoom_percent = 0.0  # the camera zoom last asked for (real cameras)
 
         self._acks = queue.Queue()
@@ -214,10 +219,14 @@ class VehicleLink:
         return time.monotonic() - self.last_message_time if self.last_message_time else None
 
     def _request_health_streams(self):
-        for msg_id in HEALTH_MESSAGES:
-            self._send(lambda mav, m=msg_id: mav.command_long_send(
+        # Health at 1 Hz; where the gimbal points at 5 Hz (the dashboard and
+        # mission run logs show it)
+        rates = [(m, 1_000_000) for m in HEALTH_MESSAGES] + [
+            (GIMBAL_ATTITUDE_MSG, 200_000), (GIMBAL_MANAGER_STATUS_MSG, 500_000)]
+        for msg_id, interval_us in rates:
+            self._send(lambda mav, m=msg_id, us=interval_us: mav.command_long_send(
                 self.sysid, PX4_COMPID, M.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
-                m, 1_000_000, 0, 0, 0, 0, 0))
+                m, us, 0, 0, 0, 0, 0))
 
     # ------------------------------------------------------------------
     # Parameters
@@ -257,6 +266,13 @@ class VehicleLink:
 
     # ------------------------------------------------------------------
     # Gimbal and camera
+
+    @property
+    def autopilot_has_gimbal(self):
+        """True if PX4 itself (a mission) controls the gimbal; None if unknown."""
+        if self.gimbal_owner is None:
+            return None
+        return self.gimbal_owner == (self.sysid, PX4_COMPID)
 
     def take_gimbal_control(self):
         """Make this link the gimbal manager's primary controller.
@@ -403,6 +419,13 @@ class VehicleLink:
         self.mission_seq = self.mission_reached = -1
         return first_waypoint, len(items)
 
+    def upload_items(self, items, timeout=15.0):
+        """Upload a PX4 mission of ready-made items (frame, command, (p1..p4),
+        lat, lon, alt); raises if PX4 rejects it."""
+        self._upload_items(items, MISSION, timeout, "mission")
+        self.mission_seq = self.mission_reached = -1
+        self.mission_state = 0
+
     def clear_mission(self, timeout=15.0):
         """Remove PX4's stored mission (an empty upload)."""
         self._upload_items([], MISSION, timeout, "mission")
@@ -433,10 +456,13 @@ class VehicleLink:
 
     def _send_mission_item(self, seq):
         frame, command, (p1, p2, p3, p4), lat, lon, alt = self._mission_items[seq]
+        # x/y are degrees x 1e7 for a position; an item without one (frame
+        # MISSION) carries params 5 and 6 there as they are
+        scale = 1 if frame == M.MAV_FRAME_MISSION else 1e7
         self._send(
             lambda mav: mav.mission_item_int_send(
                 self.sysid, PX4_COMPID, seq, frame, command, 0, 1, p1, p2, p3, p4,
-                int(lat * 1e7), int(lon * 1e7), alt, self._mission_type,
+                int(lat * scale), int(lon * scale), alt, self._mission_type,
             ),
         )
 
@@ -473,6 +499,9 @@ class VehicleLink:
             _, pitch, yaw = QuaternionBase(list(msg.q)).euler
             self.gimbal_attitude = (math.degrees(pitch), wrap_180(math.degrees(yaw)))
             self.gimbal_attitude_time = time.monotonic()
+            return
+        if msg_type == "GIMBAL_MANAGER_STATUS":
+            self.gimbal_owner = (msg.primary_control_sysid, msg.primary_control_compid)
             return
         if msg.get_srcComponent() != PX4_COMPID:
             return
@@ -540,5 +569,7 @@ class VehicleLink:
                 self._mission_ack.put(msg.type)
         elif msg_type == "MISSION_CURRENT":
             self.mission_seq = msg.seq
+            self.mission_state = getattr(msg, "mission_state", 0)
+            self.mission_time = time.monotonic()
         elif msg_type == "MISSION_ITEM_REACHED":
             self.mission_reached = msg.seq

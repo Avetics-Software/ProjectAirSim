@@ -708,7 +708,9 @@ class CameraWindows:
 
     def _cam_title(self, cam):
         if cam == "Tracker":
-            state = "tracking" if self.companion and self.companion.tracking else "click or drag to track"
+            state = ("mission controls camera" if self.companion and self.companion.mission_active
+                     else "tracking" if self.companion and self.companion.tracking
+                     else "click or drag to track")
             return f"{self.title} Tracker (companion {self.companion.ip if self.companion else ''})  {state}"
         if cam == "GimbalCam":
             via = "X" if self.companion else "PX4"  # who steers this camera

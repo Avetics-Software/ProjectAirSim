@@ -50,8 +50,9 @@ def rotate_inverse(q, v):
     return r.T @ np.asarray(v)
 
 
-async def run_track_test(session, camera, mode, log_dir):
-    """Run the test on one drone (a SimPayload with no companion)."""
+async def run_track_test(session, camera, mode, log_dir, tag=""):
+    """Run the test on one drone (a SimPayload with no companion). tag: a
+    prefix for the CSV's name (the mission run, if one is flying)."""
     log = projectairsim_log()
     link, drone, world = camera.link, camera.drone, session.world
     if not (link.armed and link.position and link.position[3] > 5.0):
@@ -155,7 +156,7 @@ async def run_track_test(session, camera, mode, log_dir):
     if not measured:
         log.warning("tracktest: no camera frames were measured")
         return
-    path = f"{log_dir}/tracktest_{camera.name}_{mode}_{time.strftime('%H%M%S')}.csv"
+    path = f"{log_dir}/{tag}tracktest_{camera.name}_{mode}_{time.strftime('%H%M%S')}.csv"
     with open(path, "w", newline="") as f:
         out = csv.writer(f)
         out.writerow(["t", "phase", "h_offset_deg", "v_offset_deg", "in_frame",
