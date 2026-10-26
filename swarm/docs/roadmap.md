@@ -54,7 +54,7 @@ Still to do:
   metadata and true boxes, replayed through X's detector and ByteTrack
   (`mot_replay.py`), scored for ID switches with their causes (`mot_eval.py`).
   Found and fixed: X's ByteTrack gave a new ID after a single missed
-  detection. Pending: the Radxa runs and ByteTrack tuning.
+  detection. First results: [tracker and CMC experiments](tracker-cmc-experiments.md).
 
 ## 3. Targets and tracking
 

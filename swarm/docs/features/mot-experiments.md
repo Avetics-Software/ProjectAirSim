@@ -140,6 +140,9 @@ never changes `track_id`, so it cannot reduce ID switches as it stands.
 
 ## Results on the Radxa (2026-10-26)
 
+The full write-up, with every run, the causes and the timing, is
+[Tracker and CMC experiments](../tracker-cmc-experiments.md).
+
 X's own detectors on the three recordings (RK3588, every frame), scored
 against the true boxes. Detector recall and precision are per box; IDs per car
 counts the scenario's moving cars only.

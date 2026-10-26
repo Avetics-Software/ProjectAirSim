@@ -54,6 +54,9 @@ ground station never fights QGC for control.
 - [Roadmap](docs/roadmap.md): what is still missing, in priority order
 - [Repeatable missions](docs/features/missions.md): uploaded flights with aircraft
   headings, camera pitch/yaw, and per-run logs
+- [MOT experiments](docs/features/mot-experiments.md): record missions past
+  scripted traffic, replay them through X's detector and ByteTrack, score ID
+  switches; first results in [tracker and CMC experiments](docs/tracker-cmc-experiments.md)
 
 ## Layout
 
