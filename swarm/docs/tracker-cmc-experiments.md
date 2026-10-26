@@ -171,10 +171,11 @@ The oracle runs (spoiled true boxes) agree: CMC took the drone-motion run from
 
 These CMC results predate two later CMC changes (`042ac40`):
 - **It ignores detected vehicles:** no motion points are taken from inside
-  this frame's detections, which should help exactly the junction case.
+  this frame's detections, meant for the junction case.
 - **It rejects weak fits:** a fit with too few inliers is not applied.
 
-They are not measured yet.
+Section 5 measures them: ignoring the cars did not help the junction, and the
+inlier gate hurt at low frame rates. The gate is now off in rknn-sim.
 
 ## 4. Timing on the Radxa
 
@@ -201,6 +202,161 @@ They are not measured yet.
 - **Caveat:** live, stream decoding and output encoding run in parallel and
   compete for the CPU, so the live margin is smaller than the replay shows.
 
+## 5. Is CMC good enough? Scored against the true camera motion
+
+**Question.** Should CMC be improved, for example by fusing gimbal and
+attitude telemetry? Two parts:
+- **Accuracy:** how far off is each CMC estimate?
+- **Headroom:** how many ID switches would a perfect CMC save?
+
+**Method** (`swarm/cmc_eval.py`, A5X_RPI_Release `mot_replay.py`):
+- **True camera motion.** Computed from the recorded camera pose, field of
+  view and vehicle positions. For each pair of processed frames, a car's
+  3D position at the first frame is projected through both cameras: the
+  difference is where the camera motion alone moved it.
+- **Scoring each estimate.** Errors are measured at the true cars, which is
+  where the tracker needs them. "IoU<0.2" is the share of car pairs whose
+  CMC error alone pushes a box's overlap with itself below 0.2, ByteTrack's
+  stage-1 minimum.
+- **Pose lag.** In these recordings the camera pose for frame k belongs to
+  the image of frame k+1: the sim's image metadata runs a frame ahead of the
+  pixels (`sim_time` is right). The recorder now writes each frame the pose
+  its pixels were rendered from, and marks it `camera_pose_aligned` in
+  `meta.json`. `cmc_eval.py` and `mot_eval.py` shift older recordings by
+  themselves. Checked on a new `mot_drone_motion` recording: 2.2 / 7.3 px
+  (p50 / p90) unshifted, against 11.9 / 54.1 px shifted. With the pose read one row earlier, projected
+  vehicles land within 0.6-3.8 px (median) of their true boxes, against
+  1.5-9.5 px without, and 55 px at p90 while the drone yaws.
+- **Perfect CMC.** `cmc_eval.py` writes the true warp per frame
+  (`cmc_truth.csv`), and `mot_replay.py --cmc-warps` tracks with it instead
+  of estimating. Also a rotation-only warp: what perfect, synchronised gimbal
+  and attitude telemetry could give, ignoring the drone's own movement.
+- **Detections.** The same Radxa VisDrone detections (conf 0.2) for every
+  setting, tracked on the laptop.
+- **Rates.** Every frame (about 16 frames/s, as live X without SAHI), and
+  `--rate 8` (as live X with SAHI or a slower detector).
+
+**ID switches** (one deterministic replay each; a few switches either way is
+noise):
+
+| CMC | Convoy, every frame | Junction | Drone motion | Convoy, 8 Hz | Junction | Drone motion |
+|---|---|---|---|---|---|---|
+| Off | 9 | **25** | 71 | 6 | 17 | 108 |
+| Vision (current: targets masked, inlier gate 12 / 50%) | 8 | 39 | 27 | 14 | 18 | 40 |
+| Vision, no inlier gate (4 / 0%) | 8 | 39 | 26 | 14 | 18 | 25 |
+| **Perfect** (true warp) | 8 | 30 | 28 | 4 | 17 | **19** |
+| Rotation only (perfect telemetry) | 8 | **24** | 29 | 3 | 18 | 23 |
+
+**Estimate accuracy**, drone motion (error at the true cars, px p50 / p90;
+share of car pairs with IoU<0.2):
+
+| Camera turning | Every frame: no CMC | Vision | Perfect | 8 Hz: no CMC | Vision | Vision, no gate | Perfect |
+|---|---|---|---|---|---|---|---|
+| 0-5 deg/s | 3.4 / 11.1 | 0.6 / 1.7 | 0.2 / 0.6 | 9.5 / 35.6 | 1.4 / 4.7 (1.7%) | 1.4 / 4.5 (0.6%) | 0.6 / 1.7 |
+| 15-30 deg/s | 32.8 / 53.0 (10.8%) | 2.4 / 4.7 (0%) | 2.6 / 4.8 | 94 / 138 (96%) | 4.8 / 70 (10.6%) | 4.4 / 16.3 (1.4%) | 6.4 / 10.5 |
+| over 30 deg/s | 47.7 / 78.6 (31.5%) | 3.2 / 6.8 (0.4%) | 3.7 / 6.5 | 133 / 175 (100%) | 7.1 / 145 (11.2%) | 5.6 / 23.1 (0%) | 9.6 / 13.8 |
+| Estimate rejected or failed, over 30 deg/s | | 15% | | | 63% | 5% | |
+
+**What it shows:**
+- **At every frame, vision CMC is as good as perfect.** Drone motion 27 vs
+  28 switches, convoy 8 vs 8. While the camera turns faster than 30 deg/s, its
+  error at the cars is 6.8 px at p90, the same as the true warp's. There is
+  nothing left for better CMC, or telemetry, to win at this rate.
+- **The inlier gate (`CMC_MIN_INLIERS` 12, `CMC_MIN_INLIER_RATIO` 0.5)
+  hurts at 8 Hz.** It rejects 63% of estimates in fast turns, the frames
+  that need them most, and drone-motion switches rise from 25 to 40. At
+  every frame it makes no difference.
+- **At 8 Hz, vision has headroom.**
+  - Drone motion: 25 switches without the gate, against 19 for perfect CMC.
+  - Convoy: 14, against 4 perfect and 6 with CMC off. The ground moves a
+    steady ~30 px between processed frames. Vision's estimate of it
+    scatters (12-43 px, p90 error 9.7 px, perfect 1.1). With CMC off, the
+    Kalman velocity simply absorbs the steady pan.
+- **Masking the detected cars did not fix the junction:** 39 switches,
+  against 38 before. Even perfect CMC (30) is worse there than none (25);
+  rotation-only gives 24. The camera is nearly still, and it looks at the
+  ground at a shallow angle, so near and far ground move differently. One
+  rotation + scale + shift warp fits the whole ground (p90 3.3 px) but not
+  the distant cars: in the 0-5 deg/s frames it is wrong at the cars, which
+  then lose their match.
+- **Rotation only is close to perfect everywhere:** drone motion 29 vs 28
+  and 23 vs 19; convoy and junction as good as the best. The drone's own
+  movement matters little at these ranges. So timely, synchronised gimbal and
+  attitude telemetry could replace or check the vision estimate. These sim
+  numbers are its upper bound; X's live gimbal telemetry (10 Hz, no frame
+  timestamps) would do worse.
+
+**Answer.** At live X's frame rate without SAHI, CMC does not need improving
+for a turning drone. The gaps are:
+1. The inlier gate: lower or drop it.
+2. A nearly still camera with many moving cars (the junction): any
+   translation correction there costs IDs.
+3. Lower frame rates, where vision's estimate gets noisy.
+
+## 6. ByteTrack: what the remaining switches are, and the matching order
+
+**Question.** With good detections and good CMC, why do IDs still outnumber
+vehicles, and does ByteTrack need better frame-edge and size-jump handling?
+
+**Method.**
+- **Laptop replays** of ByteTrack (`mot_replay.py`); the tracker is
+  deterministic, so these counts hold on the Radxa too.
+- **Three inputs per recording:**
+  - true boxes with perfect CMC (`--oracle --cmc-warps cmc_truth.csv`): the
+    tracker's own mistakes only
+  - true boxes with X's CMC
+  - the Radxa's VisDrone detections (conf 0.2) with X's CMC
+- **Settings:** CMC without the inlier gate, as rknn-sim now uses.
+- **Diagnosis:** individual switches traced frame by frame (true box, track
+  predictions, overlaps).
+
+**What the switches were** (true boxes, perfect CMC, drone motion and
+junction):
+- **Out of view, not cut off.** Most "frame-edge" switches are cars that the
+  yaw swing turned out of view for about 2.4 s and back.
+  - Their track expired (`MAX_LOST` 30 frames is about 1.9 s here) and they
+    came back with a new ID.
+  - Keeping the track longer doesn't help: the car drives about 20 m (about
+    300 px) while unseen, so its old prediction is nowhere near where it
+    reappears.
+  - `MAX_LOST` 60, 90 and 150 changed nothing with true boxes, and 1 switch
+    with real detections.
+- **Stolen by a stale lost track.** When part of a car was hidden, the
+  visible sliver landed on an old *lost* track lying at that spot. The
+  earlier fix let lost tracks compete in stage 1 on equal terms with active
+  ones, so the stale track won (IoU 0.76 against 0.24 for the car's own
+  track). The car flipped to that ID and back a frame or two later.
+- **Out of view for a long time:** the parked cars, unseen for about 80 s.
+- **The junction's turn home:** a cluster while the camera turns at
+  90-110°/s.
+
+**Changes tried** (ID switches; ✓ kept):
+
+| Tracker | Junction, real detections | Drone motion, real detections | Drone motion, true boxes + perfect CMC |
+|---|---|---|---|
+| Before (lost tracks compete in stage 1) | 39 | 26 | 17 |
+| ✓ **Matching order:** active tracks first, lost tracks only for the detections left | **26** | **22** | **15** |
+| + containment: a detection mostly inside an active track's prediction is that car, partly hidden | 26 | 22 | 16 |
+| + frame edge and size jumps: predictions clipped to the frame; a cut-off or suddenly shrunk box updates the position only, keeping the size | 28 | 22 | 18 |
+
+The convoy stayed at 8 throughout. Junction IDF1 on real detections went
+0.425 → 0.434.
+
+Containment and the edge / size-jump handling did not help, because the
+"edge" and "size-jump" switches were really the two causes above. They were
+dropped.
+
+**Kept** (A5X_RPI_Release `utils/trackers/mot.py`): stage 1 matches
+high-confidence detections against active tracks first, then the leftovers
+against lost tracks. Also, `mot_replay.py` reports track boxes clipped to the
+frame, as the overlay draws them.
+
+**Left, needing more than ByteTrack:**
+- **Out-of-view cars:** a motion model that keeps predicting a car while it
+  is unseen, with distance-based rather than overlap-based matching. With
+  identical cars, position and timing are all there is.
+- **The long-unseen parked cars:** re-identification.
+
 ## Conclusions
 
 1. **The detector matters most.** The VisDrone model at confidence 0.2 found 4-9×
@@ -208,19 +364,32 @@ They are not measured yet.
 2. **The ByteTrack bug and the threshold values made every detector gap an ID
    jump.** Both are fixed.
 3. **CMC is worth its 8 ms** for a moving drone: 61% fewer ID switches while it
-   turns, at a small cost when many cars move through a still view. The later
-   CMC changes (ignoring detected vehicles) target that case.
+   turns. At live X's frame rate it is already as good as a perfect estimate
+   (section 5). Its cost is with a nearly still camera and many moving cars
+   (the junction), where any translation correction loses IDs. Ignoring the
+   detected cars did not change that.
 4. **SAHI is not worth it live on the RK3588** with these models: it is three
    times slower and adds false boxes that cost IDs.
+5. **CMC's inlier gate hurt at low frame rates.** It rejected most estimates in
+   fast turns. It is now off in rknn-sim (the defaults: 4 inliers, no ratio).
+6. **Giving active tracks first claim** on detections cut junction switches by
+   a third (39 -> 26) on real detections. Most remaining switches need more
+   than ByteTrack: cars out of view for seconds, and identical cars.
 
 ## Next
 
-- **Measure the later CMC changes** (ignore detected vehicles, reject weak
-  fits): deploy them to the Radxa first, then re-run.
-- **Tune `BYTETRACK_MAX_LOST` and `MIN_HITS`** on the VisDrone detections,
-  with `--rate` at live X's rate.
-- **Look at the remaining causes in `events.csv`:** frame-edge (cars leaving
-  and re-entering view) and crowding at the junction.
+- **CMC** (section 5):
+  - The inlier gate is now off in rknn-sim (A5X_RPI_Release; deploy it to the
+    Radxa). Confirm with a run at 8 Hz.
+  - For a nearly still camera: try skipping CMC when the estimated motion is
+    below a few pixels, or compensating rotation only, and re-run the
+    junction.
+  - Only if X must run at low rates: smooth the estimate over time, or check
+    it against gimbal telemetry.
+
+- **Cars out of view for seconds** (section 6): keep predicting them while
+  unseen and match on distance, or re-identification.
+- **The junction's switches during the fast turn home** (90-110°/s).
 - **A live sim flight with X on the Radxa** using these settings, to confirm
   the replay results and the live frame rate.
 - **Repeat each setting several times** to put error bars on the differences.

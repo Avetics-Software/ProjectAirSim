@@ -67,6 +67,8 @@ so set any other integer parameter in a params file instead.
   `COM_DL_LOSS_T 10`)
 - makes the simulated battery last 20 minutes armed, never below 35% on its
   own (`SIM_BAT_DRAIN`, `SIM_BAT_MIN_PCT`)
+- makes a mission's `look_at` (ROI) turn the camera rather than the drone
+  (`MIS_MNT_YAW_CTL 1`; see [missions](features/missions.md))
 
 Edit it to taste. The ground station's safety panel (F2, and its Sim tab, F9)
 can cut a drone's link and drain its battery to test the responses; see
@@ -186,7 +188,12 @@ or footpath. Vehicle `waypoints` are joined along the roads too (set
 `follow_roads: false` for straight lines; people walk straight unless
 `follow_roads: true`); a waypoint off the roads is reached in a straight line.
 For vehicles, airport runways and taxiways count as roads for `waypoints` and
-`route`, but random traffic stays off them. The map data is downloaded once into `osm_cache/` and needs
+`route`, but random traffic stays off them. `start_delay` holds an actor still
+for a while first; `start_at_m` / `stop_short_m` start it part-way along its
+path and stop it short of the end, so several cars sharing one route wait and
+stop in formation (a convoy) instead of stacked at its start. A
+[mission](features/missions.md) can bring its own actors file (`actors:`),
+respawned at each `mission start`. The map data is downloaded once into `osm_cache/` and needs
 internet the first time. Preview routes without the sim:
 `python road_routes.py --kind vehicle --random 1500 --count 5 --geojson routes.geojson`,
 then drop the file onto https://geojson.io.
@@ -286,8 +293,12 @@ Output, in `DIR/<YYYYmmdd_HHMMSS>/`:
 | `boxes.csv` | Every box: `sim_time`, `drone`, `frame`, `actor` (identity), `class`, `x1 y1 x2 y2` (pixels), visible `pixels`, `truncated` (cut by the frame edge) |
 | `frames.csv` | Every frame: `sim_time`, `drone`, `frame`, size, box count, the camera's world position and orientation (NED, quaternion) and horizontal FOV |
 | `ground_truth_<time>.csv` | Where every moving actor was (the log described above), one per scene load. With `--ground-truth` it goes here instead of `/tmp/projectairsim-run/`, and none are deleted |
+| `mission_runs.csv` | When each ground-station mission run started and its track steps (sim time), to pick a run's frames out of the capture |
 
 Frames with nobody in view are skipped, except one in ten (hard negatives).
+For every frame of a mission run, with the drone's metadata and a video
+instead of JPEGs, record the mission instead (`record: true`; see
+[MOT experiments](features/mot-experiments.md)).
 Images and labels share a name, the layout Ultralytics expects; list several
 runs' `images/` folders in a `data.yaml`, and keep whole runs (flights or
 places) for validation rather than random frames, which are near-copies of
@@ -630,6 +641,13 @@ until the track ends. A heartbeat goes out every 0.2 s, and the status panel sho
 the tracker video is arriving. `--companion IP` sets the companion without
 `--pi-ip`. Drone control (strike) is off in `rknn-sim` for now; fly the drone
 from the dashboard or QGC.
+
+While a ground-station [mission](features/missions.md) holds the camera, X
+stands down (`MAVLINK_STAND_DOWN_IN_MISSION`): it keeps detecting and
+tracking, but sends no gimbal commands until the mission hands the camera back
+(a `track` step) or ends. The profile detects with the VisDrone model at
+confidence 0.2 with camera motion compensation, chosen from the
+[tracker experiments](tracker-cmc-experiments.md).
 
 ### Companions on several drones
 

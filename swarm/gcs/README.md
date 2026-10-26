@@ -96,6 +96,7 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
 | `dashboard.py` | The Tk dashboard window |
 | `mavlink_link.py` | `MavConnection` (a link shared by several drones) and `VehicleLink` (one drone) |
 | `swarm.py`, `search_planner.py` | Swarm commands, area search, deconfliction |
+| `mission.py` | Mission files: checking, conversion to PX4 mission items, upload, start, run logs and comparison |
 | `safety.py`, `safety_panel.py` | Health alerts and responses; the safety drawer (F2) |
 | `companion.py`, `video.py` | X on a companion computer; RTSP video readers |
 | `minimap.py`, `road_routes.py` | The map and its OpenStreetMap roads |

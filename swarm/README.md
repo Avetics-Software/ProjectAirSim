@@ -69,6 +69,13 @@ ground station never fights QGC for control.
 | `payload_mavlink.py`, `payload_video.py`, `camera_properties.*` | The simulated gimbal camera: MAVLink camera, RTSP video, lens and zoom |
 | `spawned_objects.py`, `moving_actors.py`, `actor_editor.*`, `config_*.yml` | Objects, and people and vehicles moving along roads, to search for |
 | `spotter_control.py`, `shared_frame.py` | The spotter: a person walked around the world, with a first-person view |
+| `missions/` | Mission files (`mission load NAME`), and `scenarios/`: the moving traffic some missions bring |
+| `mission_track.py` | A mission's `track` step in the sim: locks a tracker onto a target and scores every frame |
+| `experiment_recorder.py`, `mot_eval.py`, `cmc_eval.py` | Records `record: true` mission runs frame by frame; scores a tracker's ID switches, and its camera motion compensation, against them ([MOT experiments](docs/features/mot-experiments.md)) |
+| `gt_capture.py`, `gt_playback.py` | `--ground-truth`: labelled GimbalCam frames, and a viewer for them |
+| `track_test.py` | `sim tracktest`: the gimbal's stabilisation, measured |
+| `tests/` | Unit tests: `python -m unittest discover -s tests` |
+| `runs/` | Mission run logs and recordings (not in git) |
 | `config.yml` | The drones (name, sysid, video, companion), the real drones' MAVLink link, and the ground station's settings (swarm, deconfliction, safety, controls); read by both launchers |
 | `sim_config/` | Scene and robot configs (the `_custom` ones are generated each run) |
 | `docs/` | This documentation |

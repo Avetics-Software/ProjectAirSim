@@ -58,6 +58,12 @@ So the ground station never takes the camera from X. X keeps it too: with
 hands it away around takeoff and return-home, and it repeats a held jog every
 0.5 s, as PX4 drops a gimbal rate that isn't refreshed within 2 s.
 
+The exception is a [mission](missions.md). While a mission holds the camera,
+X stands down (`MAVLINK_STAND_DOWN_IN_MISSION`) and the dashboard's gimbal
+keys are blocked on that drone. X still detects and tracks; only its gimbal
+commands stop. A mission's `track` step hands the camera back to X for a
+stretch, and it returns when the mission ends.
+
 ## How it works
 
 `gcs/companion.py` speaks X's ground-station protocol, the same as A5X's

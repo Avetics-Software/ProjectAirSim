@@ -1,5 +1,9 @@
 # Mission feature handoff — 2026-10-23
 
+> **Historical note** from the session that started #32, kept for its record of
+> the debugging. The current state is in [missions](features/missions.md) and
+> [MOT experiments](features/mot-experiments.md).
+
 > **Update, later the same day:** the blocking items below are resolved and
 > validated in the sim (see `docs/features/missions.md`, "Validation"):
 > gimbal identity now comes from PX4's first autopilot heartbeat

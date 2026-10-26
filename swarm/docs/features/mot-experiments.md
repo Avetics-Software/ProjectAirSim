@@ -51,7 +51,7 @@ The run is written to `runs/<mission>_<run>/`:
 | File | Contents |
 |---|---|
 | `gimbal_Drone1.mp4` | Every rendered GimbalCam frame once, in order (1920×1080, near-lossless) |
-| `frames_Drone1.csv` | Per frame: index, sim and wall time, the camera's world pose (NED, quaternion and Euler: the gimbal's actual attitude), field of view, zoom, PX4's gimbal angles, mode, mission item, box count |
+| `frames_Drone1.csv` | Per frame: index, sim and wall time, the camera's world pose (NED, quaternion and Euler: the gimbal's actual attitude), field of view, zoom, PX4's gimbal angles, mode, mission item, box count. The pose is the one the frame's pixels were rendered from; recordings without `camera_pose_aligned` in `meta.json` have it one row late, which the tools correct |
 | `boxes_Drone1.csv` | Per frame, each vehicle in view: its name (true identity), box, visible pixels, cut by the edge |
 | `telemetry.csv` | The drone's true kinematics at about 50 Hz (sim time): position, lat/lon/height, roll/pitch/yaw, their rates, velocity, acceleration, mode, mission item |
 | `actors.csv` | Every vehicle's position and heading at 10 Hz |
@@ -72,7 +72,9 @@ It reads the video frame by frame, resizes to `INPUT_WIDTH`×`INPUT_HEIGHT`,
 and runs the detector and tracker exactly as `detection.py` builds them
 (`ATR_MODEL`, `ATR_RUNTIME`, `ATR_CONFIDENCE`, `ATR_LABELS`, `OBJECT_TRACKER`,
 `BYTETRACK_*`, `OBJECT_TRACKER_CMC`). Output goes to
-`<run>/tracker_<time>/`: `tracks.csv`, `detections.csv`, `run_info.json`.
+`<run>/tracker_<time>/`: `tracks.csv`, `detections.csv`, `run_info.json`, and
+`timing.csv` (milliseconds per frame in each stage: decode, resize, detector,
+CMC, tracker; the replay also prints mean, p50, p95 and max).
 
 - `--rate HZ`: process only the frames a live X at HZ would. Live X tracks the
   newest frame each time its detector is free, and `BYTETRACK_MAX_LOST` and
@@ -116,6 +118,34 @@ In each tracker folder:
 Only vehicles are scored by default (`--kinds`), true boxes narrower than
 8 px are ignored (`--min-px`), and a match needs IoU 0.5 (`--iou`).
 
+## Scoring CMC against the true camera motion
+
+`cmc_eval.py` (laptop) computes the true camera motion from a recording's
+camera poses and vehicle positions. It needs no detector:
+
+```bash
+python cmc_eval.py runs/<run> [runs/<run>/tracker_* ...]
+```
+
+- **Always:** prints how well projected vehicles fit their true boxes (a
+  check on the camera model), and writes `runs/<run>/cmc_truth.csv`: each
+  frame's true warp from the frame before, plus a rotation-only warp.
+- **Per tracker folder with a `cmc.csv`** (`mot_replay.py` writes one
+  whenever CMC is on): the error of every CMC estimate at the true cars, by
+  how fast the camera was turning. Written to `cmc_eval.csv`, `cmc_eval.json`
+  and `cmc_eval.png`.
+- **Perfect CMC:** `mot_replay.py ... --cmc-warps runs/<run>/cmc_truth.csv`
+  tracks with the true warp instead of the estimate; add
+  `--cmc-warp-column rotation` for rotation only.
+- **Pose lag:** the sim's image metadata runs one frame ahead of the pixels.
+  The recorder now writes each frame the pose its pixels were rendered from
+  (`camera_pose_aligned` in `meta.json`). For older recordings, including the
+  2026-10-26 ones, `cmc_eval.py` reads the pose one row earlier (`--pose-lag`
+  defaults to 1 for them, 0 otherwise) and `mot_eval.py` corrects its camera
+  turn rate the same way.
+
+Results: [Tracker and CMC experiments, section 5](../tracker-cmc-experiments.md#5-is-cmc-good-enough-scored-against-the-true-camera-motion).
+
 ## Step by step: run it yourself on the Radxa
 
 The same recordings and code as the
@@ -138,7 +168,8 @@ cd ~/Documents/A5X_RPI_Release/X
 ```
 
 This copies the tracker, CMC, `mot_replay.py` and the rknn-sim
-`config_cv.yml`: VisDrone model, confidence 0.2, corrected thresholds, CMC on.
+`config_cv.yml`: VisDrone model, confidence 0.2, corrected thresholds, CMC on
+without the inlier gate.
 
 **2. Replay a recording on the Radxa:**
 
@@ -270,9 +301,32 @@ counts the scenario's moving cars only.
 The rknn-sim profile now uses `yolov8n_visdrone.rknn`, `ATR_CONFIDENCE`
 0.2, the corrected thresholds and `OBJECT_TRACKER_CMC: true`.
 
-## Not yet done
+## Done and still to do
 
-- **The Radxa runs:** the real RKNN detector over these recordings, then
-  ByteTrack sweeps on its detections.
-- **Live logging:** writing X's tracks during a live sim flight, for checking
+Done (2026-10-26; see [tracker and CMC experiments](../tracker-cmc-experiments.md)):
+- **The Radxa runs:** X's RKNN detectors (COCO and VisDrone `yolov8n`,
+  confidence 0.4 and 0.2, with and without SAHI) over all three recordings.
+- **Tracker comparisons on the saved detections:** the ByteTrack fix, the
+  corrected IoU thresholds, CMC on and off.
+- **Per-stage timing on the RK3588** (`timing.csv`).
+- **CMC scored against the true camera motion** (`cmc_eval.py`, with perfect
+  CMC replayed through `mot_replay.py --cmc-warps`). At every frame vision CMC
+  is as good as perfect; its inlier gate hurt at low frame rates and is now
+  off; ignoring the detected cars did not help the junction.
+- **ByteTrack's remaining switches traced:** active tracks now get first claim
+  on detections (junction 39 -> 26 switches on real detections); frame-edge
+  and size-jump handling, a containment fallback and longer `MAX_LOST` were
+  tried and didn't help (report, section 6).
+
+Still to do:
+- **Cars out of view for seconds:** most remaining switches. `MAX_LOST`
+  doesn't help (they reappear far from their old prediction); this needs
+  prediction while unseen with distance-based matching, or re-identification.
+- **CMC at a nearly still camera:** with many cars moving through a still view
+  (the junction), any translation correction costs IDs; try skipping it when
+  the estimated motion is tiny, or rotation only.
+- **Error bars:** repeat runs of each setting.
+- **A live sim flight with X on the Radxa** using these settings, to confirm
+  the replay results and the live frame rate.
+- **Live logging:** writing X's tracks during a live flight, for checking
   against a recording. It needs the Radxa's and laptop's clocks in sync.
