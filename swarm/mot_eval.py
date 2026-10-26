@@ -117,11 +117,15 @@ class Recording:
         return self.telemetry[i]
 
     def _camera_rate(self):
-        """frame -> how fast the camera was turning (deg/s), from its pose."""
+        """frame -> how fast the camera was turning (deg/s), from its pose.
+        Recordings made before meta.json's camera_pose_aligned have each
+        frame's pose one row late: use the row before."""
         out = {}
         prev = None
-        for f in sorted(self.frames):
-            r = self.frames[f]
+        frames = sorted(self.frames)
+        late = not self.meta.get("camera_pose_aligned")
+        for n, f in enumerate(frames):
+            r = self.frames[frames[n - 1]] if late and n > 0 else self.frames[f]
             q = np.array([float(r[k]) for k in ("cam_qw", "cam_qx", "cam_qy", "cam_qz")])
             t = float(r["sim_time"])
             if prev is not None and t > prev[1]:
