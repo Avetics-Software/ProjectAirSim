@@ -7,16 +7,24 @@ motion compensation (CMC). The method and tools are in
 the first round of experiments and what they showed. To repeat them yourself, see
 [step by step: run it yourself on the Radxa](features/mot-experiments.md#step-by-step-run-it-yourself-on-the-radxa).
 
-**Outcome.** On these recordings the detector was the bottleneck:
-- **Detector:** the COCO `yolov8n` found 6-14% of the cars. `yolov8n_visdrone`
-  at confidence 0.2 finds 52-67%, with 86-95% of its boxes correct, at
-  25-30 ms per frame.
-- **Tracker:** X's ByteTrack had a bug that gave a car a new ID after a single
-  missed detection, and its IoU thresholds were set far too strict.
-- **CMC:** it more than halves the IDs per car while the drone turns.
+**Outcome.** The rknn-sim profile now runs **VisDrone + ByteTrack + CMC**:
+`yolov8n_visdrone` at confidence 0.2, ByteTrack with active tracks matched
+first and corrected IoU thresholds, and CMC without the inlier gate
+(A5X_RPI_Release `2b48943`).
 
-The rknn-sim profile now uses VisDrone, confidence 0.2, the corrected
-thresholds and CMC (A5X_RPI_Release `042ac40`, `5cb3adf`).
+On the Radxa it runs at 25 frames/s. Against the same VisDrone detector with
+the tracker as it was, ID switches fell from 34 to 25 at the junction and
+from 89 to 24 while the drone manoeuvres, with IDF1 0.53 / 0.43 / 0.38
+(convoy / junction / drone motion); see [section 7](#7-visdrone--bytetrack--cmc-on-the-radxa).
+
+How it got there:
+- **Detector, the bottleneck:** the COCO `yolov8n` found 6-14% of the cars.
+  `yolov8n_visdrone` at confidence 0.2 finds 52-67%, with 86-95% of its boxes
+  correct, at 25-30 ms per frame.
+- **Tracker:** X's ByteTrack had a bug that gave a car a new ID after a single
+  missed detection, its IoU thresholds were far too strict, and stale lost
+  tracks could take a partly hidden car's detection.
+- **CMC:** it more than halves the IDs per car while the drone turns.
 
 ## Set-up
 
@@ -357,6 +365,65 @@ frame, as the overlay draws them.
   identical cars, position and timing are all there is.
 - **The long-unseen parked cars:** re-identification.
 
+## 7. VisDrone + ByteTrack + CMC on the Radxa
+
+The final configuration, run end to end on the RK3588:
+- **Code:** X as committed (A5X_RPI_Release `2b48943`), deployed to
+  `~/Code/X_sim`.
+- **Settings:** the rknn-sim profile as it now stands (`yolov8n_visdrone`,
+  `ATR_CONFIDENCE` 0.2, no SAHI; ByteTrack with active tracks first and the
+  corrected thresholds; `OBJECT_TRACKER_CMC: true` without the inlier gate).
+- **Run:** `mot_replay.py` over every frame of the three recordings.
+
+| Recording | Detector and tracker | ID switches | IDs per car | IDF1 | MOTA |
+|---|---|---|---|---|---|
+| Convoy | COCO yolov8n, conf 0.4 (the starting point) | 4 | 1.4 | 0.10 | 0.04 |
+| | VisDrone, conf 0.2; ByteTrack as before, no CMC | 11 | 2.2 | 0.53 | 0.55 |
+| | **VisDrone + ByteTrack + CMC** | **8** | 2.2 | 0.53 | 0.57 |
+| Junction | COCO yolov8n, conf 0.4 | 2 | 0.6 | 0.07 | 0.04 |
+| | VisDrone, conf 0.2; ByteTrack as before, no CMC | 34 | 4.75 | 0.36 | 0.39 |
+| | **VisDrone + ByteTrack + CMC** | **25** | **3.75** | **0.43** | **0.43** |
+| Drone motion | COCO yolov8n, conf 0.4 | 16 | 2.5 | 0.10 | 0.08 |
+| | VisDrone, conf 0.2; ByteTrack as before, no CMC | 89 | 11.0 | 0.22 | 0.33 |
+| | **VisDrone + ByteTrack + CMC** | **24** | **3.75** | **0.38** | **0.48** |
+
+IDs per car counts the moving cars only; 1 is perfect.
+
+- **The COCO rows have few switches only because the detector saw few cars**
+  (6-14%): an untracked car can't change ID. IDF1 is the fair comparison.
+- **The detector is the same in both VisDrone rows:** 52-67% recall, 86-95%
+  precision. The difference is ByteTrack's fixes and CMC.
+- **The Radxa matches the laptop.** The laptop, tracking the Radxa's saved
+  detections, predicted 8 / 26 / 22 switches; the board gave 8 / 25 / 24.
+  CMC's estimates differ slightly with the board's OpenCV build.
+
+**Time per frame on the Radxa** (mean, the three recordings):
+
+| Detector | CMC | Rest of ByteTrack | Video decode (replay only) | Total | Frames/s |
+|---|---|---|---|---|---|
+| 25.0-25.5 ms | 8.2-8.8 ms | 0.4-0.5 ms | 5.3-5.5 ms | 39.4-39.9 ms (p95 52-54) | 25.0-25.4 |
+
+Live X decodes video in its own thread, so its detection loop takes about
+34 ms per frame (about 29 frames/s), above its 20 frames/s input: no frames
+skipped.
+
+**What the switches left are** (likely causes from `events.csv`; a switch can
+have several):
+
+| Recording | Detector gap | Camera motion | Frame edge | Crowding | Other |
+|---|---|---|---|---|---|
+| Convoy | 15 | 0 | 12 | 3 | 37 |
+| Junction | 17 | 3 | 11 | 5 | 26 |
+| Drone motion | 31 | 37 | 14 | 4 | 28 |
+
+These include fragmentations as well as ID switches.
+- **Detector gaps:** the detector missing a car for a frame or more.
+- **Camera motion:** mostly cars the yaw turns swing out of view for seconds,
+  which return with new IDs: beyond ByteTrack (section 6).
+
+The levers left are detector recall and a way to carry cars through seconds
+out of view.
+
 ## Conclusions
 
 1. **The detector matters most.** The VisDrone model at confidence 0.2 found 4-9×
@@ -375,6 +442,9 @@ frame, as the overlay draws them.
 6. **Giving active tracks first claim** on detections cut junction switches by
    a third (39 -> 26) on real detections. Most remaining switches need more
    than ByteTrack: cars out of view for seconds, and identical cars.
+7. **VisDrone + ByteTrack + CMC, run on the Radxa, holds up:** 8 / 25 / 24 ID
+   switches (convoy / junction / drone motion), down from 11 / 34 / 89 with
+   the tracker as it was, at 25 frames/s. It is now the rknn-sim profile.
 
 ## Next
 

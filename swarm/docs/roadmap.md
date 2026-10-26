@@ -55,7 +55,9 @@ Still to do:
   (`mot_replay.py`), scored for ID switches with their causes (`mot_eval.py`).
   Found and fixed: X's ByteTrack gave a new ID after a single missed
   detection. First results: [tracker and CMC experiments](tracker-cmc-experiments.md)
-  (the rknn-sim profile now uses the VisDrone model, confidence 0.2 and CMC).
+  (the rknn-sim profile now runs VisDrone + ByteTrack + CMC: on the Radxa,
+  8 / 25 / 24 ID switches on convoy / junction / drone motion, down from
+  11 / 34 / 89, at 25 frames/s).
   CMC is as good as a perfect estimate at live X's frame rate; its inlier gate
   is now off. Next: CMC for a nearly still camera, tune `MAX_LOST`, a live run
   with X.

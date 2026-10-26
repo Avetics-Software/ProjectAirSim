@@ -228,8 +228,9 @@ python mot_eval.py runs/mot_convoy_20261026_110740_184801946 \
 - **Written** into the tracker folder: `events.csv`, `summary.json`,
   `timeline.png`.
 - **Comparing:** list several tracker folders to get a comparison table, e.g.
-  next to `tracker_*_vd_newthresh_cmc` (the 2026-10-26 run with the current
-  settings).
+  next to `tracker_*_visdrone_bytetrack_cmc` (the 2026-10-26 Radxa run with the
+  current settings, VisDrone + ByteTrack + CMC; it is in each recording's
+  folder on the laptop and the Radxa).
 
 **A new recording instead.** Start the sim with
 `./run_cesium_sim.sh --qgc --ground-truth` and fly a mission (`mission load
@@ -271,6 +272,17 @@ never changes `track_id`, so it cannot reduce ID switches as it stands.
 The full write-up, with every run, the causes and the timing, is
 [Tracker and CMC experiments](../tracker-cmc-experiments.md).
 
+**The configuration now in rknn-sim, VisDrone + ByteTrack + CMC, on the
+Radxa** (X as committed, every frame of each recording):
+
+| Recording | ID switches | IDs per car | IDF1 | Frames/s |
+|---|---|---|---|---|
+| Convoy | 8 (11 with the tracker as it was) | 2.2 | 0.53 | 25.3 |
+| Junction | 25 (34) | 3.75 | 0.43 | 25.0 |
+| Drone motion | 24 (89) | 3.75 (11.0) | 0.38 | 25.4 |
+
+The detector alone (all its variants on the Radxa):
+
 X's own detectors on the three recordings (RK3588, every frame), scored
 against the true boxes. Detector recall and precision are per box; IDs per car
 counts the scenario's moving cars only.
@@ -299,7 +311,8 @@ counts the scenario's moving cars only.
 | Corrected + camera motion compensation | 2.2 | 3.75 | **3.75** | **28** |
 
 The rknn-sim profile now uses `yolov8n_visdrone.rknn`, `ATR_CONFIDENCE`
-0.2, the corrected thresholds and `OBJECT_TRACKER_CMC: true`.
+0.2, ByteTrack with active tracks matched first and the corrected thresholds,
+and `OBJECT_TRACKER_CMC: true` without the inlier gate.
 
 ## Done and still to do
 
@@ -313,6 +326,8 @@ Done (2026-10-26; see [tracker and CMC experiments](../tracker-cmc-experiments.m
   CMC replayed through `mot_replay.py --cmc-warps`). At every frame vision CMC
   is as good as perfect; its inlier gate hurt at low frame rates and is now
   off; ignoring the detected cars did not help the junction.
+- **VisDrone + ByteTrack + CMC run end to end on the Radxa** with X as
+  committed: 8 / 25 / 24 ID switches at 25 frames/s (report, section 7).
 - **ByteTrack's remaining switches traced:** active tracks now get first claim
   on detections (junction 39 -> 26 switches on real detections); frame-edge
   and size-jump handling, a containment fallback and longer `MAX_LOST` were
