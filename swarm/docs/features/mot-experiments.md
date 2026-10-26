@@ -116,6 +116,103 @@ In each tracker folder:
 Only vehicles are scored by default (`--kinds`), true boxes narrower than
 8 px are ignored (`--min-px`), and a match needs IoU 0.5 (`--iou`).
 
+## Step by step: run it yourself on the Radxa
+
+The same recordings and code as the
+[2026-10-26 experiments](../tracker-cmc-experiments.md). The three
+recordings are on the laptop in `swarm/runs/` (not in git) and already copied
+to the Radxa:
+
+| Recording | Folder (laptop `swarm/runs/`, Radxa `~/mot_runs/`) |
+|---|---|
+| convoy | `mot_convoy_20261026_110740_184801946` |
+| junction | `mot_junction_20261026_112050_117478778` |
+| drone motion | `mot_drone_motion_20261026_112704_725029113` |
+
+**1. Put the current code on the Radxa** (laptop, A5X_RPI_Release on
+`swarm-sim`, up to date):
+
+```bash
+cd ~/Documents/A5X_RPI_Release/X
+./deploy.sh --profile rknn-sim --dir radxa@192.168.199.99:~/Code/X_sim/ --code-only
+```
+
+This copies the tracker, CMC, `mot_replay.py` and the rknn-sim
+`config_cv.yml`: VisDrone model, confidence 0.2, corrected thresholds, CMC on.
+
+**2. Replay a recording on the Radxa:**
+
+```bash
+ssh radxa@192.168.199.99
+cd ~/Code/X_sim
+A5X_PROFILE=rknn-sim venv/bin/python mot_replay.py ~/mot_runs/mot_convoy_20261026_110740_184801946 --tag mine
+```
+
+- **Time:** about 1.5-2 minutes per recording without SAHI.
+- **At the end** it prints a per-stage timing table and the output folder,
+  `~/mot_runs/<recording>/tracker_<date>_<time>_mine/`, which holds
+  `tracks.csv`, `detections.csv`, `timing.csv` and `run_info.json`.
+
+To reproduce a row of the experiments, add `--set` overrides (repeatable):
+
+| Setting | Extra options |
+|---|---|
+| Current (VisDrone, 0.2, CMC on) | none |
+| CMC off | `--set OBJECT_TRACKER_CMC=false` |
+| With SAHI | `--set SAHI_ENABLED=true --set PARALLELISM_MODE=1` |
+| COCO model at 0.4 | `--set ATR_MODEL=./model/yolov8n.rknn --set ATR_CONFIDENCE=0.4` |
+| Old thresholds | `--set BYTETRACK_MATCH_THRESH=0.8 --set BYTETRACK_R1_MATCH_THRESH=0.5` |
+
+To try tracker settings only, without re-running the detector (seconds
+instead of minutes), feed a previous run's detections:
+
+```bash
+A5X_PROFILE=rknn-sim venv/bin/python mot_replay.py ~/mot_runs/<recording> \
+    --detections ~/mot_runs/<recording>/tracker_<...>_mine/detections.csv \
+    --set BYTETRACK_MAX_LOST=60 --tag lost60
+```
+
+The "before the fix" rows used X's tracker as of A5X_RPI_Release commit
+`569f964`. Check out `X/utils/trackers/mot.py` from it to reproduce them.
+
+**3. Copy the result back** (laptop), into the same recording's folder, which
+has the true boxes and telemetry for scoring:
+
+```bash
+scp -r "radxa@192.168.199.99:mot_runs/mot_convoy_20261026_110740_184801946/tracker_*_mine" \
+    ~/Documents/ProjectAirSim/swarm/runs/mot_convoy_20261026_110740_184801946/
+```
+
+**4. Score it** (laptop):
+
+```bash
+conda activate projectairsim
+cd ~/Documents/ProjectAirSim/swarm
+python mot_eval.py runs/mot_convoy_20261026_110740_184801946 \
+    runs/mot_convoy_20261026_110740_184801946/tracker_*_mine
+```
+
+- **Printed:** ID switches, IDs per car, IDF1, MOTA, and the detector's recall
+  and precision.
+- **Written** into the tracker folder: `events.csv`, `summary.json`,
+  `timeline.png`.
+- **Comparing:** list several tracker folders to get a comparison table, e.g.
+  next to `tracker_*_vd_newthresh_cmc` (the 2026-10-26 run with the current
+  settings).
+
+**A new recording instead.** Start the sim with
+`./run_cesium_sim.sh --qgc --ground-truth` and fly a mission (`mission load
+mot_convoy`, `mission upload 1`, `mission start 1`). Copy its video and frame
+list to the Radxa:
+
+```bash
+ssh radxa@192.168.199.99 mkdir -p mot_runs/<run>
+scp runs/<run>/gimbal_Drone1.mp4 runs/<run>/frames_Drone1.csv radxa@192.168.199.99:mot_runs/<run>/
+```
+
+Then follow steps 2-4. Copy `boxes_Drone1.csv` too only for `--oracle`
+runs on the Radxa.
+
 ## Finding: a missed frame cost a new ID (fixed in X)
 
 The oracle replay of `mot_convoy`, with the true boxes 3 px jittered and 10%

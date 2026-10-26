@@ -4,7 +4,8 @@ How well X keeps each vehicle's ID when the drone flies with its camera fixed,
 and what it took to improve it: the detector, ByteTrack's matching, and camera
 motion compensation (CMC). The method and tools are in
 [MOT experiments](features/mot-experiments.md). This page is the record of
-the first round of experiments and what they showed.
+the first round of experiments and what they showed. To repeat them yourself, see
+[step by step: run it yourself on the Radxa](features/mot-experiments.md#step-by-step-run-it-yourself-on-the-radxa).
 
 **Outcome.** On these recordings the detector was the bottleneck:
 - **Detector:** the COCO `yolov8n` found 6-14% of the cars. `yolov8n_visdrone`
