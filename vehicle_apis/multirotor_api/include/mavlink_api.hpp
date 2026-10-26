@@ -458,6 +458,7 @@ class MavLinkApi : public VTOLFWApiBase {
 
   // Debug
   int heartbeat_messages_received_count_ = 0;
+  int autopilot_system_id_ = -1;  // the vehicle's (PX4's) MAVLink system ID
   bool first_message_sent_ = false;
   bool first_gps_message_sent_ = false;
   bool got_first_actuator_control_ = false;

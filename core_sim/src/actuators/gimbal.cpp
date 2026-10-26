@@ -256,7 +256,15 @@ void Gimbal::Impl::UpdateGimbal(IController::GimbalState& new_state,
                         : 1.0f;
     follow_ref_ = WrapPi(follow_ref_ + WrapPi(vehicle_yaw - follow_ref_) * k);
     const float wanted = yaw_lock ? target_[2] : WrapPi(follow_ref_ + target_[2]);
-    heading_ = Approach(heading_, wanted, 2, d.settling_time, dt, true);
+    // Turn the way the mount can: measured from the nose within its travel,
+    // not the shortest way round, which can run into a travel limit and stay
+    // there (e.g. from -160 to +45 the short way passes behind the drone)
+    const float now_rel = WrapPi(heading_ - vehicle_yaw);
+    const float wanted_rel =
+        std::max(d.min_angle[2], std::min(d.max_angle[2], WrapPi(wanted - vehicle_yaw)));
+    const bool full_circle = d.max_angle[2] - d.min_angle[2] >= 2.0f * static_cast<float>(M_PI);
+    const float error = full_circle ? WrapPi(wanted - heading_) : wanted_rel - now_rel;
+    heading_ = WrapPi(Approach(heading_, heading_ + error, 2, d.settling_time, dt, false));
     // The mount's yaw travel is measured from the nose
     yaw = WrapPi(heading_ - vehicle_yaw);
     const float clamped =
@@ -307,7 +315,12 @@ const ActuatedTransforms& Gimbal::Impl::GetActuatedTransforms() const {
 double Gimbal::Impl::calcSetpoint(double dt, double lastSetpoint,
                                   double newSetpoint, double newRateSetpoint) {
   const bool setpointValid = std::isfinite(newSetpoint);
-  const bool rateSetpointValid = std::isfinite(newRateSetpoint);
+  // A zero rate with an angle means "go to the angle": PX4 sends its mission
+  // gimbal steps (DO_GIMBAL_MANAGER_PITCHYAW) that way. Taken as a rate it
+  // would hold the gimbal still, capped only on one side by the angle.
+  const bool rateSetpointValid =
+      std::isfinite(newRateSetpoint) &&
+      !(setpointValid && std::abs(newRateSetpoint) < 1e-6);
 
   if (rateSetpointValid) {
     const double rateDiff = dt * newRateSetpoint;

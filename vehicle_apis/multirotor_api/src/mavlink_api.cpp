@@ -1462,8 +1462,14 @@ void MavLinkApi::SetupGimbalConnection(const std::string& remoteIpAddr) {
     return;
   }
 
+  // The gimbal is part of this vehicle, so it uses the autopilot's system ID
+  // (learnt from its heartbeat, which ConnectVehicle waited for); a fixed ID
+  // of 1 misroutes every other vehicle's gimbal in a swarm
+  const int gimbal_sysid = autopilot_system_id_ > 0 ? autopilot_system_id_ : 1;
+  AddStatusMessage("Gimbal system ID " + std::to_string(gimbal_sysid));
   gimbal_node_ = std::make_shared<mavlinkcom::MavLinkNode>(
-      1, static_cast<int>(mavlinkcom::MAV_COMPONENT::MAV_COMP_ID_GIMBAL));
+      gimbal_sysid,
+      static_cast<int>(mavlinkcom::MAV_COMPONENT::MAV_COMP_ID_GIMBAL));
   std::shared_ptr<mavlinkcom::MavLinkConnection> gimbalConnection;
   AddStatusMessage("Creating connection for gimbal");
   for (int retries = 60; retries >= 0 && connecting_; retries--) {
@@ -1878,6 +1884,13 @@ void MavLinkApi::ProcessMavMessages(const mavlinkcom::MavLinkMessage& msg) {
     }
 
     HeartbeatMessage.decode(msg);
+    if (autopilot_system_id_ <= 0 &&
+        msg.compid ==
+            static_cast<int>(mavlinkcom::MAV_COMPONENT::MAV_COMP_ID_AUTOPILOT1) &&
+        HeartbeatMessage.autopilot !=
+            static_cast<uint8_t>(mavlinkcom::MAV_AUTOPILOT::MAV_AUTOPILOT_INVALID)) {
+      autopilot_system_id_ = msg.sysid;
+    }
 
     bool armed =
         (HeartbeatMessage.base_mode &
@@ -2436,7 +2449,7 @@ void MavLinkApi::SendGimbalDeviceInformation() {
     msg.yaw_min = -180;
     msg.yaw_max = 180;
     msg.protocol_version = 2;
-    msg.sysid = 1;
+    msg.sysid = gimbal_node_->getLocalSystemId();
     msg.compid = it.second;
     gimbal_node_->sendMessage(msg);
   }

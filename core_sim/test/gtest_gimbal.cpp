@@ -220,3 +220,31 @@ TEST(Gimbal, YawLockStopsAtTheYawTravelLimit) {
   for (int deg = 0; deg <= 150; deg += 5) gimbal->UpdateGimbal(cmd, kStep, deg * kDeg);
   EXPECT_NEAR(gimbal->GetGimbalState().yaw, -100.0f * kDeg, 1e-4f);
 }
+
+TEST(Gimbal, AngleWithZeroRateGoesToTheAngle) {
+  auto actuator = LoadGimbal(nullptr);
+  auto* gimbal = dynamic_cast<projectairsim::Gimbal*>(actuator.get());
+  // PX4 mission gimbal steps carry the angle with zero rates: up and down,
+  // left and right, each reaches its angle
+  for (auto [pitch, yaw] : {std::pair{-45.0f, 30.0f}, std::pair{-20.0f, -60.0f},
+                            std::pair{-70.0f, 10.0f}}) {
+    auto cmd = Angles(pitch, yaw);
+    cmd.pitch_vel = cmd.yaw_vel = 0.0f;
+    gimbal->UpdateGimbal(cmd, kStep, 0.0f);
+    EXPECT_NEAR(gimbal->GetGimbalState().pitch, pitch * kDeg, 1e-4f);
+    EXPECT_NEAR(gimbal->GetGimbalState().yaw, yaw * kDeg, 1e-4f);
+  }
+}
+
+TEST(Gimbal, YawTurnsBackWithinItsTravelNotTheShortWayRound) {
+  auto actuator = LoadGimbal(
+      R"({"max-yaw-rate-deg": 120, "yaw-min-deg": -160, "yaw-max-deg": 160})");
+  auto* gimbal = dynamic_cast<projectairsim::Gimbal*>(actuator.get());
+  // At -160 from the nose, asked for +45: the short way (through the back)
+  // is outside the travel, so the mount turns back through the front
+  auto left = Angles(-45.0f, -160.0f);
+  for (int i = 0; i < 300; ++i) gimbal->UpdateGimbal(left, kStep, 0.0f);
+  auto right = Angles(-45.0f, 45.0f);
+  for (int i = 0; i < 300; ++i) gimbal->UpdateGimbal(right, kStep, 0.0f);
+  EXPECT_NEAR(gimbal->GetGimbalState().yaw, 45.0f * kDeg, 1e-4f);
+}
