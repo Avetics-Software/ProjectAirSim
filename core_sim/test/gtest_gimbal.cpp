@@ -133,3 +133,118 @@ TEST(Gimbal, UpdateGimbalUsesRateLimitedSetpointsAndUpdatesTransform) {
   projectairsim::ExpectRotationMatches(transform_it->second.affine3.linear(),
                                        expected_quaternion.toRotationMatrix());
 }
+
+namespace {
+
+constexpr long long kStep = 10'000'000LL;  // 10 ms
+const float kDeg = static_cast<float>(M_PI) / 180.0f;
+
+std::unique_ptr<projectairsim::Actuator> LoadGimbal(const char* settings) {
+  json config_json = R"({
+    "name": "gimbal_1", "type": "gimbal", "enabled": true,
+    "parent-link": "body", "child-link": "camera_mount",
+    "origin": {"xyz": "0 0 0", "rpy-deg": "0 0 0"}
+  })"_json;
+  if (settings) config_json["gimbal-settings"] = json::parse(settings);
+  return projectairsim::LoadActuatorFromJson(config_json);
+}
+
+projectairsim::IController::GimbalState Angles(float pitch_deg, float yaw_deg,
+                                               bool yaw_lock = false) {
+  projectairsim::IController::GimbalState s;
+  s.roll = 0.0f;
+  s.pitch = pitch_deg * kDeg;
+  s.yaw = yaw_deg * kDeg;
+  s.roll_lock = s.pitch_lock = true;
+  s.yaw_lock = yaw_lock;
+  return s;
+}
+
+}  // namespace
+
+TEST(Gimbal, YawLockHoldsCompassHeadingWhileRobotTurns) {
+  auto actuator = LoadGimbal(nullptr);
+  auto* gimbal = dynamic_cast<projectairsim::Gimbal*>(actuator.get());
+  ASSERT_NE(gimbal, nullptr);
+  // Yaw lock: yaw 30 deg is a compass heading. The robot turns from 0 to 90.
+  auto cmd = Angles(-45.0f, 30.0f, true);
+  for (int deg = 0; deg <= 90; deg += 5) {
+    gimbal->UpdateGimbal(cmd, kStep, deg * kDeg);
+    // Camera heading = robot heading + yaw from the nose stays 30
+    EXPECT_NEAR(deg * kDeg + gimbal->GetGimbalState().yaw, 30.0f * kDeg, 1e-4f);
+  }
+}
+
+TEST(Gimbal, FollowModeIsInstantByDefaultAndTrailsWithFollowTime) {
+  auto ideal = LoadGimbal(nullptr);
+  auto smooth = LoadGimbal(R"({"yaw-follow-time-s": 1.0})");
+  auto* g_ideal = dynamic_cast<projectairsim::Gimbal*>(ideal.get());
+  auto* g_smooth = dynamic_cast<projectairsim::Gimbal*>(smooth.get());
+  auto cmd = Angles(-45.0f, 0.0f);
+  g_ideal->UpdateGimbal(cmd, kStep, 0.0f);
+  g_smooth->UpdateGimbal(cmd, kStep, 0.0f);
+  // The robot snaps to 90 deg: the ideal gimbal turns with it at once
+  g_ideal->UpdateGimbal(cmd, kStep, 90.0f * kDeg);
+  EXPECT_NEAR(g_ideal->GetGimbalState().yaw, 0.0f, 1e-4f);
+  // The smooth one trails: right after, the camera still looks near the old
+  // heading (-90 from the new nose); after 5 time constants it has caught up
+  g_smooth->UpdateGimbal(cmd, kStep, 90.0f * kDeg);
+  EXPECT_LT(g_smooth->GetGimbalState().yaw, -85.0f * kDeg);
+  for (int i = 0; i < 500; ++i) g_smooth->UpdateGimbal(cmd, kStep, 90.0f * kDeg);
+  EXPECT_NEAR(g_smooth->GetGimbalState().yaw, 0.0f, 1.0f * kDeg);
+}
+
+TEST(Gimbal, SlewRateAndTravelLimits) {
+  auto actuator = LoadGimbal(
+      R"({"max-pitch-rate-deg": 60, "pitch-min-deg": -90, "pitch-max-deg": 20,
+          "max-yaw-rate-deg": 60, "yaw-min-deg": -120, "yaw-max-deg": 120})");
+  auto* gimbal = dynamic_cast<projectairsim::Gimbal*>(actuator.get());
+  // Pitch from 0 to -60 at 60 deg/s takes 1 s: half way after 0.5 s
+  auto cmd = Angles(-60.0f, 0.0f);
+  for (int i = 0; i < 50; ++i) gimbal->UpdateGimbal(cmd, kStep, 0.0f);
+  EXPECT_NEAR(gimbal->GetGimbalState().pitch, -30.0f * kDeg, 0.5f * kDeg);
+  for (int i = 0; i < 60; ++i) gimbal->UpdateGimbal(cmd, kStep, 0.0f);
+  EXPECT_NEAR(gimbal->GetGimbalState().pitch, -60.0f * kDeg, 1e-4f);
+  // Beyond the travel: stops at the limit
+  auto too_far = Angles(-170.0f, 170.0f);
+  for (int i = 0; i < 500; ++i) gimbal->UpdateGimbal(too_far, kStep, 0.0f);
+  EXPECT_NEAR(gimbal->GetGimbalState().pitch, -90.0f * kDeg, 1e-4f);
+  EXPECT_NEAR(gimbal->GetGimbalState().yaw, 120.0f * kDeg, 1e-4f);
+}
+
+TEST(Gimbal, YawLockStopsAtTheYawTravelLimit) {
+  auto actuator = LoadGimbal(R"({"yaw-min-deg": -100, "yaw-max-deg": 100})");
+  auto* gimbal = dynamic_cast<projectairsim::Gimbal*>(actuator.get());
+  // Hold north while the robot turns to 150: the mount can only reach -100
+  auto cmd = Angles(-45.0f, 0.0f, true);
+  for (int deg = 0; deg <= 150; deg += 5) gimbal->UpdateGimbal(cmd, kStep, deg * kDeg);
+  EXPECT_NEAR(gimbal->GetGimbalState().yaw, -100.0f * kDeg, 1e-4f);
+}
+
+TEST(Gimbal, AngleWithZeroRateGoesToTheAngle) {
+  auto actuator = LoadGimbal(nullptr);
+  auto* gimbal = dynamic_cast<projectairsim::Gimbal*>(actuator.get());
+  // PX4 mission gimbal steps carry the angle with zero rates: up and down,
+  // left and right, each reaches its angle
+  for (auto [pitch, yaw] : {std::pair{-45.0f, 30.0f}, std::pair{-20.0f, -60.0f},
+                            std::pair{-70.0f, 10.0f}}) {
+    auto cmd = Angles(pitch, yaw);
+    cmd.pitch_vel = cmd.yaw_vel = 0.0f;
+    gimbal->UpdateGimbal(cmd, kStep, 0.0f);
+    EXPECT_NEAR(gimbal->GetGimbalState().pitch, pitch * kDeg, 1e-4f);
+    EXPECT_NEAR(gimbal->GetGimbalState().yaw, yaw * kDeg, 1e-4f);
+  }
+}
+
+TEST(Gimbal, YawTurnsBackWithinItsTravelNotTheShortWayRound) {
+  auto actuator = LoadGimbal(
+      R"({"max-yaw-rate-deg": 120, "yaw-min-deg": -160, "yaw-max-deg": 160})");
+  auto* gimbal = dynamic_cast<projectairsim::Gimbal*>(actuator.get());
+  // At -160 from the nose, asked for +45: the short way (through the back)
+  // is outside the travel, so the mount turns back through the front
+  auto left = Angles(-45.0f, -160.0f);
+  for (int i = 0; i < 300; ++i) gimbal->UpdateGimbal(left, kStep, 0.0f);
+  auto right = Angles(-45.0f, 45.0f);
+  for (int i = 0; i < 300; ++i) gimbal->UpdateGimbal(right, kStep, 0.0f);
+  EXPECT_NEAR(gimbal->GetGimbalState().yaw, 45.0f * kDeg, 1e-4f);
+}

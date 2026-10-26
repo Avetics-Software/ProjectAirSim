@@ -5,6 +5,14 @@
 
 #include "WorldSimApi.h"
 
+#include "Animation/AnimSequence.h"
+#include "Animation/AnimSequenceBase.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "EngineUtils.h"
+#include "Robot/UnrealRobot.h"
+#include "Sensors/UnrealCamera.h"
 #include "ImageUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/OutputDeviceNull.h"
@@ -12,6 +20,7 @@
 #include "Renderers/ProcMeshActor.h"
 #include "Runtime/Core/Public/Async/ParallelFor.h"
 #include "WeatherLib.h"
+#include "World/PathFollowerComponent.h"
 #include "assimp/postprocess.h"
 #include "assimp/scene.h"
 #include "core_sim/actor/env_actor.hpp"
@@ -98,6 +107,45 @@ void WorldSimApi::RegisterServiceMethods() {
           &WorldSimApi::destroyAllSpawnedObjects, *this);
   sim_scene_->RegisterServiceMethod(destroy_all_spawned_objects,
                                     destroy_all_spawned_objects_handler);
+
+  auto set_object_animation = projectairsim::ServiceMethod(
+      "SetObjectAnimation",
+      {"object_name", "animation_name", "loop", "play_rate"});
+  auto set_object_animation_handler = set_object_animation.CreateMethodHandler(
+      &WorldSimApi::setObjectAnimation, *this);
+  sim_scene_->RegisterServiceMethod(set_object_animation,
+                                    set_object_animation_handler);
+
+  auto set_object_path = projectairsim::ServiceMethod(
+      "SetObjectPath",
+      {"object_name", "points", "speed", "mode", "yaw_offset",
+       "align_to_ground", "walk_animation", "idle_animation",
+       "animation_speed", "start_delay"});
+  auto set_object_path_handler =
+      set_object_path.CreateMethodHandler(&WorldSimApi::setObjectPath, *this);
+  sim_scene_->RegisterServiceMethod(set_object_path, set_object_path_handler);
+
+  auto clear_object_path =
+      projectairsim::ServiceMethod("ClearObjectPath", {"object_name"});
+  auto clear_object_path_handler = clear_object_path.CreateMethodHandler(
+      &WorldSimApi::clearObjectPath, *this);
+  sim_scene_->RegisterServiceMethod(clear_object_path,
+                                    clear_object_path_handler);
+
+  auto get_object_visibility = projectairsim::ServiceMethod(
+      "GetObjectVisibility",
+      {"robot_name", "camera_name", "object_names", "max_distance"});
+  auto get_object_visibility_handler = get_object_visibility.CreateMethodHandler(
+      &WorldSimApi::getObjectVisibility, *this);
+  sim_scene_->RegisterServiceMethod(get_object_visibility,
+                                    get_object_visibility_handler);
+
+  auto pause_object_paths =
+      projectairsim::ServiceMethod("PauseObjectPaths", {"paused"});
+  auto pause_object_paths_handler = pause_object_paths.CreateMethodHandler(
+      &WorldSimApi::pauseObjectPaths, *this);
+  sim_scene_->RegisterServiceMethod(pause_object_paths,
+                                    pause_object_paths_handler);
 
   auto spawn_object_from_file_geo = projectairsim::ServiceMethod(
       "spawnObjectFromFileAtGeo",
@@ -667,6 +715,255 @@ std::string WorldSimApi::spawnObjectFromFileAtGeoServiceMethod(
                                   enable_physics);
 }
 
+UAnimSequenceBase* WorldSimApi::findAnimation(const std::string& name) {
+  if (name.empty()) return nullptr;
+  // Look the animation up by asset name, like spawned meshes are
+  TArray<FAssetData> anims;
+  IAssetRegistry::Get()->GetAssetsByClass(
+      UAnimSequenceBase::StaticClass()->GetClassPathName(), anims, true);
+  const FName wanted(name.c_str());
+  for (const FAssetData& anim_data : anims) {
+    if (anim_data.AssetName == wanted) {
+      return Cast<UAnimSequenceBase>(anim_data.GetAsset());
+    }
+  }
+  return nullptr;
+}
+
+bool WorldSimApi::setObjectAnimation(const std::string& object_name,
+                                     const std::string& animation_name,
+                                     bool loop, float play_rate) {
+  bool played = false;
+  UnrealHelpers::RunCommandOnGameThread(
+      [this, &object_name, &animation_name, loop, play_rate, &played]() {
+        AActor* actor = UnrealHelpers::FindActor<AActor>(
+            unreal_world_, FString(object_name.c_str()), &scene_object_map_);
+        if (!actor) return;
+        USkeletalMeshComponent* mesh =
+            actor->FindComponentByClass<USkeletalMeshComponent>();
+        UAnimSequenceBase* anim = findAnimation(animation_name);
+        if (!mesh || !anim) return;
+        UPathFollowerComponent::PlayAnim(mesh, anim, play_rate, loop);
+        played = true;
+      },
+      true);
+
+  if (!played) {
+    std::string status_msg = "SetObjectAnimation failed: no skeletal object " +
+                             object_name + " or no animation " + animation_name;
+    UnrealLogger::Log(projectairsim::LogLevel::kError, TEXT("%hs"),
+                      status_msg.c_str());
+    throw projectairsim::Error(status_msg.c_str());
+  }
+  return played;
+}
+
+bool WorldSimApi::setObjectPath(const std::string& object_name,
+                                const std::vector<std::vector<float>>& points,
+                                float speed, const std::string& mode,
+                                float yaw_offset, bool align_to_ground,
+                                const std::string& walk_animation,
+                                const std::string& idle_animation,
+                                float animation_speed, float start_delay) {
+  if (points.size() < 2) {
+    throw projectairsim::Error("SetObjectPath needs at least 2 points");
+  }
+  EPathFollowMode follow_mode;
+  if (mode == "once") {
+    follow_mode = EPathFollowMode::Once;
+  } else if (mode == "loop") {
+    follow_mode = EPathFollowMode::Loop;
+  } else if (mode == "pingpong") {
+    follow_mode = EPathFollowMode::PingPong;
+  } else {
+    throw projectairsim::Error("SetObjectPath mode must be once, loop or "
+                               "pingpong, not " + mode);
+  }
+
+  std::string error;
+  UnrealHelpers::RunCommandOnGameThread(
+      [&]() {
+        AActor* actor = UnrealHelpers::FindActor<AActor>(
+            unreal_world_, FString(object_name.c_str()), &scene_object_map_);
+        if (!actor) {
+          error = "SetObjectPath failed: no object " + object_name;
+          return;
+        }
+        UAnimSequenceBase* walk = findAnimation(walk_animation);
+        UAnimSequenceBase* idle = findAnimation(idle_animation);
+        if ((!walk_animation.empty() && !walk) ||
+            (!idle_animation.empty() && !idle)) {
+          error = "SetObjectPath failed: animation " + walk_animation + " or " +
+                  idle_animation + " not found";
+          return;
+        }
+
+        // [north, east] or [north, east, on_bridge]; the follower reads the
+        // bridge flag from Z
+        TArray<FVector> path;
+        for (const auto& point : points) {
+          if (point.size() < 2) continue;
+          FVector location = UnrealTransform::NedToUnrealLinear(
+              projectairsim::Vector3(point[0], point[1], 0.0f));
+          location.Z = point.size() > 2 ? point[2] : 0.0f;
+          path.Add(location);
+        }
+
+        UPathFollowerComponent* follower =
+            actor->FindComponentByClass<UPathFollowerComponent>();
+        if (!follower) {
+          follower = NewObject<UPathFollowerComponent>(actor);
+          follower->RegisterComponent();
+        }
+        follower->Start(path, speed, follow_mode, yaw_offset, align_to_ground,
+                        walk, idle, animation_speed, start_delay);
+      },
+      true);
+
+  if (!error.empty()) {
+    UnrealLogger::Log(projectairsim::LogLevel::kError, TEXT("%hs"),
+                      error.c_str());
+    throw projectairsim::Error(error);
+  }
+  return true;
+}
+
+bool WorldSimApi::clearObjectPath(const std::string& object_name) {
+  bool found = false;
+  UnrealHelpers::RunCommandOnGameThread(
+      [&]() {
+        AActor* actor = UnrealHelpers::FindActor<AActor>(
+            unreal_world_, FString(object_name.c_str()), &scene_object_map_);
+        if (!actor) return;
+        found = true;
+        if (UPathFollowerComponent* follower =
+                actor->FindComponentByClass<UPathFollowerComponent>()) {
+          follower->Stop();
+          follower->DestroyComponent();
+        }
+      },
+      true);
+  return found;
+}
+
+std::vector<std::vector<float>> WorldSimApi::getObjectVisibility(
+    const std::string& robot_name, const std::string& camera_name,
+    const std::vector<std::string>& object_names, float max_distance) {
+  std::vector<std::vector<float>> results(object_names.size(),
+                                          {0.0f, 0.0f, 0.0f, nan});
+  std::string error;
+  UnrealHelpers::RunCommandOnGameThread(
+      [&]() {
+        AUnrealRobot* robot = nullptr;
+        for (TActorIterator<AUnrealRobot> it(unreal_world_); it; ++it) {
+          if (it->GetRobotId() == robot_name) {
+            robot = *it;
+            break;
+          }
+        }
+        USceneCaptureComponent2D* capture = nullptr;
+        if (robot) {
+          TArray<UUnrealCamera*> cameras;
+          robot->GetComponents(cameras);
+          for (UUnrealCamera* camera : cameras) {
+            if (camera->GetName() == FString(camera_name.c_str())) {
+              capture = camera->GetCaptureComponent(
+                  projectairsim::ImageType::kScene, false);
+              break;
+            }
+          }
+        }
+        if (!capture) {
+          error = "GetObjectVisibility: no camera " + camera_name +
+                  " on robot " + robot_name;
+          return;
+        }
+
+        const FVector eye = capture->GetComponentLocation();
+        const FQuat view = capture->GetComponentQuat();
+        const float tan_h =
+            FMath::Tan(FMath::DegreesToRadians(capture->FOVAngle * 0.5f));
+        const UTextureRenderTarget2D* target = capture->TextureTarget;
+        const float aspect = target && target->SizeY > 0
+                                 ? float(target->SizeX) / target->SizeY
+                                 : 16.0f / 9.0f;
+        const float tan_v = tan_h / aspect;
+        const float max_cm = max_distance * 100.0f;
+        auto in_view = [&](const FVector& point) {
+          const FVector local = view.UnrotateVector(point - eye);  // X forward
+          return local.X > 0.0f && local.X <= max_cm &&
+                 FMath::Abs(local.Y) <= tan_h * local.X &&
+                 FMath::Abs(local.Z) <= tan_v * local.X;
+        };
+
+        for (size_t i = 0; i < object_names.size(); ++i) {
+          AActor* actor = UnrealHelpers::FindActor<AActor>(
+              unreal_world_, FString(object_names[i].c_str()),
+              &scene_object_map_);
+          if (!actor) continue;
+          std::vector<float>& result = results[i];
+          if (const UPathFollowerComponent* follower =
+                  actor->FindComponentByClass<UPathFollowerComponent>()) {
+            result[2] = follower->IsCovered() ? 1.0f : 0.0f;
+          }
+
+          // Sample points over the object's own (rotated) box
+          const FBox box = actor->CalculateComponentsBoundingBoxInLocalSpace(true);
+          const FTransform to_world = actor->GetActorTransform();
+          const FVector centre = to_world.TransformPosition(box.GetCenter());
+          result[3] = FVector::Distance(centre, eye) / 100.0f;
+          result[0] = in_view(centre) ? 1.0f : 0.0f;
+
+          FCollisionQueryParams params(SCENE_QUERY_STAT(ObjectVisibility), true);
+          params.AddIgnoredActor(robot);
+          params.AddIgnoredActor(actor);
+          int samples = 0, visible = 0;
+          for (float fx : {-0.7f, 0.0f, 0.7f}) {
+            for (float fy : {-0.7f, 0.0f, 0.7f}) {
+              for (float fz : {0.25f, 0.8f}) {
+                const FVector local(
+                    box.GetCenter().X + fx * box.GetExtent().X,
+                    box.GetCenter().Y + fy * box.GetExtent().Y,
+                    box.Min.Z + fz * (box.Max.Z - box.Min.Z));
+                const FVector point = to_world.TransformPosition(local);
+                ++samples;
+                if (!in_view(point)) continue;
+                FHitResult hit;
+                if (!unreal_world_->LineTraceSingleByChannel(
+                        hit, eye, point, ECC_Visibility, params)) {
+                  ++visible;
+                }
+              }
+            }
+          }
+          result[1] = samples ? float(visible) / samples : 0.0f;
+        }
+      },
+      true);
+
+  if (!error.empty()) {
+    UnrealLogger::Log(projectairsim::LogLevel::kError, TEXT("%hs"),
+                      error.c_str());
+    throw projectairsim::Error(error);
+  }
+  return results;
+}
+
+bool WorldSimApi::pauseObjectPaths(bool paused) {
+  UnrealHelpers::RunCommandOnGameThread(
+      [&]() {
+        for (auto& object : scene_spawned_object_map_) {
+          if (!IsValid(object.Value)) continue;
+          if (UPathFollowerComponent* follower =
+                  object.Value->FindComponentByClass<UPathFollowerComponent>()) {
+            follower->SetPaused(paused);
+          }
+        }
+      },
+      true);
+  return true;
+}
+
 bool WorldSimApi::destroyObject(const std::string& object_name) {
   bool destroyed = false;
   UnrealHelpers::RunCommandOnGameThread(
@@ -717,12 +1014,25 @@ WorldSimApi::Pose WorldSimApi::getObjectPose(const std::string& object_name) {
 
 std::vector<WorldSimApi::Pose> WorldSimApi::getObjectPoses(
     const std::vector<std::string>& object_names) {
-  std::vector<WorldSimApi::Pose> results;
+  WorldSimApi::Pose missing;
+  missing.translation_ = projectairsim::Vector3(nan, nan, nan);
+  std::vector<WorldSimApi::Pose> results(object_names.size(), missing);
 
-  for (const std::string& obj_name : object_names) {
-    WorldSimApi::Pose obj_pose = getObjectPose(obj_name);
-    results.push_back(obj_pose);
-  }
+  // One trip to the game thread for all objects, so polling many moving
+  // objects doesn't take a frame per object
+  UnrealHelpers::RunCommandOnGameThread(
+      [this, &object_names, &results]() {
+        for (size_t i = 0; i < object_names.size(); ++i) {
+          AActor* actor = UnrealHelpers::FindActor<AActor>(
+              unreal_world_, FString(object_names[i].c_str()),
+              &scene_object_map_);
+          if (actor) {
+            results[i] = UnrealTransform::ToGlobalNed(FTransform(
+                actor->GetActorRotation(), actor->GetActorLocation()));
+          }
+        }
+      },
+      true);
 
   return results;
 }
@@ -836,8 +1146,27 @@ bool WorldSimApi::setObjectScale(const std::string& object_name,
   return result;
 }
 
+namespace {
+// A client's pattern is compiled on the game thread, where an exception from
+// an invalid one would abort the simulator; reject it here instead
+void CheckRegex(const std::string& pattern, const char* service,
+                std::regex::flag_type flags = std::regex::ECMAScript) {
+  try {
+    std::regex compiled(pattern, flags);
+  } catch (const std::regex_error& err) {
+    const std::string message = std::string(service) + ": invalid regex '" +
+                                pattern + "' (" + err.what() +
+                                "); use ECMAScript syntax, e.g. no (?i)";
+    UnrealLogger::Log(projectairsim::LogLevel::kError, TEXT("%hs"),
+                      message.c_str());
+    throw projectairsim::Error(message);
+  }
+}
+}  // namespace
+
 std::vector<std::string> WorldSimApi::listSceneObjects(
     const std::string& name_regex) {
+  CheckRegex(name_regex, "ListSceneObjects");
   std::vector<std::string> result;
   UnrealHelpers::RunCommandOnGameThread(
       [this, &name_regex, &result]() {
@@ -849,6 +1178,7 @@ std::vector<std::string> WorldSimApi::listSceneObjects(
 
 std::vector<std::string> WorldSimApi::listSimAssets(
     const std::string& name_regex) {
+  CheckRegex(name_regex, "ListAssets");
   std::vector<std::string> result;
   UnrealHelpers::RunCommandOnGameThread(
       [this, &name_regex, &result]() {
@@ -1344,6 +1674,10 @@ bool WorldSimApi::SetSegmentationIDByName(const std::string& mesh_name,
                                           int segmentation_id,
                                           bool is_name_regex,
                                           bool use_owner_name) {
+  if (is_name_regex) {
+    CheckRegex(mesh_name, "SetSegmentationIDByName",
+               std::regex::ECMAScript | std::regex::icase);
+  }
   bool success = false;
   UnrealHelpers::RunCommandOnGameThread(
       [&seg_map_ = seg_map_, &mesh_name, &segmentation_id, &is_name_regex,

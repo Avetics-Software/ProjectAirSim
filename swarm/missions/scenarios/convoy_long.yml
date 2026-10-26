@@ -1,0 +1,73 @@
+# MOT scenario: a longer, slower convoy (8 identical cars, 15 m apart nose to
+# nose, 8 m/s, about 105 m long) on the same road as convoy.yml, so it takes
+# about 24 s to pass a hovering drone's view. The cars wait in formation along
+# one shared route and set off together. Used by missions/mot_drone_motion.yml:
+# it sets off 40 s after `mission start` and is in the drone's view from about
+# 58 s to 82 s, through its turns, dash and climb.
+defaults:
+  vehicle: {asset: SKM_SportsCar, length: 4.5, align_to_ground: true}
+actors:
+- name: Convoy1
+  kind: vehicle
+  speed: 8
+  mode: once
+  start_delay: 40
+  start_at_m: 110
+  stop_short_m: 5
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy2
+  kind: vehicle
+  speed: 8
+  mode: once
+  start_delay: 40
+  start_at_m: 95
+  stop_short_m: 20
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy3
+  kind: vehicle
+  speed: 8
+  mode: once
+  start_delay: 40
+  start_at_m: 80
+  stop_short_m: 35
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy4
+  kind: vehicle
+  speed: 8
+  mode: once
+  start_delay: 40
+  start_at_m: 65
+  stop_short_m: 50
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy5
+  kind: vehicle
+  speed: 8
+  mode: once
+  start_delay: 40
+  start_at_m: 50
+  stop_short_m: 65
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy6
+  kind: vehicle
+  speed: 8
+  mode: once
+  start_delay: 40
+  start_at_m: 35
+  stop_short_m: 80
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy7
+  kind: vehicle
+  speed: 8
+  mode: once
+  start_delay: 40
+  start_at_m: 20
+  stop_short_m: 95
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy8
+  kind: vehicle
+  speed: 8
+  mode: once
+  start_delay: 40
+  start_at_m: 5
+  stop_short_m: 110
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}

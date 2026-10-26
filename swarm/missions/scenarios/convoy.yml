@@ -1,0 +1,51 @@
+# MOT scenario: a convoy of 5 identical cars close behind one another (14.4 m
+# apart nose to nose, about 10 m gaps, 12 m/s) up the straight road north-east
+# of the junction at 1.414751, 103.868094. Identical cars nose to tail: the
+# classic case for a tracker swapping IDs. The cars share one route, each
+# waiting at its place in the formation (start_at_m), and set off together;
+# they stop in formation too (stop_short_m). Used by missions/mot_convoy.yml:
+# the convoy sets off 52 s after `mission start`, once the drone is beside the
+# road.
+defaults:
+  vehicle: {asset: SKM_SportsCar, length: 4.5, align_to_ground: true}
+actors:
+- name: Convoy1
+  kind: vehicle
+  speed: 12
+  mode: once
+  start_delay: 52
+  start_at_m: 60
+  stop_short_m: 5
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy2
+  kind: vehicle
+  speed: 12
+  mode: once
+  start_delay: 52
+  start_at_m: 45.6
+  stop_short_m: 19.4
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy3
+  kind: vehicle
+  speed: 12
+  mode: once
+  start_delay: 52
+  start_at_m: 31.2
+  stop_short_m: 33.8
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy4
+  kind: vehicle
+  speed: 12
+  mode: once
+  start_delay: 52
+  start_at_m: 16.8
+  stop_short_m: 48.2
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}
+- name: Convoy5
+  kind: vehicle
+  speed: 12
+  mode: once
+  start_delay: 52
+  start_at_m: 2.4
+  stop_short_m: 62.6
+  route: {from: [1.413837, 103.867523], to: [1.419624, 103.871306]}

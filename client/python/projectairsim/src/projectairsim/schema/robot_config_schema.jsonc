@@ -168,7 +168,8 @@
           "lift-drag-control-surface-settings": { "$ref": "#/definitions/lift-drag-control-surface-settings" },
           "wheel-settings": { "$ref": "#/definitions/wheel-settings" },
           "unreal-vehicle-settings": { "$ref": "#/definitions/unreal-vehicle-settings" },
-          "tilt-settings": { "$ref": "#/definitions/tilt-settings" }
+          "tilt-settings": { "$ref": "#/definitions/tilt-settings" },
+          "gimbal-settings": { "$ref": "#/definitions/gimbal-settings" }
         },
         "allOf": [
           {
@@ -808,6 +809,23 @@
           "horz-distortion-strength": { "type": "number" }
         }
       }
+    },
+    "gimbal-settings": {
+      "type": "object",
+      "properties": {
+        "max-roll-rate-deg": { "type": "number" },
+        "max-pitch-rate-deg": { "type": "number" },
+        "max-yaw-rate-deg": { "type": "number" },
+        "roll-min-deg": { "type": "number" },
+        "roll-max-deg": { "type": "number" },
+        "pitch-min-deg": { "type": "number" },
+        "pitch-max-deg": { "type": "number" },
+        "yaw-min-deg": { "type": "number" },
+        "yaw-max-deg": { "type": "number" },
+        "settling-time-s": { "type": "number" },
+        "yaw-follow-time-s": { "type": "number" }
+      },
+      "additionalProperties": false
     },
     "gimbal": {
       "type": "object",

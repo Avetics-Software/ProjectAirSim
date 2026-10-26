@@ -38,6 +38,8 @@ enum class WeatherParameter {
   Fog = 8
 };
 
+class UAnimSequenceBase;
+
 class WorldSimApi {
  public:
   WorldSimApi(UWorld* unreal_world, const std::shared_ptr<TimeOfDay>& tod,
@@ -102,6 +104,38 @@ class WorldSimApi {
       const std::vector<float>& scale, bool enable_physics);
 
   bool destroyObject(const std::string& object_name);
+
+  // Play an animation asset (looked up by name) on a spawned skeletal mesh
+  bool setObjectAnimation(const std::string& object_name,
+                          const std::string& animation_name, bool loop,
+                          float play_rate);
+
+  // Move a spawned object along NED points ([north, east], meters) at
+  // `speed` m/s, staying on the ground. mode: once, loop or pingpong.
+  // yaw_offset (deg) turns the mesh to face the direction of travel;
+  // align_to_ground tilts it with the slope (vehicles). Animations are
+  // optional: the walk animation plays at speed / animation_speed.
+  bool setObjectPath(const std::string& object_name,
+                     const std::vector<std::vector<float>>& points, float speed,
+                     const std::string& mode, float yaw_offset,
+                     bool align_to_ground, const std::string& walk_animation,
+                     const std::string& idle_animation, float animation_speed,
+                     float start_delay);
+
+  bool clearObjectPath(const std::string& object_name);
+
+  // How visible each object is from a robot's camera, for scoring detection:
+  // per object [in_view (0/1), visible_fraction (0-1), covered (0/1),
+  // distance_m]. in_view: the object's centre is in the camera's field of view
+  // within max_distance (m). visible_fraction: of points spread over the
+  // object's box, those in the field of view with a clear line of sight.
+  // covered: the object is moving under an overhang (PathFollowerComponent).
+  std::vector<std::vector<float>> getObjectVisibility(
+      const std::string& robot_name, const std::string& camera_name,
+      const std::vector<std::string>& object_names, float max_distance);
+
+  // Pause or resume every object following a path
+  bool pauseObjectPaths(bool paused);
 
   bool destroyAllSpawnedObjects();
 
@@ -259,6 +293,8 @@ class WorldSimApi {
                     std::vector<float>& pitch, std::vector<float>& yaw);
 
   std::string getUniqueName(const std::string& object_name) const;
+
+  static UAnimSequenceBase* findAnimation(const std::string& name);
 
   Pose GetPoseFromGeoPoint(const double lat, const double lon, const float alt,
                            const std::vector<float>& rotation);

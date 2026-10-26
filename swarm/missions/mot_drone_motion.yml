@@ -1,0 +1,43 @@
+# MOT experiment: the drone's own motion. A long convoy of identical cars
+# (scenarios/convoy_long.yml) passes while the drone, beside the road with its
+# camera fixed to the nose (90 deg right, 34 deg down; it turns with the
+# drone), yaws left and right, dashes and stops hard, and climbs. The image
+# swings and jumps: a test of camera motion compensation (OBJECT_TRACKER_CMC).
+# Recorded frame by frame (start the sim with --ground-truth):
+# runs/mot_drone_motion_<run>/. See docs/features/mot-experiments.md.
+#
+#   mission load mot_drone_motion   then   mission upload 1   then   mission start 1
+#
+# Timeline from `mission start` (approximate: PX4 times the manoeuvres):
+#   ~58 s  drone 60 m from the road at 40 m; the convoy (8 m/s) is in its view
+#          from about 58 s to 82 s
+#   ~58 s  yaw +45, -45, back (about 40 deg/s)
+#   ~69 s  dash 60 m up the road at 15 m/s and stop hard
+#   ~75 s  climb to 60 m
+mission: mot_drone_motion
+origin: home
+speed: 12
+record: true
+actors: scenarios/convoy_long.yml
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 40
+      - goto: {lat: 1.416364, lon: 103.868520, alt: 40}
+        heading: 33
+      - gimbal: {pitch: -34, yaw: 90}
+        hold: 1
+      - heading: 78
+        hold: 2
+      - heading: 348
+        hold: 2
+      - heading: 33
+        hold: 2
+      - goto: {lat: 1.416819, lon: 103.868808, alt: 40}
+        speed: 15
+        hold: 2
+      - goto: {lat: 1.416819, lon: 103.868808, alt: 60}
+        speed: 4
+        hold: 4
+      - rtl: true
