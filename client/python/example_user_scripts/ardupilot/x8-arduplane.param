@@ -1,0 +1,31 @@
+# This file configures ArduPlane SITL for the Skywalker X8 in Project AirSim (ardupilot_x8_plane.py).
+# Use it running the following command from ArduPilot's Tools/autotest directory:
+#   python sim_vehicle.py -v ArduPlane --model JSON --home=29.4296741,-95.16384722,7.5,0 --add-param-file=<path_to_this_file>
+# For more information go to Project AirSim Documentation --> Controllers --> ArduPilot Flight Controller
+
+# Servo outputs, in the order of arduplane-settings.actuator-order in robot_ardu_x8_plane.jsonc.
+# The X8 JSBSim model mixes aileron and elevator onto its elevons, so ArduPlane flies it as a
+# conventional airframe without a rudder.
+SERVO1_FUNCTION 4
+SERVO2_FUNCTION 19
+SERVO3_FUNCTION 70
+SERVO4_FUNCTION 0
+
+# Catapult launch: in TAKEOFF mode ArduPlane applies takeoff throttle as soon as it is armed,
+# which releases the virtual catapult in Project AirSim.
+TKOFF_THR_MINACC 0
+TKOFF_THR_MINSPD 0
+TKOFF_THR_DELAY 0
+TKOFF_ALT 50
+# Full throttle climbs past AIRSPEED_MAX and overshoots TKOFF_ALT by ~17 m; 70% keeps it to ~10 m.
+TKOFF_THR_MAX 70
+
+# Attitude control uses ArduPlane's default SITL plane gains (Tools/autotest/models/plane.parm).
+# On this model they give roll steps a 90% rise time of 0.7-1.0 s and pitch steps 0.4-0.6 s,
+# and hold a loiter bank to within 0.2 deg RMS. Two AUTOTUNE passes made roll ~0.2 s quicker
+# but pitch about four times slower, so no tuned gains are included.
+
+# X8 speed envelope (m/s): cruise about 18, stall about 12. ArduPilot 4.5+ names.
+AIRSPEED_CRUISE 18
+AIRSPEED_MIN 13
+AIRSPEED_MAX 28

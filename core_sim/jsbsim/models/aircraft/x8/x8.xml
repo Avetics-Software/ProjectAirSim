@@ -515,11 +515,16 @@
 
             <function name="aero/coefficient/Cnda">
                 <description>Yaw moment due to aileron</description>
+                <!-- Wind-tunnel value from Reinhardt, Gryte and Johansen,
+                     "Modeling of the Skywalker X8 Fixed-Wing UAV: Flight Tests
+                     and System Identification", ICUAS 2022, Table I. This was
+                     0.1202, a copy of Clda: aileron then yawed the X8 as hard
+                     as it rolled it, overpowering its weak Cnb. -->
                 <product>
                     <property>aero/qbar-area</property>
                     <property>metrics/bw-ft</property>
                     <property>fcs/effective-aileron-pos</property>
-                    <value>0.1202</value>
+                    <value>-0.004462</value>
                 </product>
             </function>
 

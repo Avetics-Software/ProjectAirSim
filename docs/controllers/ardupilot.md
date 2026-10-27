@@ -1,6 +1,6 @@
 # ArduPilot Flight Controller
 
-[ArduPilot](https://ardupilot.org/) is a flexible open-source autopilot that can run with Project AirSim through Software-In-The-Loop (SITL). The repository includes quadrotor and hexarotor examples in [`client/python/example_user_scripts/ardupilot`](../../client/python/example_user_scripts/ardupilot).
+[ArduPilot](https://ardupilot.org/) is a flexible open-source autopilot that can run with Project AirSim through Software-In-The-Loop (SITL). The repository includes quadrotor, hexarotor and fixed-wing examples in [`client/python/example_user_scripts/ardupilot`](../../client/python/example_user_scripts/ardupilot). Multirotors use the `ardupilot-api` controller; fixed-wing aircraft use `arduplane-api`, described in [ArduPlane fixed-wing aircraft](#arduplane-fixed-wing-aircraft).
 
 **Compatibility note:** this integration has not been recently validated against the latest ArduPilot release. Start with the supplied examples and their parameter files before adapting it to a different vehicle.
 
@@ -12,6 +12,7 @@ Project AirSim includes these ArduPilot SITL examples:
 | --- | --- | --- | --- |
 | Quadrotor | `sim_config/scene_ardu_quadrotor.jsonc` | `ardupilot_quadrotor.py` | `project-airsim-quad.param` |
 | Hexarotor | `sim_config/scene_ardu_hexarotor.jsonc` | `ardupilot_hexarotor.py` | `project-airsim-hexa.param` |
+| Skywalker X8 (fixed wing, JSBSim) | `sim_config/scene_ardu_x8_plane.jsonc` | `ardupilot_x8_plane.py` | `x8-arduplane.param` |
 
 The examples display camera streams and load the scene; Project AirSim Client API flight commands such as arm, takeoff, and move are not supported with `ardupilot-api`. Control the vehicle from the ArduPilot console or through a ground control station (GCS), for example Mission Planner or QGroundControl.
 
@@ -112,6 +113,76 @@ Always stop Project AirSim before stopping ArduPilot. After Project AirSim stops
 | `mode land` | Lands the vehicle. |
 
 If `AP: Arm: Main loop slow...` appears, try `arm throttle` again. If it persists, review the simulation clock settings such as `step-ns`.
+
+## ArduPlane fixed-wing aircraft
+
+The `arduplane-api` controller connects ArduPlane SITL to a robot that uses [JSBSim physics](../physics/jsbsim.md). It speaks ArduPilot's [JSON SITL interface](https://github.com/ArduPilot/ardupilot/tree/master/libraries/SITL/examples/JSON). ArduPilot sends one servo packet per physics frame, and Project AirSim answers it with the vehicle state from the same tick. This keeps the two simulators in lockstep, so ArduPilot never runs ahead of the physics.
+
+The state sent to ArduPilot is ground truth: position and velocity in NED from the scene's `home-geo-point`, attitude, body rates, the body-frame accelerometer reading, and airspeed. ArduPilot's SITL adds its own sensor models and noise on top of that.
+
+### ArduPlane settings
+
+```json
+"controller": {
+  "id": "ArduPlane_Controller",
+  "airframe-setup": "fixed-wing",
+  "type": "arduplane-api",
+  "arduplane-settings": {
+    "local-host-ip": "0.0.0.0",
+    "local-host-udp-port": 9002,
+    "frame-timeout-ms": 1000,
+    "send-airspeed": true,
+    "launch": { "hold": true, "release-throttle": 0.5, "speed": 18.0, "duration": 0.5 },
+    "actuator-order": [
+      { "id": "Aileron_actuator" },
+      { "id": "Elevator_actuator", "scale": -1.0 },
+      { "id": "Throttle_actuator" }
+    ]
+  }
+}
+```
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `local-host-ip` | string | Address to listen on for ArduPilot's servo packets. Default `0.0.0.0`. |
+| `local-host-udp-port` | integer | UDP port ArduPilot sends to: `9002 + 10 * instance` for `sim_vehicle.py -I <instance>`. Default `9002`. Replies go back to the address the packets came from. |
+| `frame-timeout-ms` | integer | Once ArduPilot is connected, how long each tick waits for its next servo packet before treating it as disconnected. Default `1000`. |
+| `wait-for-ardupilot` | boolean | Also wait for ArduPilot before it first connects, so the scene does not advance without it. Default `false`. |
+| `send-airspeed` | boolean | Send the airspeed along the body x axis, relative to the scene's wind. Default `true`. |
+| `launch` | object | Optional catapult launch for aircraft that spawn airborne; see below. |
+| `actuator-order` | array | One entry per ArduPilot servo output; the first entry is `SERVO1`. `scale` multiplies the normalized output. `range` is `unipolar` (1000–2000 µs to 0–1, the default for rotor actuators) or `bipolar` (1000–2000 µs to −1–1 around 1500 µs, the default for everything else). |
+
+Actuators forward the normalized outputs to JSBSim through their `jsbsim-cmd` property. In ArduPilot, a high PWM means nose up or roll right. In JSBSim models, positive `fcs/elevator-cmd-norm` usually means nose down, so the elevator needs `"scale": -1.0`.
+
+#### Catapult launch
+
+The X8 model has no landing gear, so the example spawns it 120 m above the ground. With `launch.hold`, the controller freezes the JSBSim model at its spawn pose (`FGFDMExec::Hold`) and reports a stationary vehicle to ArduPilot. That gives ArduPilot time to boot, align its EKF and arm. When a throttle output (any `unipolar` entry) reaches `release-throttle`, the hold is released. JSBSim then accelerates the aircraft along its body x axis to `speed` (m/s) over `duration` (s), and the push shows up in the reported accelerometer reading. A `speed` of `0` releases the hold without the push.
+
+### Run the X8 with ArduPlane
+
+1. Build ArduPlane SITL from an ArduPilot checkout (see [Install and run ArduPilot SITL](#install-and-run-ardupilot-sitl)) with `./waf configure --board sitl && ./waf plane`.
+2. Start Project AirSim, then run `python ardupilot_x8_plane.py` from `client/python/example_user_scripts/ardupilot`. The X8 is held on the catapult.
+3. Start ArduPlane with the JSON backend. Use the scene's home point, which ArduPilot needs to place the positions it receives:
+
+   ```bash
+   cd ardupilot/Tools/autotest
+   python sim_vehicle.py -v ArduPlane --model JSON \
+       --home=29.4296741,-95.16384722,7.5,0 \
+       --add-param-file=<project-airsim>/client/python/example_user_scripts/ardupilot/x8-arduplane.param
+   ```
+
+4. Once the console reports that the EKF is using GPS, launch:
+
+   ```text
+   mode TAKEOFF
+   arm throttle
+   ```
+
+   ArduPlane applies takeoff throttle, the catapult releases, and the X8 climbs `TKOFF_ALT` metres. It then loiters, and you can switch to `LOITER`, `RTL` or `AUTO` from the console or a GCS.
+
+`x8-arduplane.param` maps `SERVO1`–`SERVO3` to aileron, elevator and throttle. The X8 JSBSim model mixes those commands onto its elevons itself, so ArduPlane flies it as a conventional airframe without a rudder. Attitude control uses ArduPlane's default SITL gains. On this model they hold a loiter bank to within 0.2° RMS and reach 90% of a roll or pitch stick step in about 1 s or less. Two `AUTOTUNE` passes did not improve them overall, so the parameter file adds no tuned gains. Re-tune if you change the airframe model.
+
+**Note:** ArduPlane sets home where it arms, which in this example is on the catapult 120 m above the ground. Landing at home would therefore land in mid-air, so use loiter and RTL rather than `LAND`.
 
 ## Autotune a different vehicle
 

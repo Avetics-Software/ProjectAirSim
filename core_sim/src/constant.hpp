@@ -481,6 +481,8 @@ class Constant {
     static constexpr const char* ardupilot_api = "ardupilot-api";
     static constexpr const char* ardupilot_api_settings =
         "ardupilot-api-settings";
+    static constexpr const char* arduplane_api = "arduplane-api";
+    static constexpr const char* arduplane_settings = "arduplane-settings";
     static constexpr const char* actuator_order = "actuator-order";
     static constexpr const char* actuator_id = "actuator-id";
     static constexpr const char* inertia = "inertia";

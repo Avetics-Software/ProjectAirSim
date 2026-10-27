@@ -109,7 +109,7 @@
         },
         "type": {
           "type": "string",
-          "enum": [ "simple-flight-api", "simple-drive-api","px4-api", "ardupilot-api", "manual-controller-api", "matlab-controller-api", "jsbsim-api" ]
+          "enum": [ "simple-flight-api", "simple-drive-api","px4-api", "ardupilot-api", "arduplane-api", "manual-controller-api", "matlab-controller-api", "jsbsim-api" ]
         },
         "simple-flight-api-settings": {
           "type": "object",
@@ -140,13 +140,15 @@
             "actuator-order": { "$ref": "#/definitions/actuator-order" }
           }
         },
-        "ardupilot-settings": { "$ref": "#/definitions/ardupilot-settings" }
+        "ardupilot-settings": { "$ref": "#/definitions/ardupilot-settings" },
+        "arduplane-settings": { "$ref": "#/definitions/arduplane-settings" }
       },
       "allOf": [
         { "$ref": "#/definitions/simple-flight-required" }, //make simple-flight-settings required for simple-flight
         { "$ref": "#/definitions/simple-drive-required" }, //make simple-drive-settings required for simple-drive
         { "$ref": "#/definitions/px4-required" }, //make px4-settings required for px4
-        { "$ref": "#/definitions/ardupilot-required" } //make ardupilot-settings required for ardupilot
+        { "$ref": "#/definitions/ardupilot-required" }, //make ardupilot-settings required for ardupilot
+        { "$ref": "#/definitions/arduplane-required" } //make arduplane-settings required for arduplane
       ]
     },
     "actuators": {
@@ -614,6 +616,39 @@
         "actuator-order": { "$ref": "#/definitions/actuator-order" }
       }
     },
+    "arduplane-settings": {
+      "type": "object",
+      "required": [ "actuator-order" ],
+      "properties": {
+        "local-host-ip": { "type": "string" },
+        "local-host-udp-port": { "type": "integer" },
+        "frame-timeout-ms": { "type": "integer", "minimum": 1 },
+        "wait-for-ardupilot": { "type": "boolean" },
+        "send-airspeed": { "type": "boolean" },
+        "launch": {
+          "type": "object",
+          "properties": {
+            "hold": { "type": "boolean" },
+            "release-throttle": { "type": "number" },
+            "speed": { "type": "number", "minimum": 0 },
+            "duration": { "type": "number", "minimum": 0, "exclusiveMinimum": true }
+          }
+        },
+        "actuator-order": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "required": [ "id" ],
+            "properties": {
+              "id": { "type": "string" },
+              "scale": { "type": "number", "default": 1.0 },
+              "range": { "type": "string", "enum": [ "unipolar", "bipolar" ] }
+            }
+          }
+        }
+      }
+    },
     "px4-params": {
       "type": "object",
       "required": [ "NAV_RCL_ACT", "NAV_DLL_ACT", "COM_OBL_RC_ACT", "LPE_LAT", "LPE_LON" ],
@@ -747,6 +782,18 @@
       "anyOf": [
         { "not": { "$ref": "#/definitions/is-ardupilot" } },
         { "required": [ "ardupilot-settings" ] }
+      ]
+    },
+    "is-arduplane": {
+      "properties": {
+        "type": { "enum": [ "arduplane-api" ] }
+      },
+      "required": [ "type" ]
+    },
+    "arduplane-required": { //make arduplane-settings required for arduplane
+      "anyOf": [
+        { "not": { "$ref": "#/definitions/is-arduplane" } },
+        { "required": [ "arduplane-settings" ] }
       ]
     },
     "capture-settings": {

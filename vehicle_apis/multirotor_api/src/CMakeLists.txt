@@ -28,6 +28,7 @@ add_library(
     jsbsim_api.cpp
     vtolfw_api_base.cpp
     arducopter_api.cpp
+    arduplane_api.cpp
 )
 
 set_target_properties(${TARGET_NAME} PROPERTIES

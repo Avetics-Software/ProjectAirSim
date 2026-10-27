@@ -23,6 +23,7 @@ add_executable(
     EXCLUDE_FROM_ALL
     gtest_simple_flight.cpp
     gtest_jsbsim_api.cpp
+    gtest_arduplane_api.cpp
 )
 
 set_target_properties(

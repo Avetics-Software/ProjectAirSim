@@ -10,6 +10,7 @@
 #include <string>
 
 #include "arducopter_api.hpp"
+#include "arduplane_api.hpp"
 #include "core_sim/simulator.hpp"
 #include "manual_controller_api.hpp"
 #include "matlab_controller_api.hpp"
@@ -304,6 +305,9 @@ void SimServer::LoadControllers(Scene& scene) {
       } else if (controller_type == "ardupilot-api") {
         auto ap_api = new ArduCopterApi(sim_robot, ptransformtree);
         sim_robot.SetController(std::unique_ptr<IController>(ap_api));
+      } else if (controller_type == "arduplane-api") {
+        auto arduplane_api = new ArduPlaneApi(sim_robot, ptransformtree);
+        sim_robot.SetController(std::unique_ptr<IController>(arduplane_api));
       } else if (controller_type == "manual-controller-api") {
         auto manual_controller_api = new ManualControllerApi(sim_robot);
         sim_robot.SetController(
