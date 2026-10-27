@@ -89,7 +89,9 @@ SIM_CONFIG_DIR = os.path.join(SCRIPT_DIR, "sim_config")
 TEMPLATE_SCENE = "scene_px4_gimbal_cesium_seletar.jsonc"
 GENERATED_SCENE = "scene_px4_gimbal_cesium_custom.jsonc"
 GENERATED_ROBOT = "robot_{}_custom{}.jsonc"  # aircraft model, drone suffix
-FIXEDWING_SPACING = 40.0  # m between fixed-wings on the runway, ahead of the spawn
+# Fixed-wings spawn on the runway this far apart, behind the spawn point: the
+# objects the scenario places (config_spawned_objects.yml: Car1, Car2) are ahead of it
+FIXEDWING_SPACING = 40.0  # m
 
 # Seletar Airport runway 03/21 centreline, facing up the runway
 DEFAULT_LAT, DEFAULT_LON, DEFAULT_HEADING = 1.413425, 103.865000, 33.0
@@ -317,7 +319,7 @@ def build_scene(args, aircraft, camera):
             ahead, right = 0.0, i * args.drone_spacing
         else:
             fixedwings += 1
-            ahead, right = fixedwings * FIXEDWING_SPACING, 0.0
+            ahead, right = -fixedwings * FIXEDWING_SPACING, 0.0
         north = ahead * math.cos(h) - right * math.sin(h)
         east = ahead * math.sin(h) + right * math.cos(h)
         d_lat = north / 111_320.0

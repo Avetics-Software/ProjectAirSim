@@ -143,8 +143,9 @@ the quads use. Checked against ArduPlane 4.7.2 SITL: pitch -45° comes out at
 
 ## Takeoff and landing
 
-The X8 has no wheels. Fixed-wings spawn on the runway centreline ahead of the
-spawn point, 40 m apart, facing along it, and are placed on the real ground
+The X8 has no wheels. Fixed-wings spawn on the runway centreline behind the
+spawn point (40 m apart; the scenario's test cars are ahead of it), facing
+along it, and are placed on the real ground
 (0.5 m up, as the quads are) once the Cesium tiles are loaded. That matters:
 ArduPlane measures every height from where it arms, so its landing point is
 the runway only if it arms on it. `arduplane-api` holds each one on a virtual

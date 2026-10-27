@@ -171,6 +171,26 @@ class FixedWingMissionTests(unittest.TestCase):
         # Tracking starts once the first waypoint is done, ends after the second
         self.assertEqual((start, end), (waypoints[0] + 1, waypoints[1] + 1))
 
+    def test_no_item_carries_a_nan_ardupilot_refuses(self):
+        # ArduPilot rejects a NaN in parameters 1-4 except p4 of waypoint, land, takeoff
+        dm = DroneMission("Drone1", [
+            {"takeoff": 40}, {"goto": {"north": 100}, "gimbal": {"pitch": -60, "yaw": 0}},
+            {"look_at": {"north": 200, "east": 0}}, {"track": {"target": "Car"}},
+            {"goto": {"north": 300}, "hold": 5}, {"track": "off"}, {"look_at": "none"},
+            {"gimbal": {"pitch": -30, "heading": 90}}, {"photo": True}, {"wait": 3},
+            {"land": {"north": 0, "east": 0, "heading": 33}}])
+        items = build_items(dm, (1, 103), (1, 103), 0, False, 1, airframe=FIXEDWING)
+        p4_ok = (M.MAV_CMD_NAV_WAYPOINT, M.MAV_CMD_NAV_LAND, M.MAV_CMD_NAV_TAKEOFF)
+        for frame, command, params, *_ in items:
+            for n, value in enumerate(params, start=1):
+                if math.isnan(value):
+                    self.assertTrue(n == 4 and command in p4_ok, (command, n))
+
+    def test_gimbal_step_needs_a_pitch_on_ardupilot(self):
+        with self.assertRaisesRegex(ValueError, "pitch"):
+            self.build([{"gimbal": {"heading": 90}}])
+        self.build([{"gimbal": {"heading": 90}}], airframe=Airframe())  # PX4 keeps NaN
+
     def test_takeoff_climbs_out_and_waypoints_use_its_own_radius(self):
         items = self.build([{"goto": {"north": 100}}], airborne=False)
         takeoff = next(i for i in items if i[1] == M.MAV_CMD_NAV_TAKEOFF)

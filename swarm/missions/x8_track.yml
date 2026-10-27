@@ -1,0 +1,23 @@
+# The X8's circuit with a stretch handed to the companion (X): the mission
+# steers the camera, hands it to X for the second leg (`track`), takes it back,
+# and lands. For checking the gimbal hand-over on an ArduPilot drone:
+#   ./run_cesium_sim.sh --qgc --model x8_arduplane --pi-ip <radxa>
+#   (on the Radxa, X's rknn-sim-fw-ardupilot profile)
+#   mission load x8_track   then   mission upload   then   mission start
+# See docs/features/missions.md and vision-tracking.md.
+mission: x8_track
+origin: start
+speed: 18                # m/s
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 40
+      - goto: {north: 587, east: 381, alt: 40}      # 700 m ahead
+        gimbal: {pitch: -60, yaw: 0}                # the mission holds the camera
+      - track: {target: Vehicle1, tracker: x}       # X has it for the next leg
+      - goto: {north: 451, east: 591, alt: 40}      # 250 m to the right
+      - track: off                                  # the mission has it again
+      - gimbal: {pitch: -30, yaw: 20}
+      - goto: {north: -639, east: -117, alt: 40}    # 600 m behind the start
+      - land: {north: 0, east: 0, heading: 33, approach_m: 400, approach_alt: 30}

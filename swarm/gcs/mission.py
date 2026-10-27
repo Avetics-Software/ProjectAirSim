@@ -338,6 +338,10 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
 
     def gimbal_items(g):
         pitch = float(g.get("pitch", nan))
+        if not claims_gimbal and math.isnan(pitch):
+            # ArduPilot refuses a NaN in a mission item's parameters 1-4
+            raise ValueError("a gimbal step needs a pitch on an ArduPilot drone")
+        rate = nan if claims_gimbal else 0.0  # unused: both angles are given
         if "heading" in g:  # a compass heading: yaw lock
             yaw, flags = float(g["heading"]), M.GIMBAL_MANAGER_FLAGS_YAW_LOCK
         else:
@@ -350,7 +354,7 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
         # param5 is the flags, param7 the gimbal device (0: all); params 5-7
         # travel in the lat/lon/alt fields of a mission item
         return claim_items + [(F_MISSION, M.MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW,
-                               (pitch, yaw, nan, nan), flags, 0, 0)]
+                               (pitch, yaw, rate, rate), flags, 0, 0)]
 
     for step in dm.steps:
         if "speed" in step:
@@ -790,9 +794,6 @@ class MissionControl:
             started = time.monotonic()
             # (a previous run's progress mustn't count as this one's)
             link.mission_seq = link.mission_reached = -1
-            if not link.ap.mission_gimbal_claim:
-                # The mission's claim, which its items can't make (see _set_tracking)
-                await self.swarm._call(link.give_gimbal, True)
             await self.swarm._arm_and(i, link.start_mission)
             # PX4 switches to MISSION within a moment; then follow it until it
             # leaves. Armed too: a drone that landed at the end of a mission is
@@ -803,6 +804,11 @@ class MissionControl:
                 await asyncio.sleep(0.5)
             else:
                 raise RuntimeError("PX4 accepted the start but did not enter MISSION mode")
+            if not link.ap.mission_gimbal_claim:
+                # The mission's claim, which its items can't make (see _set_tracking).
+                # Only once it is flying the mission: a companion (X) re-claims a free
+                # gimbal until it sees the mission mode, and would take it back
+                await self.swarm._call(link.give_gimbal, True)
             landing = dm.items[-1][1] in (M.MAV_CMD_NAV_LAND, M.MAV_CMD_NAV_RETURN_TO_LAUNCH)
             if landing:
                 self.swarm.mission_ends[i] = (len(dm.items) - 1, "RTL" if dm.items[-1][1] ==
@@ -838,6 +844,10 @@ class MissionControl:
                 result = await self.swarm._call(link.hold)
                 if result != M.MAV_RESULT_ACCEPTED:
                     raise RuntimeError("mission complete, but PX4 did not confirm HOLD; X remains stood down")
+            if not link.armed and link.mode == "MISSION":
+                # Landed, but the autopilot stays in its mission mode, which a
+                # companion (X) stands down in: leave it
+                await self.swarm._call(link.hold)
             log.info(f"{link.name}: mission {'done' if done else 'left'} "
                      f"({link.mode} at item {link.mission_seq + 1} of {len(dm.items)})")
         finally:
