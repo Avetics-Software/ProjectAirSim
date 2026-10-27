@@ -32,11 +32,9 @@ from .settings import Settings
 CRITICAL, WARNING = 2, 1
 SEVERITY_NAMES = {CRITICAL: "CRITICAL", WARNING: "warning"}
 EARTH_M_PER_DEG = 111_320.0
-# PX4's NAV_DLL_ACT (what it does itself when the ground link is lost)
-DLL_ACTIONS = {0: "do nothing", 1: "hold", 2: "return home", 3: "land", 5: "terminate",
-               6: "disarm"}
-# PX4's GF_ACTION
-FENCE_ACTIONS = {"warn": 1, "hold": 2, "rtl": 3, "land": 5}
+# What the autopilot does at the fence, by name; each autopilot's own values
+# are its dialect's FENCE_ACTIONS (gcs/autopilot.py)
+FENCE_ACTIONS = ("warn", "hold", "rtl", "land")
 
 
 @dataclass
@@ -52,10 +50,10 @@ class SafetySettings(Settings):
     gps_max_eph_m: float = 2.5
     fence_margin_m: float = 10.0
     fence_max_alt_m: float = 120.0  # above home
-    fence_action: str = "rtl"  # what PX4 does at the fence: warn | hold | rtl | land
+    fence_action: str = "rtl"  # what the autopilot does at the fence: warn | hold | rtl | land
     lost_margin_m: float = 15.0  # kept clear around a lost drone's last position
 
-    CHOICES = {"battery_action": ("rtl", "land", "warn"), "fence_action": tuple(FENCE_ACTIONS)}
+    CHOICES = {"battery_action": ("rtl", "land", "warn"), "fence_action": FENCE_ACTIONS}
 
 
 @dataclass
@@ -180,15 +178,16 @@ class SafetyMonitor:
             if i not in self.swarm.lost and link.position:
                 lat, lon, amsl, _ = link.position
                 self.swarm.lost[i] = (lat, lon, amsl)
-            px4 = self.dll_info.get(i)
+            own = self.dll_info.get(i)
             found[f"link:{i}"] = (i, CRITICAL, f"{name} link lost {age:.0f} s ago"
-                                  + (f"; PX4 will {px4}" if px4 else "")
-                                  + f"; others keep {s.lost_margin_m:.0f} m from where it was")
+                                  + (f"; {link.ap.label} will {own}" if own else "")
+                                  + f"; others keep {self.swarm.separation_h(i, i):.0f} m from "
+                                  "where it was")
             return
         if i in self.swarm.lost:
             del self.swarm.lost[i]
             log.info(f"{name} link back")
-        # Re-read now and then: QGC can change it, and a restarted PX4 resets it
+        # Re-read now and then: QGC can change it, and a restarted autopilot resets it
         stale = time.monotonic() - self._dll_read_time.get(i, -1e9) > 60.0
         if age is not None and stale and i not in self._dll_reading:
             self._read_dll(i, link)
@@ -199,14 +198,16 @@ class SafetyMonitor:
                                   "positions/s")
 
     def _read_dll(self, i, link):
-        """Read what PX4 does on link loss, in the background."""
+        """Read what the autopilot does on link loss, in the background."""
         self._dll_reading.add(i)
         self._dll_read_time[i] = time.monotonic()
 
         def read():
-            action, delay = link.get_param("NAV_DLL_ACT"), link.get_param("COM_DL_LOSS_T")
+            ap = link.ap
+            action = link.get_param(ap.link_loss_action_param)
+            delay = link.get_param(ap.link_loss_timeout_param)
             if action is not None:
-                text = DLL_ACTIONS.get(int(action), f"action {int(action)}")
+                text = ap.LINK_LOSS_ACTIONS.get(int(action), f"action {int(action)}")
                 self.dll_info[i] = text if int(action) == 0 else (
                     f"{text} after {delay:.0f} s" if delay is not None else text)
             self._dll_reading.discard(i)
@@ -219,7 +220,7 @@ class SafetyMonitor:
             return
         if pct <= s.battery_act_pct:
             response = {"rtl": "returning home", "land": "landing", "warn": "no action set"}[
-                s.battery_action]
+                self.battery_action(i)]
             left = len(self.swarm.plans.get(i) or [])
             unflown = f" ({left} search waypoints left unflown)" if left > 1 else ""
             found[f"battery:{i}"] = (i, CRITICAL, f"{link.name} battery {pct:.0f}%: "
@@ -245,8 +246,8 @@ class SafetyMonitor:
         if commanded == "mission" and end and link.mission_seq >= end[0] and link.mode == end[1]:
             return  # the mission's own ending
         if link.armed and link.mode in ("RTL", "LAND") and commanded not in ("rtl", "land"):
-            found[f"failsafe:{i}"] = (i, WARNING, f"{link.name}: PX4 switched to {link.mode} "
-                                      "on its own (a failsafe?)")
+            found[f"failsafe:{i}"] = (i, WARNING, f"{link.name}: {link.ap.label} switched to "
+                                      f"{link.mode_name} on its own (a failsafe?)")
 
     def _check_fence(self, i, link, found):
         s = self.settings
@@ -273,15 +274,22 @@ class SafetyMonitor:
                 what = (f"{len(outside)} of its waypoints are outside the geofence" if outside
                         else f"it flies at {alt:.0f} m, above the fence ceiling")
                 found[f"route:{i}"] = (i, WARNING, f"{self.links[i].name}'s route leaves the "
-                                       f"geofence: {what}; PX4 will refuse or stop at it")
+                                       f"geofence: {what}; {self.links[i].ap.label} will refuse "
+                                       "or stop at it")
 
     def _check_px4_errors(self, i, link, found, now):
         if link.status_time and now - link.status_time < 30.0 \
                 and link.status_severity <= M.MAV_SEVERITY_ERROR:
-            found[f"px4:{i}"] = (i, WARNING, f"{link.name} PX4: {link.status_text}")
+            found[f"px4:{i}"] = (i, WARNING, f"{link.name} {link.ap.label}: {link.status_text}")
 
     # ------------------------------------------------------------------
     # Responses
+
+    def battery_action(self, i):
+        """The battery response for drone i: a fixed-wing can't land where it
+        is, so it returns home instead."""
+        action = self.settings.battery_action
+        return "rtl" if action == "land" and not self.links[i].airframe.hovers else action
 
     def _respond(self):
         s = self.settings
@@ -294,7 +302,7 @@ class SafetyMonitor:
                 link = self.links[i]
                 if link.armed and link.position and link.position[3] > 2.0:
                     self._acted.add(key)
-                    self.swarm.act([i], s.battery_action)
+                    self.swarm.act([i], self.battery_action(i))
 
 
 def fence_check(polygon, lat, lon):

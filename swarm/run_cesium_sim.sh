@@ -9,15 +9,19 @@
 #   ./run_cesium_sim.sh                                   # Seletar runway demo
 #   ./run_cesium_sim.sh --qgc --spotter                   # fly from QGC, with a spotter
 #   ./run_cesium_sim.sh --qgc --drones 3                  # a swarm of 3 PX4 drones
+#   ./run_cesium_sim.sh --qgc --config x8.yml             # drones with `model: x8_arduplane`
 #   ./run_cesium_sim.sh --px4-params my.params --pi-ip 192.168.199.73 --qgc
 #   ./run_cesium_sim.sh --qgc --config my_config.yml      # another config file
 #
 # Launcher options (everything else goes to px4_gimbal_cesium.py, see --help):
-#   --vehicle quad|vtol    airframe (default quad; vtol is not available yet)
 #   --px4-params FILE      PX4 parameters applied at boot. Accepts "NAME VALUE"
 #                          lines (as in ArduPilot .parm files) or a QGC .params
-#                          export. Repeatable; later files win. px4_params.parm
-#                          next to this script is always applied first.
+#                          export. Repeatable; later files win, and all win over
+#                          the aircraft model's own (px4_params.parm for quad_px4)
+#
+# Each drone's aircraft (airframe + autopilot) is its `model:` in the config
+# file, default quad_px4; aircraft/models.yml lists them (python aircraft.py
+# --list). px4_gimbal_cesium.py's --model sets it for drones without one.
 #   --pi-ip IP             also send MAVLink to a companion computer at IP, on
 #                          UDP ports --pi-ports (default 15540,15541), and
 #                          announce the video at rtsp://<this laptop>:8554/gimbal
@@ -34,6 +38,7 @@
 # Environment (defaults in brackets):
 #   UE_ROOT           Unreal Engine 5.7 [~/UnrealEngine-5.7]
 #   PX4_DIR           PX4-Autopilot checkout [~/Documents/PX4-Autopilot]
+#   ARDUPILOT_DIR     ArduPilot checkout, SITL built [~/Documents/ardupilot]
 #   PYTHON            Python with the projectairsim client [conda env projectairsim]
 #   MEDIAMTX          MediaMTX RTSP server binary [~/opt/mediamtx/mediamtx]
 #   CESIUM_ION_TOKEN  Cesium ion token [read from ~/.cesium_ion_token]
@@ -53,15 +58,14 @@ main() {
 
     UE_ROOT="${UE_ROOT:-$HOME/UnrealEngine-5.7}"
     PX4_DIR="${PX4_DIR:-$HOME/Documents/PX4-Autopilot}"
+    ARDUPILOT_DIR="${ARDUPILOT_DIR:-$HOME/Documents/ardupilot}"
     PYTHON="${PYTHON:-$HOME/miniconda3/envs/projectairsim/bin/python}"
     MEDIAMTX="${MEDIAMTX:-$HOME/opt/mediamtx/mediamtx}"
     SIM_MAP="${SIM_MAP:-/Game/GISMap}"
     LOG_DIR="${LOG_DIR:-/tmp/projectairsim-run}"
 
     # --- Launcher options --------------------------------------------------------
-    VEHICLE=quad
     PX4_PARAM_FILES=()
-    [ -f "$SCRIPT_DIR/px4_params.parm" ] && PX4_PARAM_FILES+=("$SCRIPT_DIR/px4_params.parm")
     PI_IP=""
     PI_PORTS="15540,15541"
     CONFIG="$SCRIPT_DIR/config.yml"
@@ -69,7 +73,6 @@ main() {
     SCRIPT_ARGS=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --vehicle) VEHICLE="$2"; shift 2 ;;
             --px4-params) PX4_PARAM_FILES+=("$(realpath "$2")"); shift 2 ;;
             --pi-ip) PI_IP="$2"; shift 2 ;;
             --pi-ports) PI_PORTS="$2"; shift 2 ;;
@@ -79,17 +82,9 @@ main() {
         esac
     done
 
-    case "$VEHICLE" in
-        quad) PX4_MODEL=none_iris ;;
-        vtol)
-            echo "VTOL is not available with PX4 yet (PX4 v1.17 has no sim VTOL airframe)." >&2
-            exit 1 ;;
-        *) echo "--vehicle must be quad or vtol" >&2; exit 1 ;;
-    esac
-
     # PX4 reads PX4_PARAM_<NAME>=<value> from the environment at boot, before any
     # module starts. The gimbal needs MNT_MODE_* at boot, so they are set first and
-    # a params file can still override them.
+    # a params file can still override them. (ArduPilot ignores these.)
     export PX4_PARAM_MNT_MODE_IN=4 PX4_PARAM_MNT_MODE_OUT=2
     for params_file in ${PX4_PARAM_FILES[@]+"${PX4_PARAM_FILES[@]}"}; do
         [ -f "$params_file" ] || { echo "No such params file: $params_file" >&2; exit 1; }
@@ -225,10 +220,10 @@ print(count, ",".join(companions.get(i, "-") for i in range(count)))
         sleep 1
     done
 
-    # --- PX4 ---------------------------------------------------------------------
-    # px4_gimbal_cesium.py starts PX4 SITL itself after loading the scene, and
-    # restarts it when 'goto' moves to a new place
-    export PX4_DIR PX4_MODEL PI_IP PI_PORTS LOG_DIR PX4_KEEP_LOGS="${PX4_KEEP_LOGS:-5}"
+    # --- Autopilots ---------------------------------------------------------------
+    # px4_gimbal_cesium.py starts each drone's PX4 or ArduPilot SITL itself after
+    # loading the scene, and restarts them when 'goto' moves to a new place
+    export PX4_DIR ARDUPILOT_DIR PI_IP PI_PORTS LOG_DIR PX4_KEEP_LOGS="${PX4_KEEP_LOGS:-5}"
 
     # --- Mission script ----------------------------------------------------------
     cd "$SCRIPT_DIR"

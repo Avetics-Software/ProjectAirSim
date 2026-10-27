@@ -65,7 +65,8 @@ ground station never fights QGC for control.
 | `gcs/` | The ground station. No Project AirSim imports; copy it to a field laptop |
 | `run_cesium_sim.sh`, `px4_gimbal_cesium.py` | The simulation launcher and the script that runs the world, PX4s and the ground station |
 | `run_real.sh` | Preflight checks, then the ground station for real drones |
-| `px4_sitl.py` | Starts and stops one PX4 SITL per drone |
+| `aircraft/`, `aircraft.py` | The aircraft a drone can be (`model:`): airframes, autopilot links, models, and the generator of each drone's robot config ([aircraft](docs/features/aircraft.md)) |
+| `px4_sitl.py`, `ardupilot_sitl.py` | Start and stop each drone's PX4 or ArduPilot SITL |
 | `payload_mavlink.py`, `payload_video.py`, `camera_properties.*` | The simulated gimbal camera: MAVLink camera, RTSP video, lens and zoom |
 | `spawned_objects.py`, `moving_actors.py`, `actor_editor.*`, `config_*.yml` | Objects, and people and vehicles moving along roads, to search for |
 | `spotter_control.py`, `shared_frame.py` | The spotter: a person walked around the world, with a first-person view |
@@ -76,7 +77,7 @@ ground station never fights QGC for control.
 | `track_test.py` | `sim tracktest`: the gimbal's stabilisation, measured |
 | `tests/` | Unit tests: `python -m unittest discover -s tests` |
 | `runs/` | Mission run logs and recordings (not in git) |
-| `config.yml` | The drones (name, sysid, video, companion), the real drones' MAVLink link, and the ground station's settings (swarm, deconfliction, safety, controls); read by both launchers |
+| `config.yml` | The drones (name, sysid, model, video, companion), the real drones' MAVLink link, and the ground station's settings (swarm, deconfliction, safety, controls); read by both launchers |
 | `sim_config/` | Scene and robot configs (the `_custom` ones are generated each run) |
 | `docs/` | This documentation |
 

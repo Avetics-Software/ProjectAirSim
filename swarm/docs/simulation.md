@@ -48,8 +48,7 @@ These are handled by `run_cesium_sim.sh`; everything else goes to
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--vehicle quad\|vtol` | quad | Airframe. VTOL is not available with PX4 yet |
-| `--px4-params FILE` | | Extra PX4 parameters applied at boot, after `px4_params.parm`. Accepts `NAME VALUE` lines (like ArduPilot `.parm` files, `#` comments allowed) or a QGC `.params` export. Repeatable; later files win |
+| `--px4-params FILE` | | Extra PX4 parameters applied at boot, after the model's own (`px4_params.parm` for `quad_px4`). Accepts `NAME VALUE` lines (like ArduPilot `.parm` files, `#` comments allowed) or a QGC `.params` export. Repeatable; later files win |
 | `--pi-ip IP` | | Also send MAVLink to a companion computer at `IP`, and announce the video at `rtsp://<this laptop's LAN IP>:8554/gimbal` |
 | `--pi-ports P1,P2` | 15540,15541 | Companion-computer MAVLink UDP ports (as `--serial1/2` in the old ArduPilot scripts) |
 | `--config FILE` | `config.yml` | The drones, their companions and the ground station's settings (see [The config file](#the-config-file)); `--drones`, `--pi-ip` and `--layer-step` override it. `--fleet` is the same. (see [Companions on several drones](#companions-on-several-drones)). Replaces `--drones` and `--pi-ip` |
@@ -59,7 +58,13 @@ The sim also sends the robot config's `parameters` (`NAV_RCL_ACT`,
 as floats, which PX4 accepts for integer parameters only when the value is 0,
 so set any other integer parameter in a params file instead.
 
-`px4_params.parm` (next to the launcher) is always applied first. It:
+Each drone's aircraft is its `model:` in the config file (default
+`quad_px4`; `x8_arduplane` is the Skywalker X8 on ArduPlane), or
+`px4_gimbal_cesium.py`'s `--model` for drones the file doesn't give one. See
+[aircraft](features/aircraft.md) for the models and how to add one.
+
+`px4_params.parm` (next to the launcher) is the `quad_px4` model's, applied
+before any `--px4-params`. It:
 
 - raises PX4's speed limits (18 m/s horizontal, 15 m/s cruise, faster climb
   and acceleration)

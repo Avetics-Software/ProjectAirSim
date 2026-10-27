@@ -12,6 +12,8 @@ from unittest.mock import Mock
 
 import yaml
 
+from gcs.airframe import Airframe
+from gcs.autopilot import dialect
 from gcs.companion import CompanionLink
 from gcs.mavlink_link import M, VehicleLink
 from gcs.mission import DroneMission, MissionControl, build_items, compare_runs, load_mission
@@ -221,8 +223,9 @@ class MissionLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.link = SimpleNamespace(name="Drone1", sysid=1, position=(1, 103, 50, 30),
-                                    armed=True, mode="HOLD", mission_seq=-1, mission_reached=-1,
-                                    mission_state=0, mission_time=0, heading=0, gimbal_attitude=None)
+                                    armed=True, mode="HOLD", mode_name="HOLD", mission_seq=-1,
+                                    mission_reached=-1, mission_state=0, mission_time=0, heading=0,
+                                    gimbal_attitude=None, airframe=Airframe(), ap=dialect("px4"))
         self.link.upload_items = Mock()
         self.link.hold = Mock(side_effect=self.hold)
         self.link.land = Mock(return_value=M.MAV_RESULT_ACCEPTED)

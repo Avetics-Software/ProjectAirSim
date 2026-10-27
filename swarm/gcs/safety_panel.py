@@ -166,7 +166,7 @@ class SafetyPanel:
         s = self.safety.settings
         for i, link in enumerate(self.station.links):
             severity = self.safety.drone_severity(i)
-            t.insert(tk.END, f"{link.name}  {link.mode}  {'armed' if link.armed else 'disarmed'}\n",
+            t.insert(tk.END, f"{link.name}  {link.mode_name}  {'armed' if link.armed else 'disarmed'}\n",
                      ("bold", str(severity)) if severity else "bold")
             if i in self.station.swarm.lost:
                 t.insert(tk.END, "  LINK LOST: values below are its last\n", str(CRITICAL))

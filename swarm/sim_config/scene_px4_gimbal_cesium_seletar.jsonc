@@ -12,7 +12,7 @@
         "geo-point": "1.413425 103.865000 25.0",
         "rpy-deg": "0 0 33"
       },
-      "robot-config": "robot_quadrotor_px4_gimbal_payload.jsonc"
+      "robot-config": "robot_quad_px4_custom.jsonc"
     }
   ],
   "clock": {

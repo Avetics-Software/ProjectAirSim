@@ -36,6 +36,12 @@ heading), DO_SET_ROI_LOCATION / DO_SET_ROI_NONE, NAV_DELAY,
 IMAGE_START_CAPTURE, NAV_LAND, NAV_RETURN_TO_LAUNCH. PX4 doesn't accept
 camera zoom in a mission, so there is no zoom step.
 
+A fixed-wing (gcs/airframe.py) flies the same steps where it can: it climbs
+out along the runway for takeoff, circles for a hold (NAV_LOITER_TIME), has no
+heading of its own (a heading step is an error) and lands only through a
+landing approach, which missions don't plan yet (a land step is an error; use
+rtl).
+
 Runs: each `mission start` gets a run id; every drone's position, heading,
 gimbal angle and mission step are logged at 5 Hz to runs/<mission>_<run>.csv,
 and `mission compare` lines two runs up by time and reports how far apart the
@@ -52,8 +58,10 @@ from dataclasses import dataclass, field
 
 import yaml
 
+from .airframe import Airframe
+from .autopilot import dialect
 from .log import log
-from .mavlink_link import M
+from .mavlink_link import FIXEDWING_TAKEOFF_PITCH, M
 
 EARTH_M_PER_DEG = 111_320.0
 F_REL, F_MISSION = M.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT, M.MAV_FRAME_MISSION
@@ -263,13 +271,27 @@ def _place(spec, origin, alt_default):
 
 
 def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
-                ground_alt=0.0):
-    """Turn a drone's steps into PX4 mission items (frame, command, (p1..p4),
+                ground_alt=0.0, airframe=None):
+    """Turn a drone's steps into mission items (frame, command, (p1..p4),
     lat, lon, alt). origin: (lat, lon) north/east are measured from; here:
     where the drone is; start_alt: its height (for gotos without an alt).
     On the ground without a takeoff step, it takes off to default_alt first;
     in the air, takeoff steps are skipped. sysid: the drone's, whose autopilot
-    claims the gimbal for each gimbal step. Fills dm.route for the map."""
+    claims the gimbal for each gimbal step. airframe: gcs.airframe.Airframe,
+    default a PX4 multirotor. Fills dm.route for the map."""
+    airframe = airframe or Airframe()
+    hovers = airframe.hovers
+    if not hovers:
+        for n, step in enumerate(dm.steps, start=1):
+            if "heading" in step and step["heading"] != "travel":
+                raise ValueError(f"step {n}: a fixed-wing has no heading of its own")
+            if step.get("land"):
+                raise ValueError(f"step {n}: a fixed-wing lands only from a landing approach, "
+                                 "which missions don't plan yet; use rtl")
+    takeoff_params = (0, 0, 0, math.nan) if hovers else (FIXEDWING_TAKEOFF_PITCH, 0, 0, 0)
+    speed_type = 1 if hovers else 0  # ground speed; a fixed-wing's airspeed
+    accept_m = 3.0 if hovers else 0.0  # a fixed-wing's own (WP_RADIUS)
+    claims_gimbal = dialect(airframe.autopilot).mission_gimbal_claim
     items, route, route_seq, track_steps = [], [], [], []
     heights = []
     camera_steps = []
@@ -280,19 +302,25 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
     alt = start_alt
     if not airborne and not any("takeoff" in s for s in dm.steps):
         alt = default_alt
-        items.append((F_REL, M.MAV_CMD_NAV_TAKEOFF, (0, 0, 0, math.nan), here[0], here[1], alt))
+        items.append((F_REL, M.MAV_CMD_NAV_TAKEOFF, takeoff_params, here[0], here[1], alt))
     # Who controls the gimbal: this drone's autopilot (the mission) unless a
     # `track` step hands it to the tracker. PX4 obeys a mission's gimbal
     # commands only while the autopilot holds the gimbal, and a companion
     # (X) stands down while it does.
     claim = (F_MISSION, M.MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE, (sysid, 1, -1, -1), 0, 0, 0)
     release = (F_MISSION, M.MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE, (0, 0, -1, -1), 0, 0, 0)
+    claim_items = [claim] if claims_gimbal else []
+    release_items = [release] if claims_gimbal else []
     tracking = False
     if not any("takeoff" in s for s in dm.steps) or airborne:
-        items.append(claim)
+        items.extend(claim_items)
     if dm.speed:
-        items.append((F_MISSION, M.MAV_CMD_DO_CHANGE_SPEED, (1, dm.speed, -1, 0), 0, 0, 0))
+        items.append((F_MISSION, M.MAV_CMD_DO_CHANGE_SPEED, (speed_type, dm.speed, -1, 0), 0, 0, 0))
     nan = math.nan
+
+    def circle(seconds, lat, lon, alt):
+        """A fixed-wing's hold: circle the point for `seconds` (radius: its own)."""
+        return (F_REL, M.MAV_CMD_NAV_LOITER_TIME, (seconds, 0, 0, 0), lat, lon, alt)
 
     def gimbal_items(g):
         pitch = float(g.get("pitch", nan))
@@ -307,18 +335,18 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
         # back from a tracker
         # param5 is the flags, param7 the gimbal device (0: all); params 5-7
         # travel in the lat/lon/alt fields of a mission item
-        return [claim, (F_MISSION, M.MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW,
-                        (pitch, yaw, nan, nan), flags, 0, 0)]
+        return claim_items + [(F_MISSION, M.MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW,
+                               (pitch, yaw, nan, nan), flags, 0, 0)]
 
     for step in dm.steps:
         if "speed" in step:
             items.append((F_MISSION, M.MAV_CMD_DO_CHANGE_SPEED,
-                          (1, float(step["speed"]), -1, 0), 0, 0, 0))
+                          (speed_type, float(step["speed"]), -1, 0), 0, 0, 0))
         if "takeoff" in step and not airborne:
             alt = float(step["takeoff"])
-            items.append((F_REL, M.MAV_CMD_NAV_TAKEOFF, (0, 0, 0, nan), here[0], here[1], alt))
+            items.append((F_REL, M.MAV_CMD_NAV_TAKEOFF, takeoff_params, here[0], here[1], alt))
             heights.append(alt)
-            items.append(claim)
+            items.extend(claim_items)
         if "heading" in step:
             held_heading = (nan_heading if step["heading"] == "travel"
                             else float(step["heading"]))
@@ -335,16 +363,24 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
             # param2: acceptance radius (m); param4: heading (deg; NaN: keep
             # the current heading's mode)
             route_seq.append(len(items))
-            items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (waypoint_hold, 3.0, 0, heading), lat, lon, alt))
+            if not hovers and waypoint_hold:
+                items.append(circle(waypoint_hold, lat, lon, alt))
+            elif hovers:
+                items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (waypoint_hold, accept_m, 0, heading),
+                              lat, lon, alt))
+            else:
+                items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (0, accept_m, 0, 0), lat, lon, alt))
             route.append(here)
             heights.append(alt)
             if reaim:
                 # PX4 aims the camera at a look_at point once, when the item
                 # runs, not as the drone moves: aim it again from here
                 items.append(roi)
-        elif ("heading" in step and step["heading"] != "travel") or "hold" in step:
+        elif not hovers and waypoint_hold:
+            items.append(circle(waypoint_hold, here[0], here[1], alt))
+        elif hovers and (("heading" in step and step["heading"] != "travel") or "hold" in step):
             # Turn (and/or hold) where it is
-            items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (waypoint_hold, 3.0, 0, heading),
+            items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (waypoint_hold, accept_m, 0, heading),
                           here[0], here[1], alt))
         if "track" in step:
             spec = track_spec(step["track"])
@@ -363,12 +399,12 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
                     items.extend(gimbal_items({"pitch": max(-90.0, min(90.0, pitch)),
                                                "heading": bearing}))
                 # The gimbal to nobody: the tracker (X re-claims it) takes over
-                items.append(release)
+                items.extend(release_items)
                 track_steps.append((len(items) - 1, spec))
                 camera_steps.append((*here, "TRACK" + (f" {spec['target']}" if spec["target"]
                                                        else "")))
             elif not spec and tracking:
-                items.append(claim)
+                items.extend(claim_items)
                 track_steps.append((len(items) - 1, None))
             tracking = bool(spec)
         if "gimbal" in step:
@@ -376,14 +412,14 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
             items.extend(gimbal_items(step["gimbal"]))
             if tracking:  # the gimbal step's claim ends the tracking
                 tracking = False
-                track_steps.append((len(items) - 2, None))
+                track_steps.append((len(items) - 1 - len(claim_items), None))
             g = step["gimbal"]
             text = " ".join(f"{k[0].upper()}{float(v):g}" for k, v in g.items())
             camera_steps.append((*here, text))
         if "look_at" in step:
             if tracking:  # the mission takes the camera back to point it
                 tracking = False
-                items.append(claim)
+                items.extend(claim_items)
                 track_steps.append((len(items) - 1, None))
             spec = step["look_at"]
             if spec in (None, "none", False):
@@ -396,10 +432,11 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
                 items.append(roi)
                 camera_steps.append((*here, "ROI"))
         if hold_after_camera:
-            items.append((F_MISSION, M.MAV_CMD_NAV_DELAY, (hold, -1, -1, -1), 0, 0, 0))
+            items.append((F_MISSION, M.MAV_CMD_NAV_DELAY, (hold, -1, -1, -1), 0, 0, 0) if hovers
+                         else circle(hold, here[0], here[1], alt))
         if "wait" in step:
-            items.append((F_MISSION, M.MAV_CMD_NAV_DELAY, (float(step["wait"]), -1, -1, -1),
-                          0, 0, 0))
+            items.append((F_MISSION, M.MAV_CMD_NAV_DELAY, (float(step["wait"]), -1, -1, -1), 0, 0, 0)
+                         if hovers else circle(float(step["wait"]), here[0], here[1], alt))
         if step.get("photo"):
             items.append((F_MISSION, M.MAV_CMD_IMAGE_START_CAPTURE, (0, 0, 1, 0), 0, 0, 0))
         if step.get("land"):
@@ -648,7 +685,7 @@ class MissionControl:
             if m.origin == "home" and not home:
                 raise RuntimeError("no home position yet")
             build_items(dm, home or (lat, lon), (lat, lon), rel if airborne else 0.0, airborne,
-                        link.sysid, self.default_alt)
+                        link.sysid, self.default_alt, airframe=link.airframe)
             await asyncio.to_thread(link.upload_items, dm.items)
             self.uploaded.add(i)
             self.swarm.plans[i] = list(dm.route)

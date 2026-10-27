@@ -1,0 +1,54 @@
+// The gimbal camera every swarm aircraft carries. aircraft.py adds the actuator
+// and the camera to the airframe at its "gimbal-mount" (links and pose), so all
+// airframes share one gimbal and one camera; camera_properties.json then sets
+// the camera's resolution and lens. The camera's roll and pitch stay level
+// whatever the aircraft does; the autopilot (PX4's gimbal manager, or
+// ArduPilot's mount) aims it.
+{
+  "actuator": {
+    "name": "Gimbal_Payload_Actuator",
+    "type": "gimbal",
+    "enabled": true,
+    // How the physical gimbal moves (leave out for an ideal gimbal that
+    // reaches every angle at once). Roll and pitch stay level whatever the
+    // drone does; these are typical of a ZR10-class 3-axis gimbal, set them
+    // from your own gimbal's datasheet. With ArduPilot, the mount's MNT1_*
+    // travel must match (aircraft.py --audit checks it).
+    "gimbal-settings": {
+      "max-pitch-rate-deg": 120,
+      "max-yaw-rate-deg": 120,
+      "max-roll-rate-deg": 120,
+      "pitch-min-deg": -90,
+      "pitch-max-deg": 25,
+      "yaw-min-deg": -160,     // yaw travel from the nose
+      "yaw-max-deg": 160,
+      "settling-time-s": 0.1,  // lag reaching a commanded angle
+      "yaw-follow-time-s": 0.5 // follow mode: how far the camera trails the drone's turns
+    }
+  },
+  "camera": {
+    "id": "GimbalCam",
+    "type": "camera",
+    "enabled": true,
+    "capture-interval": 0.03,
+    "capture-settings": [
+      {
+        "image-type": 0,
+        "width": 1280,
+        "height": 720,
+        "fov-degrees": 70,
+        "capture-enabled": true,
+        "streaming-enabled": false,
+        "pixels-as-float": false,
+        "compress": false,
+        "target-gamma": 2.5
+      }
+    ],
+    "gimbal": {
+      "gimbal-id": "Gimbal_Payload_Actuator",
+      "lock-roll": true,
+      "lock-pitch": true,
+      "lock-yaw": false
+    }
+  }
+}

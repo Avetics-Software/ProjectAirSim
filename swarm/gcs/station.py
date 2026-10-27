@@ -27,7 +27,7 @@ from .mavlink_link import GPS_FIX_NAMES
 from .minimap import MiniMap, road_segments
 from .mission import MISSION_HELP, MissionControl
 from .fleet import Fleet
-from .safety import CRITICAL, FENCE_ACTIONS, WARNING, SafetyMonitor, fence_check
+from .safety import CRITICAL, WARNING, SafetyMonitor, fence_check
 from .safety_panel import SafetyPanel, alert_line
 from .swarm import SWARM_HELP, SwarmControl
 from .video import VideoStream
@@ -345,7 +345,7 @@ class GroundStation:
             else:
                 objects.append((link.name, "lost" if lost else "drone", north, east, heading))
             drone_lines.append((
-                f"{mark}{link.name}  {link.mode:<8} {'armed' if link.armed else 'disarmed':<8} "
+                f"{mark}{link.name}  {link.mode_name:<8} {'armed' if link.armed else 'disarmed':<8} "
                 f"{rel:5.1f} m  hdg {heading:3.0f}  {math.hypot(*link.velocity[:2]):4.1f} m/s  "
                 f"{self._health_tokens(link, lost)}{self._mission_progress(i)}", colour))
         minimap.update(centre, objects, selected_name=self.links[self.selected].name)
@@ -427,8 +427,9 @@ class GroundStation:
                              "to fly there")
 
     def upload_fence(self, corners):
-        """Send the geofence to every drone, with the ceiling and PX4's action
-        from the safety settings; an empty fence removes it. Runs in the background."""
+        """Send the geofence to every drone, with the ceiling and the autopilot's
+        action from the safety settings; an empty fence removes it. Runs in the
+        background."""
         corners = list(corners)
         if 0 < len(corners) < 3:
             log.warning("A geofence needs at least 3 corners")
@@ -446,11 +447,14 @@ class GroundStation:
                     continue
                 try:
                     await asyncio.to_thread(link.upload_fence, corners)
+                    ap = link.ap
                     if corners:
-                        await asyncio.to_thread(link.set_param, "GF_ACTION",
-                                                FENCE_ACTIONS[s.fence_action])
-                        await asyncio.to_thread(link.set_param, "GF_MAX_VER_DIST",
+                        await asyncio.to_thread(link.set_param, ap.fence_action_param,
+                                                ap.FENCE_ACTIONS[s.fence_action])
+                        await asyncio.to_thread(link.set_param, ap.fence_ceiling_param,
                                                 float(s.fence_max_alt_m))
+                    for name, value in (ap.FENCE_ON if corners else ap.FENCE_OFF).items():
+                        await asyncio.to_thread(link.set_param, name, value)
                     done.append(link.name)
                 except Exception as err:
                     log.warning(f"{link.name}: geofence upload failed: {err}")

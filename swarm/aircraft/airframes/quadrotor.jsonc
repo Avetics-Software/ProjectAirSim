@@ -197,35 +197,12 @@
       "axis": "0 0 1"
     }
   ],
-  "controller": {
-    "id": "PX4_Controller",
-    "type": "px4-api",
-    "px4-settings": {
-      "lock-step": true,
-      "use-serial": false,
-      "use-tcp": true,
-      "tcp-port": 4560,
-      "control-ip-address": "127.0.0.1",
-      // "local-host-ip": "xxx.xxx.xxx.xxx", // for PX4 on WSL2
-      // "control-ip-address": "remote",
-      "control-port": 14540,
-      "qgc-host-ip": "",
-      "qgc-port": 14550,
-      "gimbal-port": 13280,
-      "parameters": {
-        "NAV_RCL_ACT": 0,
-        // Required here by the schema, but PX4's value comes from
-        // px4_params.parm at boot (2: return home on link loss). The sim sends
-        // these as floats, which PX4 refuses for integers other than 0, so
-        // keep this non-zero: 0 would succeed and turn the failsafe off.
-        "NAV_DLL_ACT": 2,
-        "COM_OBL_RC_ACT": 1,
-        "LPE_LAT": 1.413425,
-        "LPE_LON": 103.865000,
-        // Enable Mavlink Gimbal
-        "MNT_MODE_IN": 4,
-        "MNT_MODE_OUT": 2
-      },
+  // No "controller": aircraft.py builds it from the autopilot's link settings
+  // (aircraft/models.yml) plus what this airframe needs from each autopilot
+  // family: its output order (index 0 is the autopilot's output 1) and any
+  // settings of its own.
+  "autopilot": {
+    "px4": {
       "actuator-order": [
         {
           "id": "Prop_FR_actuator"
@@ -240,6 +217,15 @@
           "id": "Prop_RR_actuator"
         }
       ]
+    }
+  },
+  // Where the gimbal camera (aircraft/payload_gimbal.jsonc) is mounted
+  "gimbal-mount": {
+    "parent-link": "Frame",
+    "child-link": "Prop_RR",
+    "origin": {
+      "xyz": "0.12 0.0 0.06",
+      "rpy-deg": "0 -45 0"
     }
   },
   "actuators": [
@@ -322,32 +308,6 @@
         "propeller-diameter": 0.2286,
         "smoothing-tc": 0.005
       }
-    },
-    {
-      "name": "Gimbal_Payload_Actuator",
-      "type": "gimbal",
-      "enabled": true,
-      "parent-link": "Frame",
-      "child-link": "Prop_RR",
-      "origin": {
-        "xyz": "0.12 0.0 0.06",
-        "rpy-deg": "0 -45 0"
-      },
-      // How the physical gimbal moves (leave out for an ideal gimbal that
-      // reaches every angle at once). Roll and pitch stay level whatever the
-      // drone does; these are typical of a ZR10-class 3-axis gimbal, set them
-      // from your own gimbal's datasheet.
-      "gimbal-settings": {
-        "max-pitch-rate-deg": 120,
-        "max-yaw-rate-deg": 120,
-        "max-roll-rate-deg": 120,
-        "pitch-min-deg": -90,
-        "pitch-max-deg": 25,
-        "yaw-min-deg": -160,     // yaw travel from the nose
-        "yaw-max-deg": 160,
-        "settling-time-s": 0.1,  // lag reaching a commanded angle
-        "yaw-follow-time-s": 0.5 // follow mode: how far the camera trails the drone's turns
-      }
     }
   ],
   "sensors": [
@@ -373,36 +333,6 @@
       "origin": {
         "xyz": "-10.0 0.0 -1.0",
         "rpy-deg": "0 -11.46 0"
-      }
-    },
-    {
-      "id": "GimbalCam",
-      "type": "camera",
-      "enabled": true,
-      "parent-link": "Frame",
-      "capture-interval": 0.03,
-      "capture-settings": [
-        {
-          "image-type": 0,
-          "width": 1280,
-          "height": 720,
-          "fov-degrees": 70,
-          "capture-enabled": true,
-          "streaming-enabled": false,
-          "pixels-as-float": false,
-          "compress": false,
-          "target-gamma": 2.5
-        }
-      ],
-      "gimbal": {
-        "gimbal-id": "Gimbal_Payload_Actuator",
-        "lock-roll": true,
-        "lock-pitch": true,
-        "lock-yaw": false
-      },
-      "origin": {
-        "xyz": "0.12 0.0 0.06",
-        "rpy-deg": "0 -45 0"
       }
     },
     {

@@ -98,5 +98,13 @@ Still to do:
 - ([#27](https://github.com/Avetics-Software/ProjectAirSim/issues/27)) **Split the core from the window,** so several operators, or a viewer on
   another machine, can connect.
 - ([#28](https://github.com/Avetics-Software/ProjectAirSim/issues/28)) **Link security:** MAVLink signing.
-- ([#29](https://github.com/Avetics-Software/ProjectAirSim/issues/29)) **ArduPilot,** if any airframe needs it; gimbal control assumes PX4's
-  gimbal manager today.
+- ([#29](https://github.com/Avetics-Software/ProjectAirSim/issues/29)) **ArduPilot:** ArduPlane fixed-wings (the X8) fly in the swarm
+  next to the PX4 quads, gimbal included ([aircraft](features/aircraft.md));
+  flown in the Cesium world ([#34](https://github.com/Avetics-Software/ProjectAirSim/issues/34)).
+  Still to do:
+  - ([#36](https://github.com/Avetics-Software/ProjectAirSim/issues/36)) runway takeoff and landing (the X8's JSBSim model has no gear;
+    it uses a virtual catapult), and ([#35](https://github.com/Avetics-Software/ProjectAirSim/issues/35)) landing approaches in missions
+  - ([#37](https://github.com/Avetics-Software/ProjectAirSim/issues/37)) search patterns that respect a fixed-wing's turn radius
+  - ([#38](https://github.com/Avetics-Software/ProjectAirSim/issues/38)) the sim's fault controls (link cut, battery) for ArduPilot drones
+  - ([#39](https://github.com/Avetics-Software/ProjectAirSim/issues/39)) gimbal ownership and the companion's stand-down with ArduPilot
+  - an ArduCopter dialect, if the quads move to ArduPilot

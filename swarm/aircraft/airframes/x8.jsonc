@@ -1,0 +1,56 @@
+// Skywalker X8 flying wing on JSBSim, flown by ArduPlane.
+//
+// The aircraft itself (JSBSim model, links, control surfaces, sensors) is the
+// ArduPilot example's robot config, read from there so there is one copy; this
+// file only says what the swarm changes. The tuned ArduPlane parameters are
+// that example's x8-arduplane.param, listed in aircraft/models.yml.
+{
+  "extends": "${REPO}/client/python/example_user_scripts/ardupilot/sim_config/robot_ardu_x8_plane.jsonc",
+  // The example's controller is replaced by the one aircraft.py builds
+  "remove": ["controller", "$schema"],
+  // Ground height from the Unreal terrain (Cesium tiles) under the aircraft,
+  // not a constant
+  "jsbsim-ground-mode": "terrain",
+  "autopilot": {
+    "ardupilot": {
+      "controller": {
+        "airframe-setup": "fixed-wing"
+      },
+      "settings": {
+        "frame-timeout-ms": 1000,
+        "send-airspeed": true,
+        // The X8 has no landing gear: it is held at the runway spawn on a
+        // virtual catapult and launched when ArduPlane's TAKEOFF applies
+        // throttle (see the example's docs/controllers/ardupilot.md)
+        "launch": {
+          "hold": true,
+          "release-throttle": 0.5,
+          "speed": 18.0,
+          "duration": 0.5
+        }
+      },
+      // ArduPlane's SERVO1..3 (x8-arduplane.param); the elevator is reversed
+      "actuator-order": [
+        {
+          "id": "Aileron_actuator"
+        },
+        {
+          "id": "Elevator_actuator",
+          "scale": -1.0
+        },
+        {
+          "id": "Throttle_actuator"
+        }
+      ]
+    }
+  },
+  // Belly camera just ahead of the centre of gravity, looking 45 deg down
+  "gimbal-mount": {
+    "parent-link": "Frame",
+    "child-link": "Prop",
+    "origin": {
+      "xyz": "0.25 0.0 0.08",
+      "rpy-deg": "0 -45 0"
+    }
+  }
+}

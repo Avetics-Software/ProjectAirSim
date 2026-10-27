@@ -1,0 +1,93 @@
+# The aircraft the swarm can fly. A drone in the config file (config.yml,
+# gcs/fleet.example.yml) picks one with `model:`; the default is quad_px4.
+#
+# Three layers, each holding one kind of fact (aircraft.py combines them):
+#   airframes/<name>.jsonc   the physical aircraft: links, actuators, sensors,
+#                            and per autopilot family its output order and any
+#                            settings of its own. Where the gimbal camera
+#                            mounts. Never a port.
+#   autopilots (below)       the link to an autopilot: controller type, ports
+#                            (offset per drone), clock. Never a gain.
+#   models (below)           a launchable airframe + autopilot pair: how its
+#                            SITL starts (frame, parameter files) and what the
+#                            ground station may ask of it (capabilities).
+# Tuning (gains) lives only in a model's parameter files.
+#
+#   python aircraft.py --list | --dump MODEL [--index N] | --audit
+#
+# Paths may use ${REPO} (the ProjectAirSim checkout), ${SWARM} (this swarm
+# directory), ${PX4_DIR} and ${ARDUPILOT_DIR} (environment, with defaults
+# ~/Documents/PX4-Autopilot and ~/Documents/ardupilot).
+
+autopilots:
+  px4:
+    family: px4
+    controller: {id: PX4_Controller, type: px4-api}
+    settings-key: px4-settings
+    settings:
+      lock-step: true
+      use-serial: false
+      use-tcp: true
+      control-ip-address: 127.0.0.1
+      qgc-host-ip: ""
+      qgc-port: 14550
+      parameters:
+        NAV_RCL_ACT: 0
+        # Required here by the schema, but PX4's value comes from
+        # px4_params.parm at boot (2: return home on link loss). The sim sends
+        # these as floats, which PX4 refuses for integers other than 0, so
+        # keep this non-zero: 0 would succeed and turn the failsafe off.
+        NAV_DLL_ACT: 2
+        COM_OBL_RC_ACT: 1
+        # Enable MAVLink gimbal
+        MNT_MODE_IN: 4
+        MNT_MODE_OUT: 2
+    # PX4 instance N (drone N+1) offsets these by N
+    ports: {tcp-port: 4560, control-port: 14540, gimbal-port: 13280}
+    port-stride: 1
+    instance-offset: 0
+
+  ardupilot:
+    family: ardupilot
+    controller: {id: ArduPlane_Controller, type: arduplane-api}
+    settings-key: arduplane-settings
+    settings:
+      local-host-ip: 0.0.0.0
+    # ArduPilot instance I uses JSON port 9002+10*I (and TCP 5760+10*I). I is
+    # the drone's index plus instance-offset, which keeps clear of another
+    # ArduPilot SITL on instance 0 (e.g. the packaged Avetics sim).
+    ports: {local-host-udp-port: 9002}
+    port-stride: 10
+    instance-offset: 5
+    # The gimbal camera's mount servos: SERVOn outputs (arduplane_swarm.parm
+    # sets MNT1_TYPE 1 and these SERVOn_FUNCTIONs)
+    gimbal-channels: {roll: 5, pitch: 6, yaw: 7}
+    gimbal-roll-deg: [-30, 30]  # the payload's roll travel (it only lists pitch and yaw)
+
+models:
+  quad_px4:
+    label: Quadrotor, PX4
+    airframe: quadrotor
+    autopilot: px4
+    sitl:
+      frame: none_iris           # PX4_SIM_MODEL
+      # Applied at boot (PX4_PARAM_<NAME>), in order; run_cesium_sim.sh's
+      # --px4-params files win over them
+      params:
+        - ${SWARM}/px4_params.parm
+    capabilities: multirotor
+
+  x8_arduplane:
+    label: Skywalker X8 flying wing, ArduPlane
+    airframe: x8
+    autopilot: ardupilot
+    sitl:
+      binary: ${ARDUPILOT_DIR}/build/sitl/bin/arduplane
+      # One --defaults list, later files win: ArduPilot's stock SITL plane,
+      # the X8's tuning (from the ArduPilot example), the swarm's links and
+      # failsafes
+      params:
+        - ${ARDUPILOT_DIR}/Tools/autotest/models/plane.parm
+        - ${REPO}/client/python/example_user_scripts/ardupilot/x8-arduplane.param
+        - ${SWARM}/aircraft/params/arduplane_swarm.parm
+    capabilities: fixedwing

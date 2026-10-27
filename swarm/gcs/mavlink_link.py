@@ -2,23 +2,25 @@
 Copyright (C) 2025 IAMAI CONSULTING CORP
 MIT License.
 
-MAVLink to the drones' PX4s:
+MAVLink to the drones' autopilots (PX4 or ArduPilot):
 
 - MavConnection: one pymavlink connection and its reader thread. Every drone
   reachable through it shares it: a telemetry radio or mesh carries the whole
-  fleet (each drone with its own system id), the sim gives each PX4 its own
-  UDP port. Messages are passed to every subscriber; each picks out its own.
+  fleet (each drone with its own system id), the sim gives each autopilot its
+  own UDP port. Messages are passed to every subscriber; each picks out its own.
 - VehicleLink: one drone on a connection. Telemetry (mode, arming, position,
   gimbal angle), flight commands (arm, takeoff, fly to a point, hold, land,
-  return), PX4 missions, the gimbal (through PX4's gimbal manager) and the
-  camera's zoom. Commands go to PX4 like a companion computer's or ground
-  station's would, so QGC stays in sync and can take over at any time.
+  return), missions, the gimbal (through the autopilot's gimbal manager) and
+  the camera's zoom. Commands go to the autopilot like a companion computer's
+  or ground station's would, so QGC stays in sync and can take over at any time.
+  Where PX4 and ArduPilot differ (modes, parameters, mission numbering) it asks
+  the drone's dialect (gcs/autopilot.py); where a multirotor and a fixed-wing
+  differ, its airframe (gcs/airframe.py).
 """
 
 import math
 import os
 import queue
-import struct
 import threading
 import time
 
@@ -26,13 +28,15 @@ os.environ["MAVLINK20"] = "1"  # gimbal v2 and camera messages need MAVLink 2
 from pymavlink import mavutil
 from pymavlink.quaternion import QuaternionBase
 
+from .airframe import Airframe
+from .autopilot import dialect
 from .log import log
 
 M = mavutil.mavlink
 
-# PX4's gimbal manager runs in the autopilot; it ignores setpoints sent to the
+# The gimbal manager runs in the autopilot; PX4's ignores setpoints sent to the
 # broadcast component, so always address it explicitly
-PX4_COMPID = M.MAV_COMP_ID_AUTOPILOT1
+PX4_COMPID = M.MAV_COMP_ID_AUTOPILOT1  # PX4's and ArduPilot's
 CAMERA_COMPID = M.MAV_COMP_ID_CAMERA
 GIMBAL_FLAGS = M.GIMBAL_MANAGER_FLAGS_ROLL_LOCK | M.GIMBAL_MANAGER_FLAGS_PITCH_LOCK
 
@@ -42,27 +46,12 @@ HEALTH_MESSAGES = (1, 24, 147)
 GIMBAL_ATTITUDE_MSG = 285  # GIMBAL_DEVICE_ATTITUDE_STATUS
 GIMBAL_MANAGER_STATUS_MSG = 281  # who controls the gimbal
 MISSION, FENCE = M.MAV_MISSION_TYPE_MISSION, M.MAV_MISSION_TYPE_FENCE
-INT_PARAM_TYPES = (M.MAV_PARAM_TYPE_UINT8, M.MAV_PARAM_TYPE_INT8, M.MAV_PARAM_TYPE_UINT16,
-                   M.MAV_PARAM_TYPE_INT16, M.MAV_PARAM_TYPE_UINT32, M.MAV_PARAM_TYPE_INT32)
 GPS_FIX_NAMES = {0: "none", 1: "none", 2: "2D", 3: "3D", 4: "DGPS", 5: "RTK", 6: "RTK"}
-
-# PX4 custom_mode: main mode in byte 2, sub mode (of AUTO) in byte 3
-PX4_MAIN_MODES = {1: "MANUAL", 2: "ALTCTL", 3: "POSCTL", 4: "AUTO", 5: "ACRO", 6: "OFFBOARD",
-                  7: "STABILIZED", 8: "RATTITUDE"}
-PX4_AUTO_MODES = {1: "READY", 2: "TAKEOFF", 3: "HOLD", 4: "MISSION", 5: "RTL", 6: "LAND",
-                  8: "FOLLOW", 9: "PRECLAND"}
+FIXEDWING_TAKEOFF_PITCH = 15.0  # deg, a fixed-wing mission takeoff's minimum climb pitch
 
 
 def wrap_180(deg):
     return (deg + 180.0) % 360.0 - 180.0
-
-
-def px4_mode_name(custom_mode):
-    main = (custom_mode >> 16) & 0xFF
-    sub = (custom_mode >> 24) & 0xFF
-    if main == 4:
-        return PX4_AUTO_MODES.get(sub, "AUTO")
-    return PX4_MAIN_MODES.get(main, "?")
 
 
 class MavConnection:
@@ -152,16 +141,20 @@ class MavConnection:
 
 
 class VehicleLink:
-    """One drone (PX4 system id `sysid`) on a MavConnection."""
+    """One drone (its autopilot's system id `sysid`) on a MavConnection.
+    airframe: gcs.airframe.Airframe, what it is (default a PX4 multirotor)."""
 
-    def __init__(self, conn, sysid, name):
+    def __init__(self, conn, sysid, name, airframe=None):
         self.conn = conn
         self.sysid = sysid
         self.name = name
+        self.airframe = airframe or Airframe()
+        self.ap = dialect(self.airframe.autopilot)
         self.compid = conn.source_component  # what we send as
         # Telemetry, updated by the connection's reader thread
         self.armed = False
-        self.mode = "?"
+        self.mode = "?"  # the ground station's name for it (gcs/autopilot.py)
+        self.mode_name = "?"  # the autopilot's own, for display
         self.position = None  # (lat, lon, alt AMSL m, alt above home m)
         self.velocity = (0.0, 0.0, 0.0)  # north, east, down m/s
         self.heading = None  # degrees from north
@@ -171,8 +164,8 @@ class VehicleLink:
         self.status_text = ""
         self.status_severity = M.MAV_SEVERITY_INFO
         self.status_time = 0.0  # time.monotonic() of the last STATUSTEXT
-        self.system_status = M.MAV_STATE_UNINIT  # PX4's HEARTBEAT state (CRITICAL, EMERGENCY...)
-        self.last_message_time = 0.0  # time.monotonic() of any message from PX4
+        self.system_status = M.MAV_STATE_UNINIT  # the autopilot's HEARTBEAT state (CRITICAL, EMERGENCY...)
+        self.last_message_time = 0.0  # time.monotonic() of any message from the autopilot
         # Health (None until reported)
         self.battery_pct = None
         self.battery_v = None
@@ -183,8 +176,9 @@ class VehicleLink:
         self.gimbal_attitude = None  # (pitch, yaw relative to the drone) in degrees
         self.gimbal_attitude_time = 0.0
         self.gimbal_owner = None  # (sysid, compid) in primary control of the gimbal
-        self.mission_seq = -1  # PX4's current mission item
-        self.mission_reached = -1  # the last mission item PX4 reached
+        # Mission items as uploaded (0 = the first), whatever the autopilot numbers them
+        self.mission_seq = -1  # the autopilot's current mission item
+        self.mission_reached = -1  # the last mission item it reached
         self.mission_state = 0  # MAVLink MISSION_STATE (0 on older firmware)
         self.mission_time = 0.0
         self.zoom_percent = 0.0  # the camera zoom last asked for (real cameras)
@@ -200,14 +194,17 @@ class VehicleLink:
         self._px4_seen = threading.Event()
         conn.subscribe(self._on_message)
 
-    def wait_for_px4(self, timeout=30):
-        """Wait for the next PX4 heartbeat (e.g. from a freshly started PX4)."""
+    def wait_for_autopilot(self, timeout=30):
+        """Wait for the next autopilot heartbeat (e.g. from a freshly started one)."""
         self._px4_seen.clear()
         if not self._px4_seen.wait(timeout):
             raise RuntimeError(
-                f"No heartbeat from {self.name}'s PX4 (system {self.sysid}) on {self.conn.url}"
+                f"No heartbeat from {self.name}'s {self.ap.label} (system {self.sysid}) "
+                f"on {self.conn.url}"
             )
-        log.info(f"{self.name} MAVLink link up ({self.conn.url})")
+        log.info(f"{self.name} MAVLink link up ({self.ap.label}, {self.conn.url})")
+
+    wait_for_px4 = wait_for_autopilot
 
     @property
     def connected(self):
@@ -215,7 +212,7 @@ class VehicleLink:
 
     @property
     def link_age(self):
-        """Seconds since anything arrived from PX4 (None before the first)."""
+        """Seconds since anything arrived from the autopilot (None before the first)."""
         return time.monotonic() - self.last_message_time if self.last_message_time else None
 
     def _request_health_streams(self):
@@ -232,13 +229,9 @@ class VehicleLink:
     # Parameters
 
     def set_param(self, name, value, timeout=3.0, bypass_outage=False):
-        """Set a PX4 parameter (an int value sets an integer parameter) and wait
-        for PX4 to echo it. Returns the value PX4 reports, or None."""
-        if isinstance(value, int):
-            # PX4 encodes integer parameters bytewise in the float field
-            ptype, raw = M.MAV_PARAM_TYPE_INT32, struct.unpack("<f", struct.pack("<i", value))[0]
-        else:
-            ptype, raw = M.MAV_PARAM_TYPE_REAL32, float(value)
+        """Set an autopilot parameter (an int value sets an integer parameter)
+        and wait for it to echo it. Returns the value it reports, or None."""
+        ptype, raw = self.ap.encode_param(value)
         with self._param_event:
             self._params.pop(name, None)
         self.conn.send_as(
@@ -249,7 +242,7 @@ class VehicleLink:
         return self._wait_param(name, timeout)
 
     def get_param(self, name, timeout=3.0):
-        """Read a PX4 parameter, or None if PX4 doesn't answer."""
+        """Read an autopilot parameter, or None if it doesn't answer."""
         with self._param_event:
             self._params.pop(name, None)
         self._send(lambda mav: mav.param_request_read_send(self.sysid, PX4_COMPID,
@@ -269,7 +262,7 @@ class VehicleLink:
 
     @property
     def autopilot_has_gimbal(self):
-        """True if PX4 itself (a mission) controls the gimbal; None if unknown."""
+        """True if the autopilot itself (a mission) controls the gimbal; None if unknown."""
         if self.gimbal_owner is None:
             return None
         return self.gimbal_owner == (self.sysid, PX4_COMPID)
@@ -329,7 +322,7 @@ class VehicleLink:
     # Flight (swarm control)
 
     def command(self, command, *params, timeout=3.0):
-        """Send a COMMAND_LONG to PX4 and return its MAV_RESULT (None if no ack)."""
+        """Send a COMMAND_LONG to the autopilot and return its MAV_RESULT (None if no ack)."""
         params = list(params) + [0.0] * (7 - len(params))
         while not self._acks.empty():
             self._acks.get_nowait()
@@ -347,11 +340,26 @@ class VehicleLink:
     def arm(self):
         return self.command(M.MAV_CMD_COMPONENT_ARM_DISARM, 1)
 
+    def set_mode(self, mode):
+        """Switch to a mode by the ground station's name (HOLD, MISSION, ...;
+        the dialect's SET_MODES)."""
+        return self.command(M.MAV_CMD_DO_SET_MODE, M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                            *self.ap.set_mode_params(mode))
+
     def takeoff(self, alt_m):
-        """Take off to alt_m above home. Arms first; PX4 refuses to arm until its
-        estimator has settled, so the caller may need to retry."""
+        """Take off to alt_m above home. Arms first; the autopilot refuses to arm
+        until its estimator has settled, so the caller may need to retry.
+
+        A fixed-wing takes off in its TAKEOFF mode, along the way it faces
+        (launched when armed), and circles once at alt_m."""
         if self.position is None:
             return None
+        if not self.airframe.hovers:
+            self.set_param("TKOFF_ALT", float(alt_m))
+            result = self.set_mode("TAKEOFF")
+            if result != M.MAV_RESULT_ACCEPTED or self.armed:
+                return result
+            return self.arm()
         if not self.armed:
             result = self.arm()
             if result != M.MAV_RESULT_ACCEPTED:
@@ -363,35 +371,43 @@ class VehicleLink:
     def fly_to(self, lat, lon, alt_m, speed_mps=-1.0, heading_deg=None):
         """Fly to lat/lon at alt_m above home and hover there (PX4 Hold), facing
         heading_deg (degrees from north). Without it PX4 turns the drone to face
-        the way it flies."""
+        the way it flies. A fixed-wing (GUIDED) circles the point instead, and
+        has no heading of its own."""
         if self.position is None:
             return None
         _, _, amsl, rel = self.position
         if speed_mps > 0:
-            self.command(M.MAV_CMD_DO_CHANGE_SPEED, 1, speed_mps, -1)
+            self.command(M.MAV_CMD_DO_CHANGE_SPEED, 1 if self.airframe.hovers else 0, speed_mps, -1)
+        if heading_deg is None or not self.airframe.hovers:
+            yaw = math.nan  # ArduPlane reads a non-zero param 4 as "circle anticlockwise"
+        else:
+            yaw = math.radians(wrap_180(heading_deg))  # PX4 reads it in radians
         self._send(
             lambda mav: mav.command_int_send(
                 self.sysid, PX4_COMPID, M.MAV_FRAME_GLOBAL, M.MAV_CMD_DO_REPOSITION, 0, 0,
-                # PX4 reads the yaw (param 4) in radians
-                -1, M.MAV_DO_REPOSITION_FLAGS_CHANGE_MODE, 0,
-                math.nan if heading_deg is None else math.radians(wrap_180(heading_deg)),
+                -1, M.MAV_DO_REPOSITION_FLAGS_CHANGE_MODE, 0, yaw,
                 int(lat * 1e7), int(lon * 1e7), amsl - rel + alt_m,
             ),
         )
         return M.MAV_RESULT_ACCEPTED
 
     def turn_to(self, heading_deg):
-        """Turn in place to face heading_deg (degrees from north)."""
-        if self.position is None:
+        """Turn in place to face heading_deg (degrees from north). None for an
+        aircraft that can't (a fixed-wing)."""
+        if self.position is None or not self.airframe.hovers:
             return None
         lat, lon, _, rel = self.position
         return self.fly_to(lat, lon, rel, heading_deg=heading_deg)
 
     def hold(self):
-        # PX4 custom mode: AUTO (4) / LOITER (3)
-        return self.command(M.MAV_CMD_DO_SET_MODE, M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 4, 3)
+        """Hold where it is: hover (PX4 Hold), or circle (ArduPlane LOITER)."""
+        return self.set_mode("HOLD")
 
     def land(self):
+        """Land where it is; a fixed-wing flies its mission's landing sequence
+        (DO_LAND_START), and is refused without one."""
+        if not self.airframe.hovers:
+            return self.command(M.MAV_CMD_DO_LAND_START)
         return self.command(M.MAV_CMD_NAV_LAND, 0, 0, 0, math.nan, math.nan, math.nan, math.nan)
 
     def return_home(self):
@@ -400,48 +416,64 @@ class VehicleLink:
     # ------------------------------------------------------------------
     # Missions
 
+    def takeoff_item(self, lat, lon, alt_m):
+        """A mission's takeoff item: straight up, or (fixed-wing) climbing out
+        along the way it faces at FIXEDWING_TAKEOFF_PITCH or more."""
+        params = (0, 0, 0, math.nan) if self.airframe.hovers else (FIXEDWING_TAKEOFF_PITCH, 0, 0, 0)
+        return (M.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT, M.MAV_CMD_NAV_TAKEOFF, params, lat, lon, alt_m)
+
+    @property
+    def acceptance_radius_m(self):
+        """A waypoint's acceptance radius: 3 m, or (0) the fixed-wing's own (WP_RADIUS)."""
+        return 3.0 if self.airframe.hovers else 0.0
+
     def upload_mission(self, waypoints, alt_m, takeoff=False, speed_mps=None, timeout=15.0):
-        """Upload a PX4 mission: an optional takeoff, an optional speed, then the
+        """Upload a mission: an optional takeoff, an optional speed, then the
         [(lat, lon), ...] waypoints at alt_m above home. Returns the index of
-        the first waypoint item; raises if PX4 rejects it."""
+        the first waypoint item; raises if the autopilot rejects it."""
         F_REL, F_MISSION = M.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT, M.MAV_FRAME_MISSION
         items = []  # (frame, command, params 1-4, lat, lon, alt)
         if takeoff and self.position:
-            lat, lon = self.position[:2]
-            items.append((F_REL, M.MAV_CMD_NAV_TAKEOFF, (0, 0, 0, math.nan), lat, lon, alt_m))
+            items.append(self.takeoff_item(*self.position[:2], alt_m))
         if speed_mps:
-            items.append((F_MISSION, M.MAV_CMD_DO_CHANGE_SPEED, (1, speed_mps, -1, 0), 0, 0, 0))
+            items.append((F_MISSION, M.MAV_CMD_DO_CHANGE_SPEED,
+                          (1 if self.airframe.hovers else 0, speed_mps, -1, 0), 0, 0, 0))
         first_waypoint = len(items)
         for lat, lon in waypoints:
             # param2: acceptance radius (m)
-            items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (0, 3.0, 0, math.nan), lat, lon, alt_m))
+            items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (0, self.acceptance_radius_m, 0, math.nan),
+                          lat, lon, alt_m))
         self._upload_items(items, MISSION, timeout, "mission")
         self.mission_seq = self.mission_reached = -1
         return first_waypoint, len(items)
 
     def upload_items(self, items, timeout=15.0):
-        """Upload a PX4 mission of ready-made items (frame, command, (p1..p4),
-        lat, lon, alt); raises if PX4 rejects it."""
+        """Upload a mission of ready-made items (frame, command, (p1..p4),
+        lat, lon, alt); raises if the autopilot rejects it."""
         self._upload_items(items, MISSION, timeout, "mission")
         self.mission_seq = self.mission_reached = -1
         self.mission_state = 0
 
     def clear_mission(self, timeout=15.0):
-        """Remove PX4's stored mission (an empty upload)."""
+        """Remove the autopilot's stored mission (an empty upload)."""
         self._upload_items([], MISSION, timeout, "mission")
         self.mission_seq = self.mission_reached = -1
 
     def upload_fence(self, polygon, timeout=15.0):
-        """Replace PX4's geofence with an inclusion polygon [(lat, lon), ...];
-        an empty polygon clears it. Raises if PX4 rejects it."""
+        """Replace the autopilot's geofence with an inclusion polygon
+        [(lat, lon), ...]; an empty polygon clears it. Raises if it's rejected."""
         n = len(polygon)
         items = [(M.MAV_FRAME_GLOBAL, M.MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION,
                   (n, 0, 0, 0), lat, lon, 0.0) for lat, lon in polygon]
         self._upload_items(items, FENCE, timeout, "geofence")
 
     def _upload_items(self, items, mission_type, timeout, what):
-        """The MAVLink mission protocol: send the count, answer PX4's requests
-        for each item, wait for its ack."""
+        """The MAVLink mission protocol: send the count, answer the autopilot's
+        requests for each item, wait for its ack."""
+        if mission_type == MISSION and items and self.ap.mission_offset:
+            # ArduPilot's item 0 is home, which it sets itself: a placeholder
+            lat, lon, amsl, _ = self.position or (0.0, 0.0, 0.0, 0.0)
+            items = [(M.MAV_FRAME_GLOBAL, M.MAV_CMD_NAV_WAYPOINT, (0, 0, 0, 0), lat, lon, amsl)] + items
         self._mission_items, self._mission_type = items, mission_type
         while not self._mission_ack.empty():
             self._mission_ack.get_nowait()
@@ -450,9 +482,9 @@ class VehicleLink:
         try:
             result = self._mission_ack.get(timeout=timeout)
         except queue.Empty:
-            raise RuntimeError(f"PX4 didn't confirm the {what} upload")
+            raise RuntimeError(f"{self.ap.label} didn't confirm the {what} upload")
         if result != M.MAV_MISSION_ACCEPTED:
-            raise RuntimeError(f"PX4 rejected the {what} (MAV_MISSION_RESULT {result})")
+            raise RuntimeError(f"{self.ap.label} rejected the {what} (MAV_MISSION_RESULT {result})")
 
     def _send_mission_item(self, seq):
         frame, command, (p1, p2, p3, p4), lat, lon, alt = self._mission_items[seq]
@@ -471,8 +503,8 @@ class VehicleLink:
         return self.command(M.MAV_CMD_MISSION_START, 0, 0)
 
     def resume_mission(self):
-        """Continue the mission from where it was interrupted (PX4 Mission mode)."""
-        return self.command(M.MAV_CMD_DO_SET_MODE, M.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 4, 4)
+        """Continue the mission from where it was interrupted (MISSION / AUTO mode)."""
+        return self.set_mode("MISSION")
 
     def distance_to(self, lat, lon):
         """Horizontal distance (m) from the drone to lat/lon, or None."""
@@ -512,7 +544,7 @@ class VehicleLink:
                 self._request_health_streams()
             self._px4_seen.set()
             self.armed = bool(msg.base_mode & M.MAV_MODE_FLAG_SAFETY_ARMED)
-            self.mode = px4_mode_name(msg.custom_mode)
+            self.mode, self.mode_name = self.ap.mode(msg.custom_mode)
             self.system_status = msg.system_status
         self.last_message_time = now
         if msg_type == "GLOBAL_POSITION_INT":
@@ -551,9 +583,7 @@ class VehicleLink:
             self.gps_fix, self.gps_sats = msg.fix_type, msg.satellites_visible
             self.gps_eph_m = msg.eph / 100.0 if msg.eph != 65535 else None
         elif msg_type == "PARAM_VALUE":
-            value = msg.param_value
-            if msg.param_type in INT_PARAM_TYPES:
-                value = struct.unpack("<i", struct.pack("<f", value))[0]
+            value = self.ap.decode_param(msg.param_value, msg.param_type)
             name = msg.param_id if isinstance(msg.param_id, str) else msg.param_id.decode()
             with self._param_event:
                 self._params[name.rstrip("\0")] = value
@@ -568,8 +598,8 @@ class VehicleLink:
             if getattr(msg, "mission_type", 0) == self._mission_type:
                 self._mission_ack.put(msg.type)
         elif msg_type == "MISSION_CURRENT":
-            self.mission_seq = msg.seq
+            self.mission_seq = msg.seq - self.ap.mission_offset
             self.mission_state = getattr(msg, "mission_state", 0)
             self.mission_time = time.monotonic()
         elif msg_type == "MISSION_ITEM_REACHED":
-            self.mission_reached = msg.seq
+            self.mission_reached = msg.seq - self.ap.mission_offset

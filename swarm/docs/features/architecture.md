@@ -18,7 +18,7 @@ and extend: new search patterns, detection layers, ReID, safety checks.
                │              │              └── UDP 5556 + tracker video ──► X on the Radxa
          VehicleLink per drone (mavlink_link.py)
                │
-         MavConnection per link ──── MAVLink ────► PX4 on each drone
+         MavConnection per link ──── MAVLink ────► PX4 or ArduPilot on each drone
 ```
 
 | Module | Does |
@@ -30,6 +30,8 @@ and extend: new search patterns, detection layers, ReID, safety checks.
 | `safety_panel.py` | The safety drawer (F2): alerts, health, responses, geofence, sim faults |
 | `search_planner.py` | Splitting an area into balanced lawnmower blocks; route crossings |
 | `mavlink_link.py` | `MavConnection` (one link, shared by the drones on it) and `VehicleLink` (one drone: telemetry, commands, missions, gimbal, zoom) |
+| `autopilot.py` | Where PX4 and ArduPilot differ on MAVLink (modes, parameters, mission numbering, failsafe and fence parameters): `VehicleLink.ap` |
+| `airframe.py` | What a drone's model (`aircraft/models.yml`) can be asked to do (hovers, loiter radius, speeds): `VehicleLink.airframe`; see [aircraft](aircraft.md) |
 | `companion.py`, `video.py` | X's ground-station protocol; RTSP readers keeping the newest frame |
 | `minimap.py`, `road_routes.py` | The map; OpenStreetMap roads |
 | `fleet.py`, `settings.py` | The config / fleet file: drones, and the swarm, deconfliction and control settings (safety's are in `safety.py`) |

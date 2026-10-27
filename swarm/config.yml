@@ -13,18 +13,25 @@ gcs_sysid: 245                  # our MAVLink system id; not 255 (QGC's)
 # home: [1.413425, 103.865000]  # map origin; else the first drone's first position
 
 # --- The drones, in order: Drone1, Drone2, ... ---
-# Real drones: name, sysid (its PX4's MAV_SYS_ID), video (its gimbal camera's
-#   stream) and companion (its Radxa running X; the camera is then X's).
-#   Optional: mavlink (this drone on its own link), chase_video (a second camera).
-# The sim: one PX4 per entry, named Drone1, Drone2, ...; it uses only
-#   `companion` (a Radxa running X's rknn-sim profile) and makes the rest itself.
+# Every drone: model, its aircraft from aircraft/models.yml (default quad_px4:
+#   a PX4 quadrotor; x8_arduplane: the Skywalker X8 on ArduPlane). The ground
+#   station flies each as its autopilot and airframe need.
+# Real drones: name, sysid (its autopilot's MAVLink system id), video (its
+#   gimbal camera's stream) and companion (its Radxa running X; the camera is
+#   then X's). Optional: mavlink (this drone on its own link), chase_video (a
+#   second camera).
+# The sim: one autopilot per entry, named Drone1, Drone2, ...; it uses only
+#   `model` and `companion` (a Radxa running X's rknn-sim profile) and makes
+#   the rest itself.
 drones:
   - name: Drone1
     sysid: 1
+    # model: quad_px4
     # video: rtsp://192.168.144.25:8554/main
     # companion: 192.168.199.99
   # - name: Drone2
   #   sysid: 2
+  #   model: x8_arduplane
   #   video: rtsp://192.168.144.26:8554/main
   #   companion: 192.168.199.100
 

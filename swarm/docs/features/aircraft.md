@@ -1,0 +1,164 @@
+# Aircraft: quadrotors and fixed-wings in one swarm
+
+Every drone in the config file has a `model:`, an entry of
+[`aircraft/models.yml`](../../aircraft/models.yml). The model says what to
+simulate and how the ground station should fly it:
+
+| Model | Aircraft | Autopilot |
+|---|---|---|
+| `quad_px4` (the default) | Quadrotor with a gimbal camera | PX4 |
+| `x8_arduplane` | Skywalker X8 flying wing (JSBSim) with the same gimbal camera | ArduPlane |
+
+```yaml
+drones:
+  - name: Drone1
+    sysid: 1                 # model: quad_px4 (the default)
+  - name: Drone2
+    sysid: 2
+    model: x8_arduplane
+```
+
+`./run_cesium_sim.sh --qgc --config that.yml` then flies both in one world,
+from one ground station. Real drones use the same key in their fleet file, so
+the ground station knows which autopilot and airframe it is talking to. The
+sim's `--model MODEL` sets the model of drones the file doesn't give one (for
+example those added with `--drones`).
+
+## How it fits together
+
+Three layers, each holding one kind of fact. This is the same split the
+packaged Avetics sim uses ([comparison](../avetics-sim-comparison.md)), made per
+drone so the layers can be mixed in one swarm.
+
+| Layer | File | Holds | Never holds |
+|---|---|---|---|
+| Airframe | `aircraft/airframes/<name>.jsonc` | The physical aircraft: links, actuators, sensors, physics. Its output order per autopilot family, and any settings of its own (the X8's catapult). Where the gimbal camera mounts (`gimbal-mount`) | A port, a gain |
+| Autopilot | `models.yml` `autopilots:` | The link: controller type, ports (offset per drone), settings every aircraft on it shares | A gain |
+| Model | `models.yml` `models:` | An airframe + autopilot pair: how its SITL starts (frame or binary, parameter files in order) and its `capabilities` | Anything about the airframe or the link |
+
+[`aircraft.py`](../../aircraft.py) combines them into each drone's robot config
+(`sim_config/robot_<model>_custom[_N].jsonc`) and its SITL start-up.
+[`gcs/airframe.py`](../../gcs/airframe.py) reads only a model's autopilot family
+and capabilities, so the ground station still needs nothing from the sim.
+
+```
+config.yml  drone: {model: x8_arduplane}
+      │
+      ├── sim:  aircraft.py ── robot config (airframe + link + gimbal camera)
+      │                    └── SITL: px4_sitl.Px4Sitl | ardupilot_sitl.ArduPilotSitl
+      │
+      └── gcs:  VehicleLink ── .ap        gcs/autopilot.py  (PX4 | ArduPilot on MAVLink)
+                           └── .airframe  gcs/airframe.py   (what it can be asked to do)
+```
+
+- **The gimbal camera** ([`aircraft/payload_gimbal.jsonc`](../../aircraft/payload_gimbal.jsonc))
+  is added to every airframe at its `gimbal-mount`, so all aircraft carry the
+  same camera. `camera_properties.json`, RTSP, `--ground-truth` and the MOT
+  tools work on any of them.
+- **Ports**: drone N (0-based) uses autopilot instance N + the autopilot's
+  `instance-offset`. PX4's instance is N; ArduPilot's is N + 5, which keeps
+  clear of another ArduPilot on instance 0. Either way the ground station
+  finds drone N on UDP 14030+N, and its system id is N+1.
+- **The sim scene's home is every autopilot's home**: PX4's `LPE_LAT/LON` and
+  ArduPilot's `--home`, so they agree with the scene.
+- **Tuning lives only in a model's parameter files.** The X8's own tuning is the
+  ArduPilot example's `x8-arduplane.param`, read from there, not copied.
+  `aircraft/params/arduplane_swarm.parm` adds only the swarm's links,
+  failsafes and gimbal mount.
+
+### Checks
+
+```bash
+python aircraft.py --list                    # the models
+python aircraft.py --dump x8_arduplane       # the robot config it generates (--index N)
+python aircraft.py --audit                   # cross-checks; exits 1 on an error
+```
+
+`--audit` checks numbers that describe one fact in two places, because
+nothing else would catch them disagreeing:
+
+- every `actuator-order` output has a `SERVOn_FUNCTION`
+- the gimbal's travel, which the sim decodes the mount PWM across, equals
+  ArduPilot's `MNT1_*_MIN/MAX`, and the mount outputs span 1000–2000 µs
+- `MNT1_TYPE` is 7 (a self-stabilising gimbal)
+
+`tests/test_aircraft.py` also runs every generated robot config through the
+client's schema. The sim's C++ loaders accept configs that the client rejects.
+
+## What the ground station does with a fixed-wing
+
+The commands ask the drone's capabilities, never its type. A fixed-wing
+(`hovers: false`) differs in these ways:
+
+| | Multirotor | Fixed-wing |
+|---|---|---|
+| `takeoff` | climbs in place | TAKEOFF mode: launched along the way it faces (the sim's catapult), climbs to the height, circles |
+| `goto` | flies there and hovers; several line up | flies there and circles it (GUIDED); several circle the same point, apart in height (their layers) |
+| `heading`, a goto's heading | turns on the spot | refused: it faces the way it flies |
+| `hold` | hovers (PX4 Hold) | circles (LOITER) |
+| `land` | lands where it is | its mission's landing sequence (`DO_LAND_START`); refused without one |
+| `rtl` | returns and lands | returns and circles home (ArduPlane RTL) |
+| Arrived at a point | within `arrive_m` | within `arrive_m` + its loiter radius |
+| Giving way | stops and climbs | keeps flying to where it was going, higher. Beside a multirotor, the multirotor gives way |
+| Lost link | others keep `lost_margin_m` from its last position | the same plus its loiter radius; it returns home itself after `FS_LONG_TIMEOUT` (`FS_LONG_ACTN 1`) |
+| Battery response `land` | lands | returns home instead |
+| Mission `hold`, `wait` | NAV_WAYPOINT hold, NAV_DELAY | NAV_LOITER_TIME (circles) |
+| Mission `heading`, `land` | turns, lands | a validation error |
+
+ArduPilot's own differences stay inside `VehicleLink` (`gcs/autopilot.py`):
+
+- **Modes** use the ground station's names, so the rest of it compares
+  them without knowing the autopilot: AUTO is `MISSION`, LOITER is `HOLD`.
+  The dashboard shows the autopilot's own name (`mode_name`).
+- **Integer parameters**: PX4 packs them bytewise into the float field;
+  ArduPilot sends the plain value.
+- **Mission numbering**: ArduPilot's item 0 is home. Uploads start with a
+  placeholder for it, and item numbers are shifted back, so missions, the
+  minimap and run logs count items the same for both autopilots.
+- **Missions don't claim the gimbal.** ArduPilot has no
+  `DO_GIMBAL_MANAGER_CONFIGURE` mission item (it rejects the upload) and obeys a
+  mission's gimbal items anyway.
+- **Parameter names**: link loss is `FS_LONG_ACTN`/`FS_LONG_TIMEOUT`, and the
+  fence is `FENCE_ACTION`/`FENCE_ALT_MAX`, turned on with
+  `FENCE_TYPE 5`/`FENCE_ENABLE 1`.
+
+## The plane's gimbal
+
+The ground station steers the plane's camera exactly as it steers the quads':
+through the gimbal manager in the autopilot (`GIMBAL_MANAGER_SET_ATTITUDE`,
+mission `DO_GIMBAL_MANAGER_PITCHYAW`, ROI). ArduPlane drives a self-stabilising
+gimbal on servo outputs 5–7 (`MNT1_TYPE 7`). `arduplane-api` decodes those
+outputs back to angles across the travel and drives the same gimbal actuator
+the quads use. Checked against ArduPlane 4.7.2 SITL: pitch -45° comes out at
+-44.9°, yaw -120° at -120.0°, and ArduPlane reports both back over MAVLink.
+
+## Starting point: the catapult
+
+The X8 has no landing gear: its JSBSim model has no ground contacts. Fixed-wings
+spawn on the runway centreline ahead of the spawn point, 40 m apart, facing
+along it. `arduplane-api` holds each one on a virtual catapult until TAKEOFF
+applies throttle, then launches it at 18 m/s. Runway takeoff and landing need
+gear contacts in the JSBSim model and TKOFF/LAND tuning. When the real
+fixed-wing gets its own airframe file, add them there.
+
+## Adding an aircraft
+
+1. **Airframe**: `aircraft/airframes/<name>.jsonc`. Write the physical
+   aircraft, or `extends` an existing robot config and override what differs.
+   Add an `autopilot.<family>.actuator-order` per autopilot it can fly with,
+   and a `gimbal-mount`.
+2. **Model**: an entry in `models.yml` with its `airframe`, `autopilot`, `sitl`
+   (PX4: `frame`; ArduPilot: `binary`) and its parameter files, in order.
+   Give its `capabilities` as `multirotor`, `fixedwing`, or a mapping such as
+   `{kind: fixedwing, loiter_radius_m: 50, cruise_mps: 22}`.
+3. `python aircraft.py --audit`, then `python -m unittest discover -s tests`.
+   The tests run every model through the audit and the schema.
+
+Start without tuning. Get the aircraft flying on the autopilot's stock
+parameters first, then add its own parameter file.
+
+A new autopilot family, for example ArduCopter quads, also needs:
+- an `autopilots` entry
+- a dialect in `gcs/autopilot.py`, at least its mode table, since ArduCopter's
+  modes differ from ArduPlane's
+- a SITL class with `start`, `stop` and `restart_modules`

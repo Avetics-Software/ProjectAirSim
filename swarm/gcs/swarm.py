@@ -43,6 +43,7 @@ import itertools
 import math
 import time
 
+from .autopilot import MANUAL_MODES
 from .log import log
 from .mavlink_link import M
 from .search_planner import find_crossings, plan_area_search
@@ -58,8 +59,10 @@ SWARM_HELP = """Swarm (name drones first: 2, 1,3 or all):
                                         default_alt_m, 30]
   N goto LAT LON [ALT] [HEADING]        fly there; on arrival turn to HEADING deg from
                                         north if given; several drones form a line
-  N heading DEG                         turn in place to face DEG from north
-  N hold | land | rtl                   hover / land here / return home and land
+                                        (fixed-wings circle the point, stacked by height)
+  N heading DEG                         turn in place to face DEG from north (not fixed-wings)
+  N hold | land | rtl                   hover (fixed-wings circle) / land here (fixed-wings:
+                                        their mission's landing) / return home and land
   N searcharea ALT SPACING LAT,LON;LAT,LON;...
                                         grid-search a polygon, passes split between drones
   N search LAT1 LON1 LAT2 LON2 [ALT] [SPACING]
@@ -165,8 +168,12 @@ class SwarmControl:
                 lat, lon = float(args[0]), float(args[1])
                 alt = float(args[2]) if len(args) > 2 and args[2] != "-" else None
                 heading = float(args[3]) % 360.0 if len(args) > 3 else None
-                for k, i in enumerate(targets):
-                    east = (k - (len(targets) - 1) / 2) * self.cfg.formation_spacing_m
+                hovering = [i for i in targets if self.links[i].airframe.hovers]
+                for i in targets:
+                    # Multirotors line up; fixed-wings circle the point itself,
+                    # apart in height (their layers)
+                    k = hovering.index(i) if i in hovering else None
+                    east = 0.0 if k is None else (k - (len(hovering) - 1) / 2) * self.cfg.formation_spacing_m
                     point = offset_geo(lat, lon, 0.0, east)
                     drone_alt = self.layered(i, alt) if alt is not None else self.current_alt(i)
                     self._set_plan(i, [point], drone_alt)
@@ -208,7 +215,7 @@ class SwarmControl:
                 where = f"{rel:5.1f} m  {lat:.6f}, {lon:.6f}"
             else:
                 where = "no position yet"
-            lines.append(f"{self.links[i].name}  {link.mode:<8} {'armed' if link.armed else 'disarmed':<8} "
+            lines.append(f"{self.links[i].name}  {link.mode_name:<8} {'armed' if link.armed else 'disarmed':<8} "
                          f"{where}  position {rates[i]:.0f}/s  {doing}")
         return lines
 
@@ -248,8 +255,12 @@ class SwarmControl:
             log.warning(f"{self.links[i].name}: {err}")
 
     async def _call(self, func, *args):
-        # Link calls wait for PX4's acknowledgement, so keep them off the UI loop
+        # Link calls wait for the autopilot's acknowledgement, so keep them off the UI loop
         return await asyncio.to_thread(func, *args)
+
+    def arrive_m(self, i):
+        """How close drone i has reached a point: a fixed-wing circles it."""
+        return self.cfg.arrive_m + self.links[i].airframe.loiter_radius_m
 
     def _set_plan(self, i, points, alt):
         self.plans[i] = list(points)
@@ -264,20 +275,26 @@ class SwarmControl:
         self.destinations.pop(i, None)
 
     async def _arm_and(self, i, action, *args):
-        """Retry an action that needs PX4 armed and its estimator settled."""
+        """Retry an action that needs the drone armed and its estimator settled.
+
+        A multirotor is armed first (holding, so it stays put). A fixed-wing
+        is armed after: armed in the mode the action sets (TAKEOFF, or AUTO
+        for a mission), it launches; in any other it would fly off in that one."""
         link = self.links[i]
         for _ in range(60):
-            if not link.armed:
+            if not link.armed and link.airframe.hovers:
                 # PX4 won't arm in a manual mode without a radio; it can boot
                 # into one when its position estimate isn't ready yet
-                if link.mode in ("MANUAL", "STABILIZED", "ALTCTL", "POSCTL", "ACRO", "?"):
+                if link.mode in MANUAL_MODES + ("?",):
                     await self._call(link.hold)
                 await self._call(link.arm)
             result = await self._call(action, *args)
+            if result == M.MAV_RESULT_ACCEPTED and not link.armed and not link.airframe.hovers:
+                result = await self._call(link.arm)
             if result == M.MAV_RESULT_ACCEPTED:
                 return
             await asyncio.sleep(1.0)
-        raise RuntimeError(f"PX4 refused ({link.status_text or 'no reason given'})")
+        raise RuntimeError(f"{link.ap.label} refused ({link.status_text or 'no reason given'})")
 
     async def _takeoff(self, i, alt):
         await self._arm_and(i, self.links[i].takeoff, alt)
@@ -293,6 +310,8 @@ class SwarmControl:
 
     async def _turn(self, i, heading):
         link = self.links[i]
+        if not link.airframe.hovers:
+            raise RuntimeError("a fixed-wing can't turn on the spot; it faces the way it flies")
         if not (link.position and link.position[3] > 2.0 and link.armed):
             raise RuntimeError("take off before turning")
         await self._call(link.turn_to, heading)
@@ -307,6 +326,8 @@ class SwarmControl:
             self.plan_alts[i] = alt
             self.plan_max_alts[i] = alt
         await self._ensure_airborne(i, alt)
+        if not link.airframe.hovers:
+            heading = None  # it faces the way it flies, and circles the point
         # Fly there keeping the current heading (said explicitly: without a yaw
         # PX4 turns the drone to face the way it flies); a heading asked for is
         # only applied on arrival
@@ -317,7 +338,7 @@ class SwarmControl:
             loop = asyncio.get_running_loop()
             distance = link.distance_to(lat, lon) or 0.0
             deadline = loop.time() + self.cfg.waypoint_timeout_s + distance / 2.0
-            while (link.distance_to(lat, lon) or 1e9) > self.cfg.arrive_m or i in self.giving_way:
+            while (link.distance_to(lat, lon) or 1e9) > self.arrive_m(i) or i in self.giving_way:
                 if loop.time() > deadline:
                     raise RuntimeError(f"didn't reach {lat:.6f}, {lon:.6f}")
                 await asyncio.sleep(0.5)
@@ -331,7 +352,9 @@ class SwarmControl:
         self._clear_plan(i)
         result = await self._call(func)
         if result not in (None, M.MAV_RESULT_ACCEPTED):
-            raise RuntimeError(f"PX4 refused {action} (result {result})")
+            why = (": a fixed-wing lands only through its mission's landing sequence"
+                   if action == "land" and not link.airframe.hovers else f" (result {result})")
+            raise RuntimeError(f"{link.ap.label} refused {action}{why}")
 
     # ------------------------------------------------------------------
     # Area search (PX4 missions)
@@ -368,7 +391,8 @@ class SwarmControl:
                 self.destinations[i] = path[k]
             await asyncio.sleep(0.5)
         self._clear_plan(i)
-        log.info(f"{self.links[i].name}: search done; holding at the last waypoint")
+        log.info(f"{self.links[i].name}: search done; "
+                 + ("holding at" if link.airframe.hovers else "circling") + " the last waypoint")
 
     async def wait_idle(self):
         """Wait until every drone has finished its command."""
@@ -451,9 +475,11 @@ class SwarmControl:
 
     def separation_h(self, i, j):
         """Horizontal separation to keep between drones i and j: wider around a
-        lost drone, and widened by both drones' GPS inaccuracy."""
+        lost drone (a lost fixed-wing circles, by its loiter radius more), and
+        widened by both drones' GPS inaccuracy."""
         if i in self.lost or j in self.lost:
-            return self.lost_margin_m
+            lost = i if i in self.lost else j
+            return self.lost_margin_m + self.links[lost].airframe.loiter_radius_m
         eph = sum(self.links[k].gps_eph_m or 0.0 for k in (i, j))
         return self.dc.separation_h_m + min(eph, self.dc.max_gps_margin_m)
 
@@ -469,8 +495,14 @@ class SwarmControl:
             dh, dv, t = self.predict(i, j, now)
             if dh < self.separation_h(i, j) and dv < self.dc.separation_v_m \
                     and j not in self.giving_way and i not in self.giving_way:
-                # The higher-numbered drone gives way, unless it can't be reached
-                yielder, other = (i, j) if j in self.lost else (j, i)
+                # The higher-numbered drone gives way, unless it can't be
+                # reached, or only the other can stop (a multirotor beside a
+                # fixed-wing)
+                hovers_i, hovers_j = (self.links[k].airframe.hovers for k in (i, j))
+                if j in self.lost or (hovers_i and not hovers_j and i not in self.lost):
+                    yielder, other = i, j
+                else:
+                    yielder, other = j, i
                 await self._give_way(yielder, other, dh, dv, t)
         # Resume drones that are clear of everyone again
         for j, state in list(self.giving_way.items()):
@@ -503,6 +535,9 @@ class SwarmControl:
             f"{self.links[j].name} would pass {dh:.1f} m from {self.links[i].name} ({dv:.1f} m in height) "
             f"{when}: giving way, climbing {self.dc.give_way_climb_m:.0f} m"
         )
+        if not link.airframe.hovers and state["destination"]:
+            # A fixed-wing can't stop: it carries on to where it was going, higher
+            lat, lon = state["destination"]
         await self._call(link.fly_to, lat, lon, rel + self.dc.give_way_climb_m)
 
     async def _resume(self, j, state):

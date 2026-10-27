@@ -10,7 +10,7 @@ Checks before flying real drones (run_real.sh runs this first):
   system ids)
 - the MAVLink link can be opened: a UDP port free to listen on, a serial
   radio present
-- every drone's PX4 is heard on it (listens --listen seconds for heartbeats)
+- every drone's autopilot is heard on it (listens --listen seconds for heartbeats)
 - each drone's video stream, and each companion (ping, and X's tracker video)
 
 Exits 1 only when the ground station couldn't start (a bad config, a busy
@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 os.environ.setdefault("MAVLINK20", "1")
 from pymavlink import mavutil  # noqa: E402
 
+from .autopilot import dialect  # noqa: E402
 from .companion import TRACKER_PORT  # noqa: E402
 from .fleet import check_for_real_drones, load_fleet  # noqa: E402
 
@@ -59,7 +60,7 @@ def check_link(url):
 
 
 def listen_for_drones(url, sysids, seconds):
-    """System ids heard (PX4 heartbeats) on a link within `seconds`."""
+    """System ids heard (autopilot heartbeats) on a link within `seconds`."""
     heard = set()
     try:
         mav = mavutil.mavlink_connection(url, source_system=254, source_component=190)
@@ -128,7 +129,7 @@ def main():
             continue
         heard = listen_for_drones(url, {d.sysid for d in drones}, args.listen)
         for d in drones:
-            results.append((OK, f"{d.name}: PX4 (system {d.sysid}) heard on {url}") if d.sysid in heard
+            results.append((OK, f"{d.name}: {dialect(d.airframe.autopilot).label} (system {d.sysid}) heard on {url}") if d.sysid in heard
                            else (WARN, f"{d.name}: no heartbeat from system {d.sysid} on {url} "
                                  f"in {args.listen:g} s (powered on? MAV_SYS_ID {d.sysid}?)"))
 

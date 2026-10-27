@@ -7,9 +7,9 @@ settings (swarm, deconfliction, safety, controls). See fleet.example.yml for
 every key; swarm/config.yml is the sim's.
 
 Real drones read all of it. The sim reads how many drones there are, each
-one's companion and the settings: it makes one PX4 per drone, named Drone1,
-Drone2, ..., and works out their MAVLink ports, system ids and video streams
-itself.
+one's aircraft model and companion, and the settings: it makes one autopilot
+per drone (PX4 or ArduPilot, as its model says), named Drone1, Drone2, ..., and
+works out their MAVLink ports, system ids and video streams itself.
 """
 
 from dataclasses import dataclass, field
@@ -17,6 +17,7 @@ from typing import Optional
 
 import yaml
 
+from .airframe import DEFAULT_MODEL, airframe_of
 from .safety import SafetySettings
 from .settings import ControlSettings, DeconflictionSettings, SwarmSettings
 
@@ -27,11 +28,17 @@ DEFAULT_GCS_COMPID = 190  # MAV_COMP_ID_MISSIONPLANNER
 @dataclass
 class DroneSpec:
     name: str
-    sysid: int  # its PX4's MAVLink system id
+    sysid: int  # its autopilot's MAVLink system id
     mavlink: Optional[str] = None  # its own MAVLink link, if not the fleet's shared one
     video: Optional[str] = None  # gimbal camera stream
     chase_video: Optional[str] = None  # a second camera, shown as the ChaseCam
     companion: Optional[str] = None  # IP of its companion computer (X pipeline)
+    model: Optional[str] = None  # its aircraft (aircraft/models.yml); None: quad_px4
+
+    @property
+    def airframe(self):
+        """What it is and can do (gcs.airframe.Airframe)."""
+        return airframe_of(self.model)
 
 
 @dataclass
@@ -78,7 +85,12 @@ def load_fleet(path):
             raise ValueError(f"{path}: drone {i + 1}: unknown key(s) {', '.join(sorted(unknown))}")
         entry.setdefault("name", f"Drone{i + 1}")
         entry.setdefault("sysid", i + 1)
-        drones.append(DroneSpec(**entry))
+        drone = DroneSpec(**entry)
+        try:
+            drone.airframe
+        except ValueError as err:
+            raise ValueError(f"{path}: {drone.name}: {err}") from None
+        drones.append(drone)
     for key in ("name", "sysid"):
         values = [getattr(d, key) for d in drones]
         if len(set(values)) != len(values):
@@ -109,6 +121,14 @@ def sim_drones(fleet, drones=None, pi_ip=None):
     if pi_ip:
         companions[0] = pi_ip
     return count, companions
+
+
+def sim_models(fleet, count, default=None):
+    """For the sim: each drone's aircraft model, from the file, else `default`
+    (the command line's --model), else quad_px4."""
+    listed = [d.model for d in fleet.drones] if fleet else []
+    return [(listed[i] if i < len(listed) else None) or default or DEFAULT_MODEL
+            for i in range(count)]
 
 
 def check_for_real_drones(fleet, path):

@@ -11,9 +11,11 @@ ports by N (simulator TCP 4560+N, QGC link 18570+N, payload link to 14030+N,
 gimbal link to 13280+N) and uses MAVLink system id N+1. Instance 0 runs in
 PX4's rootfs as before; instance N in build/px4_sitl_default/instance_N.
 
-Settings come from the environment (set by run_cesium_sim.sh):
-  PX4_DIR, PX4_MODEL       PX4-Autopilot checkout and SITL model [none_iris]
-  PX4_PARAM_<NAME>=value   parameters PX4 applies at boot
+The SITL model and the parameter files come from the drone's aircraft model
+(aircraft.py's Sitl); the rest from the environment (set by run_cesium_sim.sh):
+  PX4_DIR                  PX4-Autopilot checkout
+  PX4_MODEL                SITL model without an aircraft model [none_iris]
+  PX4_PARAM_<NAME>=value   parameters PX4 applies at boot, over the model's files
   PI_PORTS                 companion-computer MAVLink ports [15540,15541]; each
                            drone's companion IP comes from the launcher (--fleet,
                            or PI_IP for the first drone)
@@ -29,12 +31,18 @@ import time
 
 from projectairsim.utils import projectairsim_log
 
+from aircraft import read_params
+
 
 class Px4Sitl:
-    def __init__(self, instance=0, pi_ip=None):
+    def __init__(self, instance=0, pi_ip=None, spec=None):
+        """spec: aircraft.Sitl, for the SITL model and parameter files."""
+        if spec is not None:
+            instance = spec.instance
         self.instance = instance
         self.px4_dir = os.path.expanduser(os.environ.get("PX4_DIR", "~/Documents/PX4-Autopilot"))
-        self.model = os.environ.get("PX4_MODEL", "none_iris")
+        self.model = (spec and spec.frame) or os.environ.get("PX4_MODEL", "none_iris")
+        self.param_files = spec.params if spec else []
         # MAVLink links to this drone's companion computer, if it has one
         if pi_ip is None:
             pi_ip = os.environ.get("PI_IP", "") if instance == 0 else ""
@@ -57,7 +65,8 @@ class Px4Sitl:
         os.makedirs(self.log_dir, exist_ok=True)
         os.makedirs(self.rootfs, exist_ok=True)
         log = open(self.log_path, "w")
-        env = dict(os.environ, PX4_SIM_MODEL=self.model)
+        env = self._boot_params()
+        env.update(os.environ, PX4_SIM_MODEL=self.model)
         self.proc = subprocess.Popen(
             [self.bin, "-i", str(self.instance), "-d", self.etc, "-s", "etc/init.d-posix/rcS"],
             cwd=self.rootfs, env=env, stdout=log, stderr=subprocess.STDOUT,
@@ -78,6 +87,16 @@ class Px4Sitl:
 
         if self.pi_ip:
             threading.Thread(target=self._add_companion_links, daemon=True).start()
+
+    def _boot_params(self):
+        """PX4_PARAM_<NAME> for the model's parameter files, which PX4 applies
+        at boot. The environment's own (--px4-params) win over them."""
+        env = {}
+        for path in self.param_files:
+            params = read_params(path)
+            env.update({f"PX4_PARAM_{name}": str(int(value)) if value.is_integer() else repr(value) for name, value in params.items()})
+            projectairsim_log().info(f"PX4 parameters: {len(params)} from {path}")
+        return env
 
     def prune_flight_logs(self, keep):
         """Delete all but the newest `keep` PX4 flight logs (rootfs/log/<date>/*.ulg)."""

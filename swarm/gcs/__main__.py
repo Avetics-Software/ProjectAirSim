@@ -61,7 +61,8 @@ async def main():
         if url not in connections:
             connections[url] = MavConnection(url, fleet.gcs_sysid, fleet.gcs_compid, M.MAV_TYPE_GCS)
             log.info(f"MAVLink {url} as system {fleet.gcs_sysid}/{fleet.gcs_compid}")
-    links = [VehicleLink(connections[fleet.link_url(d)], d.sysid, d.name) for d in fleet.drones]
+    links = [VehicleLink(connections[fleet.link_url(d)], d.sysid, d.name, d.airframe)
+             for d in fleet.drones]
     specs = {link.name: d for link, d in zip(links, fleet.drones)}
 
     station = GroundStation(
