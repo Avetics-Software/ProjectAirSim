@@ -222,6 +222,7 @@ class GroundStation:
         for i, camera in enumerate(self.cameras):
             camera.selected = i == self.selected
         self.windows.title = self.current.name if len(self.cameras) > 1 else ""
+        self.windows.autopilot = self.current.link.ap.label  # who steers a camera with no companion
         self.windows.set_selected(number)
         self.windows.set_companion(self.companions.get(self.selected))
         self._tracker_frame_time = 0.0

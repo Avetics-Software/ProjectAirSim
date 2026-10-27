@@ -120,6 +120,7 @@ class CameraWindows:
         self.on_select = on_select  # called with a drone number for keys 1-9
         self.on_command = None  # called with a console command line (controls)
         self.title = ""  # which drone the camera panes show
+        self.autopilot = "PX4"  # the selected drone's autopilot
         self.minimap = minimap
         self.pitch = initial_pitch
         self.yaw = 0.0
@@ -713,7 +714,7 @@ class CameraWindows:
                      else "click or drag to track")
             return f"{self.title} Tracker (companion {self.companion.ip if self.companion else ''})  {state}"
         if cam == "GimbalCam":
-            via = "X" if self.companion else "PX4"  # who steers this camera
+            via = "X" if self.companion else self.autopilot  # who steers this camera
             pitch, yaw = self.gimbal_actual or (self.pitch, self.yaw)
             mode = "" if self.companion else (
                 "  yaw lock (Y)" if self.yaw_lock else "  yaw follow (Y)")

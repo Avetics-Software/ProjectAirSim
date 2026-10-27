@@ -51,7 +51,7 @@ reported by PX4, since X is the one moving it.
 | Gimbal | **X**, through PX4's gimbal manager: the dashboard's keys go to X | The ground station, through PX4's gimbal manager |
 | Zoom | **X** (`ZOOM:IN/OUT`), forwarded by PX4 to the camera | The ground station (in the sim, the sim camera directly) |
 | Console `gimbal` / `zoom` | Refused, with a pointer to the keys | Steer / zoom directly |
-| GimbalCam title | `(via X)` | `(via PX4)` |
+| GimbalCam title | `(via X)` | `(via PX4)` or `(via ArduPilot)`, the drone's autopilot |
 
 So the ground station never takes the camera from X. X keeps it too: with
 `MAVLINK_RECLAIM_GIMBAL` (on in `rknn-sim-*`) it takes the gimbal back when PX4
