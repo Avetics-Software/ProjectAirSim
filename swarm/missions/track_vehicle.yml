@@ -1,0 +1,45 @@
+# One drone tracks a moving car while flying itself: it waits by the road,
+# hands its camera to the tracker as the car comes past, then chases the car
+# round its block for a lap. Uses the sim's moving actor Vehicle1
+# (config_moving_actors.yml: a 15 m/s loop of about 56 s around a block
+# north-east of home), which `mission start` puts back at the start of its loop.
+#
+#   mission load track_vehicle   then   mission upload 1   then   mission start 1
+#
+# The tracker: X on the drone's companion if it has one (locked onto the car
+# from the sim's ground truth once it is in the frame), else the truth tracker
+# (the gimbal aimed from the car's true position: the best a gimbal can do on
+# this flight). Every frame is scored against where the car really is:
+# runs/track_vehicle_<run>_track_Drone1.csv and a summary in the messages.
+#
+# Timeline from `mission start` (the car's, from its ground truth):
+#   0 s    car leaves the south-west corner, north-east up the first side
+#   ~35 s  drone at the wait point, camera on the road the car comes back along
+#   ~45 s  car comes down the road towards the drone and past the corner
+#   ~58 s  drone chases it round the block at 15 m/s, falling behind at corners
+mission: track_vehicle
+origin: home
+speed: 12
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 40
+      # Wait point: 60 m back from the car's corner, along its first side
+      - goto: {lat: 1.415159, lon: 103.866474, alt: 40}
+        heading: 33
+      # The camera on the road the car comes back down (its last side)
+      - look_at: {lat: 1.414970, lon: 103.867678}
+      # From here the tracker has the camera; the drone keeps flying its route
+      - track: {target: Vehicle1}
+      - wait: 20
+      # Chase the car round its block, facing the way it flies, as fast as it
+      # goes (the drone slows at the corners, so it still falls behind)
+      - goto: {lat: 1.417282, lon: 103.867734}
+        heading: travel
+        speed: 15
+      - goto: {lat: 1.416381, lon: 103.869182}
+      - goto: {lat: 1.414786, lon: 103.868142}
+      - goto: {lat: 1.415689, lon: 103.866675}
+      - track: off
+      - rtl: true

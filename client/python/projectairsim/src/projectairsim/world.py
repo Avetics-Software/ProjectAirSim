@@ -676,6 +676,154 @@ class World(object):
         status = self.client.request(spawn_obj_req)
         return status
 
+    def set_object_animation(
+        self,
+        object_name: str,
+        animation_name: str,
+        loop: bool = True,
+        play_rate: float = 1.0,
+    ) -> bool:
+        """Play an animation on a spawned skeletal-mesh object
+
+        Args:
+            object_name (str): the name of a spawned skeletal-mesh object
+            animation_name (str): the name of an animation asset packaged into the sim
+            loop (bool): whether to loop the animation
+            play_rate (float): playback speed multiplier
+
+        Returns:
+            bool: True if the animation started playing
+        """
+        set_animation_req: Dict = {
+            "method": f"{self.parent_topic}/SetObjectAnimation",
+            "params": {
+                "object_name": object_name,
+                "animation_name": animation_name,
+                "loop": loop,
+                "play_rate": play_rate,
+            },
+            "version": 1.0,
+        }
+        return self.client.request(set_animation_req)
+
+    def set_object_path(
+        self,
+        object_name: str,
+        points: List[List[float]],
+        speed: float,
+        mode: str = "loop",
+        yaw_offset: float = 0.0,
+        align_to_ground: bool = False,
+        walk_animation: str = "",
+        idle_animation: str = "",
+        animation_speed: float = 0.0,
+        start_delay: float = 0.0,
+    ) -> bool:
+        """Move a spawned object along a path inside the sim, staying on the ground
+
+        The object keeps the height above ground it had when this is called and
+        moves every frame without further requests. It stands still while the
+        sim is paused. Calling this again replaces the path.
+
+        Args:
+            object_name (str): the name of a spawned object
+            points (List[List[float]]): at least two [north, east] NED points (m);
+                a third value of 1 marks a point on a bridge, where the object
+                stays on the deck instead of going under it
+            speed (float): speed along the path (m/s)
+            mode (str): "once" (stop at the end), "loop" (back to the first
+                point) or "pingpong" (back and forth)
+            yaw_offset (float): degrees added to the direction of travel so the
+                mesh faces forward (-90 for the UE Mannequin)
+            align_to_ground (bool): tilt the object with the slope (vehicles)
+            walk_animation (str): animation played while moving (optional)
+            idle_animation (str): animation played while stopped (optional)
+            animation_speed (float): speed (m/s) at which the walk animation
+                plays at 1x; 0 plays it at 1x always
+            start_delay (float): seconds to wait before moving
+
+        Returns:
+            bool: True if the object started following the path
+        """
+        set_path_req: Dict = {
+            "method": f"{self.parent_topic}/SetObjectPath",
+            "params": {
+                "object_name": object_name,
+                "points": [[float(v) for v in p[:3]] for p in points],
+                "speed": float(speed),
+                "mode": mode,
+                "yaw_offset": float(yaw_offset),
+                "align_to_ground": align_to_ground,
+                "walk_animation": walk_animation,
+                "idle_animation": idle_animation,
+                "animation_speed": float(animation_speed),
+                "start_delay": float(start_delay),
+            },
+            "version": 1.0,
+        }
+        return self.client.request(set_path_req)
+
+    def clear_object_path(self, object_name: str) -> bool:
+        """Stop an object following its path, leaving it where it is"""
+        clear_path_req: Dict = {
+            "method": f"{self.parent_topic}/ClearObjectPath",
+            "params": {"object_name": object_name},
+            "version": 1.0,
+        }
+        return self.client.request(clear_path_req)
+
+    def get_object_visibility(
+        self,
+        robot_name: str,
+        camera_name: str,
+        object_names: List[str],
+        max_distance: float = 1500.0,
+    ) -> List[Dict]:
+        """How visible each object is from a robot's camera
+
+        Points spread over each object's box are checked against the camera's
+        field of view and for a clear line of sight (trees, buildings and other
+        objects block it).
+
+        Args:
+            robot_name (str): the robot carrying the camera, e.g. "Drone1"
+            camera_name (str): the camera's id in the robot config
+            object_names (List[str]): objects to check
+            max_distance (float): objects farther than this (m) are out of view
+
+        Returns:
+            List[Dict]: per object, in order: "in_view" (its centre is in the
+                field of view), "visible_fraction" (0-1, the share of its points
+                in view and unobstructed), "covered" (it is moving under trees,
+                a bridge or a roof) and "distance_m" (from the camera; NaN if the
+                object wasn't found)
+        """
+        visibility_req: Dict = {
+            "method": f"{self.parent_topic}/GetObjectVisibility",
+            "params": {
+                "robot_name": robot_name,
+                "camera_name": camera_name,
+                "object_names": object_names,
+                "max_distance": float(max_distance),
+            },
+            "version": 1.0,
+        }
+        rows = self.client.request(visibility_req)
+        return [
+            {"in_view": bool(r[0]), "visible_fraction": r[1], "covered": bool(r[2]),
+             "distance_m": r[3]}
+            for r in rows
+        ]
+
+    def pause_object_paths(self, paused: bool = True) -> bool:
+        """Pause (or resume) every object following a path"""
+        pause_paths_req: Dict = {
+            "method": f"{self.parent_topic}/PauseObjectPaths",
+            "params": {"paused": paused},
+            "version": 1.0,
+        }
+        return self.client.request(pause_paths_req)
+
     def destroy_object(self, object_name: str) -> str:
         """Destroy an object in the scene
 

@@ -1,0 +1,40 @@
+// Invisible, physics-free "robot" that carries the spotter's first-person
+// camera. spotter_control.py moves it with the walking human.
+{
+  "physics-type": "non-physics",
+  "links": [
+    {
+      "name": "Head",
+      "collision": {
+        "enabled": false
+      }
+    }
+  ],
+  "joints": [],
+  "sensors": [
+    {
+      "id": "POV",
+      "type": "camera",
+      "enabled": true,
+      "parent-link": "Head",
+      "capture-interval": 0.03,
+      "capture-settings": [
+        {
+          "image-type": 0,
+          "width": 960,
+          "height": 540,
+          "fov-degrees": 90,
+          "capture-enabled": true,
+          "streaming-enabled": false,
+          "pixels-as-float": false,
+          "compress": false,
+          "target-gamma": 2.5
+        }
+      ],
+      "origin": {
+        "xyz": "0 0 0",
+        "rpy-deg": "0 0 0"
+      }
+    }
+  ]
+}

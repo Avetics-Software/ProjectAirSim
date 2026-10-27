@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission and actor editor</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { --bg: #1e1f22; --panel: #2a2c30; --text: #e6e6e6; --muted: #9a9ca3;
+          --accent: #4c9aff; --danger: #ff6b6b; --border: #3a3d42; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font: 14px system-ui, sans-serif; background: var(--bg); color: var(--text);
+         display: flex; height: 100vh; }
+  #side { width: 340px; padding: 12px; overflow-y: auto; background: var(--panel);
+          border-right: 1px solid var(--border); }
+  #map { flex: 1; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  button { background: #3a3d42; color: var(--text); border: 1px solid var(--border);
+           border-radius: 5px; padding: 6px 10px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--danger); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  ul { list-style: none; padding: 0; margin: 8px 0; }
+  li { padding: 6px 8px; border-radius: 5px; cursor: pointer; display: flex; gap: 8px;
+       align-items: center; }
+  li:hover { background: #33363b; }
+  li.sel { background: #36404f; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  label { display: block; margin: 8px 0 2px; color: var(--muted); font-size: 12px; }
+  input, select { width: 100%; background: var(--bg); color: var(--text);
+                  border: 1px solid var(--border); border-radius: 5px; padding: 5px; font: inherit; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
+  #hint { background: #23262b; border-left: 3px solid var(--accent); padding: 8px;
+          margin: 10px 0; font-size: 13px; }
+  #status { margin-top: 10px; font-size: 13px; white-space: pre-wrap; }
+  .err { color: var(--danger); }
+  .ok { color: #7bd88f; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .tabs { display: flex; gap: 4px; margin: 8px 0; }
+  .tabs button { flex: 1; border-radius: 5px 5px 0 0; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  li .num { width: 20px; height: 20px; border-radius: 50%; background: #4a4e55; text-align: center;
+            line-height: 20px; font-size: 11px; flex: none; }
+  li.bad { background: #4a2a2e; }
+  li .mv { margin-left: auto; display: none; gap: 2px; }
+  li.sel .mv, li:hover .mv { display: flex; }
+  li .mv button { padding: 0 6px; }
+  label.chk, label.tool { display: flex; gap: 6px; align-items: center; color: var(--text); }
+  label.chk input, label.tool input { width: auto; }
+  #m-tools { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+  .selpin { outline: 3px solid #fff8; }
+  .landpin { border-radius: 4px; }
+  .eye { background: #222; width: 22px; height: 22px; line-height: 18px; border-radius: 50%; font-size: 10px; }
+  .pin { color: #fff; font-weight: 700; font-size: 12px; text-align: center; line-height: 22px;
+         border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 3px #0008; }
+</style>
+</head>
+<body>
+<div id="side">
+  <div class="tabs" id="tabs" hidden>
+    <button id="tab-mission">Drone mission</button><button id="tab-traffic">Traffic</button>
+  </div>
+  <div id="missionPane" hidden>
+    <h1>Drone mission</h1>
+    <div class="muted" id="m-file"></div>
+    <div class="grid">
+      <div><label>Mission name</label><input id="m-name"></div>
+      <div><label>Speed (m/s)</label><input id="m-speed" type="number" min="0.1" placeholder="per drone"></div>
+      <div><label>North/east from</label><select id="m-origin"><option value="start">where the drone is</option><option value="home">the map's home</option></select></div>
+      <div><label>Traffic file (actors)</label><input id="m-actors" placeholder="none"></div>
+    </div>
+    <label class="chk"><input type="checkbox" id="m-record"> Record the runs (sim)</label>
+    <div class="grid">
+      <div><label>Drone</label><select id="m-drone"></select></div>
+      <div><label>Aircraft (for the check)</label><select id="m-model"></select></div>
+    </div>
+    <label>A map click adds</label>
+    <div id="m-tools"></div>
+    <ul id="m-steps"></ul>
+    <div class="row"><select id="m-add" style="width:auto;flex:1"></select><button id="m-add-btn">+ Add step</button></div>
+    <div id="m-step" hidden></div>
+    <div id="m-result" style="margin-top:8px;font-size:13px;white-space:pre-wrap"></div>
+    <p class="muted">Pins are numbered by step; drag one to move it, click one to edit its step. Yellow circle: the
+      spawn. North/east places in a file are converted to lat/lon when you save.</p>
+  </div>
+  <div id="trafficPane">
+  <h1>Moving actors</h1>
+  <div class="muted" id="file"></div>
+  <div class="row">
+    <button id="addVehicle">+ Vehicle</button>
+    <button id="addPerson">+ Person</button>
+  </div>
+  <ul id="list"></ul>
+  <div id="editor" hidden>
+    <hr>
+    <div class="grid">
+      <div><label>Name</label><input id="f-name"></div>
+      <div><label>Kind</label>
+        <select id="f-kind"><option>vehicle</option><option>person</option></select></div>
+      <div><label>Speed (m/s)</label><input id="f-speed" type="number" step="0.1" min="0"></div>
+      <div><label>Start delay (s)</label><input id="f-delay" type="number" step="1" min="0"></div>
+    </div>
+    <label>Path</label>
+    <select id="f-type">
+      <option value="route">Route: A to B along roads</option>
+      <option value="waypoints">Waypoints: click points in order</option>
+      <option value="random_route">Random route along roads</option>
+    </select>
+    <label id="roadsRow" style="display:flex;gap:6px;align-items:center;color:var(--text)">
+      <input id="f-roads" type="checkbox" style="width:auto"> Follow roads between waypoints
+    </label>
+    <label>At the end</label>
+    <select id="f-mode"></select>
+    <div id="randomFields" class="grid" hidden>
+      <div><label>Length (m)</label><input id="f-length" type="number" step="100" min="50"></div>
+      <div><label>Copies</label><input id="f-count" type="number" step="1" min="1"></div>
+      <div><label>Seed</label><input id="f-seed" type="number" step="1"></div>
+    </div>
+    <div class="grid" id="partFields">
+      <div><label title="Skip this much of the path at the start: cars of a convoy wait in formation along one shared route">Start along the path (m)</label>
+        <input id="f-startat" type="number" step="1" min="0"></div>
+      <div><label title="Stop this far before the end of the path">Stop short of the end (m)</label>
+        <input id="f-stopshort" type="number" step="1" min="0"></div>
+    </div>
+    <div id="hint"></div>
+    <div class="row">
+      <button id="clearPts">Clear points</button>
+      <button id="zoomTo">Zoom to</button>
+      <button id="delActor" class="danger">Delete actor</button>
+    </div>
+  </div>
+  </div>
+  <hr>
+  <div class="row">
+    <button id="save" class="primary">Save</button>
+    <button id="saveStart" class="primary" hidden>Save &amp; start sim</button>
+  </div>
+  <div id="status"></div>
+  <p class="muted">Yellow circle: the drone's spawn. Dashed circle: the area with road data
+    (keep paths inside it). In a running sim, type <code>actors reload</code> after saving.</p>
+</div>
+<div id="map"></div>
+
+<script src="/mission_planner.js"></script>
+<script>
+const COLOURS = ["#4c9aff", "#ff9f43", "#7bd88f", "#c792ea", "#ff6b6b", "#f7d154", "#5ed6d6", "#f78fb3"];
+const MODES = {
+  route: [["pingpong", "Go back to A, then repeat"], ["once", "Stop at B"]],
+  waypoints: [["loop", "Return to the first point, then repeat"],
+              ["pingpong", "Go back through the points, then repeat"], ["once", "Stop at the last point"]],
+  random_route: [["pingpong", "Go back to the start, then repeat"], ["once", "Stop at the end"]],
+};
+const HINTS = {
+  route: "Click the map to place <b>A</b>, then <b>B</b>. Further clicks move B. Drag either pin to adjust. Both must be within 50 m of a road (vehicles) or footpath (people).",
+  waypoints: "Click the map to add points in order. Drag a point to move it; right-click it to remove it. With <b>Follow roads</b>, it drives along the roads between points (each within 50 m of a road); without, it goes straight.",
+  random_route: "Optional: click the map to choose the start. Without one, it starts somewhere within 400 m of the drone. Change the seed for a different route.",
+};
+const wait = new URLSearchParams(location.search).has("wait");
+let state = null, sel = -1, tab = "traffic";
+const previews = new Map();  // actor index -> {paths, error}
+let previewTimer = null;
+
+const map = L.map("map");
+const streets = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" });
+const satellite = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 19, attribution: "Imagery &copy; Esri" });
+satellite.addTo(map);
+L.control.layers({ "Satellite": satellite, "Streets": streets }).addTo(map);
+const pathLayer = L.layerGroup().addTo(map);
+const pinLayer = L.layerGroup().addTo(map);
+
+const $ = (id) => document.getElementById(id);
+const r6 = (v) => Math.round(v * 1e6) / 1e6;
+const colour = (i) => COLOURS[i % COLOURS.length];
+
+function pathType(a) {
+  if (a.route) return "route";
+  if (a.random_route) return "random_route";
+  return "waypoints";
+}
+
+function setStatus(msg, cls) { $("status").className = cls || ""; $("status").textContent = msg; }
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: "POST", body: JSON.stringify(body) } : {});
+  return res.json();
+}
+
+async function init() {
+  state = await api("/api/state");
+  $("file").textContent = state.config_path;
+  $("saveStart").hidden = !wait;
+  const home = [state.home.latitude, state.home.longitude];
+  map.setView(home, 16);
+  L.circleMarker(home, { radius: 8, color: "#000", weight: 2, fillColor: "#ffd400", fillOpacity: 1 })
+    .bindTooltip("Drone spawn").addTo(map);
+  L.circle(home, { radius: state.road_radius_m, color: "#ffd400", weight: 1, dashArray: "6 6",
+                   fill: false, interactive: false }).addTo(map);
+  state.actors.forEach((_, i) => schedulePreview(i, 0));
+  select(state.actors.length ? 0 : -1);
+  if (state.mission) {
+    $("tabs").hidden = false;
+    $("tab-mission").onclick = () => showTab("mission");
+    $("tab-traffic").onclick = () => showTab("traffic");
+    const first = Mission.init(state.mission);
+    showTab("mission");
+    // Frame the mission when it has places
+    if (first) map.setView(first, 16);
+  }
+}
+
+function showTab(t) {
+  tab = t;
+  $("missionPane").hidden = t !== "mission";
+  $("trafficPane").hidden = t !== "traffic";
+  $("tab-mission").className = t === "mission" ? "on" : "";
+  $("tab-traffic").className = t === "traffic" ? "on" : "";
+  $("save").textContent = t === "mission" ? "Save mission" : state.mission ? "Save traffic" : "Save";
+  Mission.show(t === "mission");
+  setStatus("");
+  drawAll();
+}
+
+function renderList() {
+  const ul = $("list");
+  ul.innerHTML = "";
+  state.actors.forEach((a, i) => {
+    const li = document.createElement("li");
+    li.className = i === sel ? "sel" : "";
+    const p = previews.get(i);
+    const err = p && p.error ? " ⚠" : "";
+    li.innerHTML = `<span class="dot" style="background:${colour(i)}"></span>
+      <span>${a.name || "(unnamed)"}${err}</span>
+      <span class="muted" style="margin-left:auto">${a.kind || "person"}, ${pathType(a).replace("_", " ")}</span>`;
+    li.onclick = () => select(i);
+    ul.appendChild(li);
+  });
+}
+
+function select(i) {
+  sel = i;
+  const a = state.actors[i];
+  $("editor").hidden = !a;
+  if (a) {
+    const type = pathType(a);
+    $("f-name").value = a.name || "";
+    $("f-kind").value = a.kind || "person";
+    $("f-speed").value = a.speed ?? "";
+    $("f-speed").placeholder = `default ${effective(a, "speed")}`;
+    $("f-delay").value = a.start_delay ?? "";
+    $("f-type").value = type;
+    fillModes(type, a.mode);
+    $("randomFields").hidden = type !== "random_route";
+    $("roadsRow").hidden = type !== "waypoints";
+    $("f-roads").checked = followsRoads(a);
+    const r = a.random_route || {};
+    $("f-length").value = r.length_m ?? 1000;
+    $("f-count").value = a.count ?? 1;
+    $("f-seed").value = r.seed ?? 0;
+    $("f-startat").value = a.start_at_m ?? "";
+    $("f-stopshort").value = a.stop_short_m ?? "";
+    $("hint").innerHTML = HINTS[type];
+  }
+  renderList();
+  drawAll();
+}
+
+// Same default as moving_actors.follows_roads(): vehicles follow roads
+function followsRoads(a) { return a.follow_roads ?? (a.kind || "person") === "vehicle"; }
+
+function effective(a, key) {
+  const kind = a.kind || "person";
+  return (state.defaults[kind] || {})[key] ?? (kind === "vehicle" ? 10 : 1.4);
+}
+
+function fillModes(type, current) {
+  const sel = $("f-mode");
+  sel.innerHTML = MODES[type].map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  sel.value = MODES[type].some(([v]) => v === current) ? current : MODES[type][0][0];
+}
+
+// --- Editing ------------------------------------------------------------------
+function current() { return state.actors[sel]; }
+
+function changed() {
+  renderList();
+  drawAll();
+  schedulePreview(sel);
+}
+
+function bind(id, apply) {
+  $(id).addEventListener("change", () => { if (current()) { apply(current(), $(id).value); changed(); } });
+}
+bind("f-name", (a, v) => { a.name = v.trim(); });
+bind("f-kind", (a, v) => { a.kind = v; $("f-roads").checked = followsRoads(a); });
+bind("f-speed", (a, v) => { if (v === "") delete a.speed; else a.speed = +v; });
+bind("f-delay", (a, v) => { if (v === "" || +v === 0) delete a.start_delay; else a.start_delay = +v; });
+bind("f-mode", (a, v) => { a.mode = v; });
+$("f-roads").addEventListener("change", () => {
+  const a = current();
+  if (!a) return;
+  // Only store it when it differs from the kind's default
+  const def = (a.kind || "person") === "vehicle";
+  if ($("f-roads").checked === def) delete a.follow_roads; else a.follow_roads = $("f-roads").checked;
+  changed();
+});
+bind("f-length", (a, v) => { a.random_route = { ...(a.random_route || {}), length_m: +v }; });
+bind("f-seed", (a, v) => { a.random_route = { ...(a.random_route || {}), seed: +v }; });
+bind("f-startat", (a, v) => { if (v === "" || +v === 0) delete a.start_at_m; else a.start_at_m = +v; });
+bind("f-stopshort", (a, v) => { if (v === "" || +v === 0) delete a.stop_short_m; else a.stop_short_m = +v; });
+bind("f-count", (a, v) => { if (+v > 1) a.count = +v; else delete a.count; });
+$("f-type").addEventListener("change", () => {
+  const a = current(), type = $("f-type").value;
+  // Carry the first/last points over where that makes sense
+  const pts = points(a);
+  delete a.route; delete a.waypoints; delete a.random_route; delete a.count;
+  if (type === "route") {
+    a.route = {};
+    if (pts.length) a.route.from = pts[0];
+    if (pts.length > 1) a.route.to = pts[pts.length - 1];
+  } else if (type === "waypoints") {
+    a.waypoints = pts;
+  } else {
+    a.random_route = { length_m: 1000 };
+    if (pts.length) a.random_route.start = pts[0];
+  }
+  a.mode = MODES[type][0][0];
+  select(sel);
+  schedulePreview(sel);
+});
+
+function points(a) {
+  if (a.route) return [a.route.from, a.route.to].filter(Boolean);
+  if (a.random_route) return a.random_route.start ? [a.random_route.start] : [];
+  return a.waypoints || [];
+}
+
+map.on("click", (e) => {
+  if (tab === "mission") return Mission.mapClick(e);
+  const a = current();
+  if (!a) return;
+  const p = [r6(e.latlng.lat), r6(e.latlng.lng)];
+  const type = pathType(a);
+  if (type === "route") {
+    if (!a.route.from) a.route.from = p; else a.route.to = p;
+  } else if (type === "waypoints") {
+    (a.waypoints = a.waypoints || []).push(p);
+  } else {
+    a.random_route.start = p;
+  }
+  changed();
+});
+
+$("clearPts").onclick = () => {
+  const a = current();
+  if (a.route) a.route = {};
+  else if (a.random_route) delete a.random_route.start;
+  else a.waypoints = [];
+  changed();
+};
+$("delActor").onclick = () => {
+  if (!confirm(`Delete ${current().name}?`)) return;
+  state.actors.splice(sel, 1);
+  // Re-key the previews after the removed one
+  const old = new Map(previews); previews.clear();
+  old.forEach((v, k) => { if (k < sel) previews.set(k, v); else if (k > sel) previews.set(k - 1, v); });
+  select(Math.min(sel, state.actors.length - 1));
+};
+$("zoomTo").onclick = () => {
+  const p = previews.get(sel);
+  const all = (p && p.paths ? p.paths.flatMap((x) => x.points) : []).concat(points(current()));
+  if (all.length) map.fitBounds(all, { padding: [40, 40], maxZoom: 18 });
+};
+
+function addActor(kind) {
+  const base = kind === "vehicle" ? "Vehicle" : "Person";
+  let n = 1;
+  while (state.actors.some((a) => a.name === `${base}${n}`)) n++;
+  state.actors.push({ name: `${base}${n}`, kind, mode: "pingpong", route: {} });
+  select(state.actors.length - 1);
+  setStatus(`Added ${base}${n}: click the map to place A, then B.`);
+}
+$("addVehicle").onclick = () => addActor("vehicle");
+$("addPerson").onclick = () => addActor("person");
+
+// --- Drawing ------------------------------------------------------------------
+function pin(latlng, label, col, onMove, onRemove) {
+  const icon = L.divIcon({ className: "", iconSize: [26, 26], iconAnchor: [13, 13],
+    html: `<div class="pin" style="background:${col};width:26px;height:26px">${label}</div>` });
+  const m = L.marker(latlng, { icon, draggable: true }).addTo(pinLayer);
+  m.on("dragend", () => { const ll = m.getLatLng(); onMove([r6(ll.lat), r6(ll.lng)]); changed(); });
+  if (onRemove) m.on("contextmenu", () => { onRemove(); changed(); });
+  return m;
+}
+
+function drawAll() {
+  pathLayer.clearLayers();
+  pinLayer.clearLayers();
+  state.actors.forEach((a, i) => {
+    const p = previews.get(i);
+    const isSel = i === sel;
+    if (p && p.paths) {
+      for (const path of p.paths) {
+        const line = path.points.slice();
+        // In loop mode the sim drives from the last point back to the first
+        if (path.mode === "loop") line.push(line[0]);
+        // Beside the mission, the traffic is drawn faintly and can't be picked
+        const faint = tab === "mission";
+        L.polyline(line, { color: colour(i), weight: faint ? 2 : isSel ? 5 : 3,
+                           opacity: faint ? 0.4 : isSel ? 0.95 : 0.6, interactive: !faint })
+          .bindTooltip(path.name, { sticky: true })
+          .on("click", (e) => { L.DomEvent.stopPropagation(e); select(i); })
+          .addTo(pathLayer);
+      }
+    }
+    if (!isSel || tab === "mission") return;
+    const col = colour(i);
+    if (a.route) {
+      if (a.route.from) pin(a.route.from, "A", col, (v) => { a.route.from = v; });
+      if (a.route.to) pin(a.route.to, "B", col, (v) => { a.route.to = v; });
+    } else if (a.random_route) {
+      if (a.random_route.start) pin(a.random_route.start, "S", col, (v) => { a.random_route.start = v; },
+                                    () => { delete a.random_route.start; });
+    } else {
+      (a.waypoints || []).forEach((wp, k) => pin(wp, k + 1, col, (v) => { a.waypoints[k] = v; },
+                                                 () => { a.waypoints.splice(k, 1); }));
+      // Waypoints draw straight lines even before a preview comes back
+      if (!(p && p.paths) && (a.waypoints || []).length > 1) {
+        L.polyline(a.waypoints, { color: col, weight: 4, dashArray: "6 6" }).addTo(pathLayer);
+      }
+    }
+  });
+}
+
+// --- Preview ------------------------------------------------------------------
+function schedulePreview(i, delay = 250) {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => preview(i), delay);
+}
+
+async function preview(i) {
+  const a = state.actors[i];
+  if (!a) return;
+  const pts = points(a);
+  const type = pathType(a);
+  if ((type === "route" && pts.length < 2) || (type === "waypoints" && pts.length < 2)) {
+    previews.set(i, { error: type === "route" ? "place A and B" : "add at least two points" });
+  } else {
+    if (i === sel && tab === "traffic") setStatus("Computing path...");
+    const res = await api("/api/preview", { defaults: state.defaults, actor: a });
+    previews.set(i, res.error ? { error: res.error } : { paths: res.paths });
+  }
+  if (i === sel && tab === "traffic") {
+    const p = previews.get(i);
+    if (p.error) setStatus(`${a.name}: ${p.error}`, "err");
+    else {
+      const notes = p.paths.filter((x) => x.note).map((x) => `${x.name}: ${x.note}`);
+      setStatus(`${a.name}: ${p.paths.map((x) => `${x.name} ${pathLength(x.points)} m`).join(", ")}` +
+                (a.kind === "vehicle" && p.paths.some((x) => x.mode === "loop")
+                  ? "\nVehicles drive back by a legal route (one-way streets, left lane)." : "") +
+                (notes.length ? "\n" + notes.join("\n") : ""), notes.length ? "err" : "ok");
+    }
+  }
+  renderList();
+  drawAll();
+  // Preview the remaining actors one by one on first load
+  const next = state.actors.findIndex((_, k) => !previews.has(k));
+  if (next >= 0) preview(next);
+}
+
+function pathLength(pts) {
+  let m = 0;
+  for (let k = 1; k < pts.length; k++) m += map.distance(pts[k - 1], pts[k]);
+  return Math.round(m);
+}
+
+// --- Save ---------------------------------------------------------------------
+async function save(finish) {
+  const m = state.mission, traffic = tab === "traffic" || (finish && m && m.data.actors);
+  if (m && (tab === "mission" || Mission.dirty)) {
+    if (!(await Mission.save(finish && !traffic))) return;
+  }
+  if (traffic || !m) return saveTraffic(finish);
+}
+
+async function saveTraffic(finish) {
+  const names = state.actors.map((a) => a.name);
+  const dup = names.find((n, k) => names.indexOf(n) !== k);
+  if (dup) return setStatus(`Two actors are named ${dup}; names must be unique.`, "err");
+  const res = await api("/api/save", { defaults: state.defaults, actors: state.actors, finish });
+  if (res.error) return setStatus(`Not saved: ${res.error}`, "err");
+  const msg = `Saved ${res.saved}` + (finish ? "\nStarting the sim; you can close this tab." : "");
+  if (res.problems.length) setStatus(`${msg}\nThe sim will skip:\n${res.problems.join("\n")}`, "err");
+  else setStatus(msg, "ok");
+}
+$("save").onclick = () => save(false);
+$("saveStart").onclick = () => save(true);
+
+init();
+</script>
+</body>
+</html>

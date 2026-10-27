@@ -1,0 +1,76 @@
+# MOT scenario: two streams of 4 identical cars crossing at the four-way
+# junction at 1.414751, 103.868094: one south-west to north-east ("North"),
+# one north-west to south-east ("East"), both at 10 m/s, 16 m apart nose to
+# nose. Each stream waits in formation along its route (start_at_m) and they
+# set off together; the East stream starts 10 m further back, so its cars cross
+# the junction between the North stream's (there is no traffic logic: they are
+# timed not to meet). Boxes cross and overlap in the image. Used by
+# missions/mot_junction.yml: they set off 41 s after `mission start` and the
+# first cars reach the junction about 50 s in.
+defaults:
+  vehicle: {asset: SKM_SportsCar, length: 4.5, align_to_ground: true}
+actors:
+- name: North1
+  kind: vehicle
+  speed: 10
+  mode: once
+  start_delay: 41
+  start_at_m: 60
+  stop_short_m: 5
+  route: {from: [1.413608, 103.86738], to: [1.415881, 103.868828]}
+- name: North2
+  kind: vehicle
+  speed: 10
+  mode: once
+  start_delay: 41
+  start_at_m: 44
+  stop_short_m: 21
+  route: {from: [1.413608, 103.86738], to: [1.415881, 103.868828]}
+- name: North3
+  kind: vehicle
+  speed: 10
+  mode: once
+  start_delay: 41
+  start_at_m: 28
+  stop_short_m: 37
+  route: {from: [1.413608, 103.86738], to: [1.415881, 103.868828]}
+- name: North4
+  kind: vehicle
+  speed: 10
+  mode: once
+  start_delay: 41
+  start_at_m: 12
+  stop_short_m: 53
+  route: {from: [1.413608, 103.86738], to: [1.415881, 103.868828]}
+- name: East1
+  kind: vehicle
+  speed: 10
+  mode: once
+  start_delay: 41
+  start_at_m: 49
+  stop_short_m: 5
+  route: {from: [1.415425, 103.866927], to: [1.414057, 103.869249]}
+- name: East2
+  kind: vehicle
+  speed: 10
+  mode: once
+  start_delay: 41
+  start_at_m: 33
+  stop_short_m: 21
+  route: {from: [1.415425, 103.866927], to: [1.414057, 103.869249]}
+- name: East3
+  kind: vehicle
+  speed: 10
+  mode: once
+  start_delay: 41
+  start_at_m: 17
+  stop_short_m: 37
+  route: {from: [1.415425, 103.866927], to: [1.414057, 103.869249]}
+- name: East4
+  kind: vehicle
+  speed: 10
+  mode: once
+  start_delay: 41
+  start_at_m: 1
+  stop_short_m: 53
+  route: {from: [1.415425, 103.866927], to: [1.414057, 103.869249]}

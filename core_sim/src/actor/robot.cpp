@@ -129,6 +129,7 @@ class Robot::Impl : public ActorImpl {
 
   void SetCachedTerrainElevationASL(double elevation_asl_m);
   double GetCachedTerrainElevationASL() const;
+  bool ConsumePoseSetRequest();
 
   void OnDesiredRobotPoseStampedMessage(const Topic& topic,
                                         const Message& message);
@@ -265,6 +266,7 @@ class Robot::Impl : public ActorImpl {
 
   TerrainElevationCallback callback_terrain_elevation_updated_;
 
+  std::atomic<bool> pose_set_requested_{false};
   std::atomic<double> cached_terrain_elevation_asl_m_{
       std::numeric_limits<double>::quiet_NaN()};
 
@@ -425,6 +427,15 @@ Robot::TerrainElevationCallback Robot::GetTerrainElevationCallback() {
 void Robot::SetCachedTerrainElevationASL(double elevation_asl_m) {
   static_cast<Robot::Impl*>(pimpl_.get())
       ->SetCachedTerrainElevationASL(elevation_asl_m);
+}
+
+bool Robot::SetPose(const Transform& new_pose, bool reset_kinematics) {
+  return static_cast<Robot::Impl*>(pimpl_.get())
+      ->SetPose(new_pose, reset_kinematics);
+}
+
+bool Robot::ConsumePoseSetRequest() {
+  return static_cast<Robot::Impl*>(pimpl_.get())->ConsumePoseSetRequest();
 }
 
 double Robot::GetCachedTerrainElevationASL() const {
@@ -1118,8 +1129,13 @@ bool Robot::Impl::SetPose(const Transform& new_pose, bool reset_kinematics) {
   // Call UpdateKinematics to set the new pose on the robot, which will also
   // update the UnrealRobot's pose to match
   UpdateKinematics(new_kin);
+  pose_set_requested_ = true;
 
   return true;
+}
+
+bool Robot::Impl::ConsumePoseSetRequest() {
+  return pose_set_requested_.exchange(false);
 }
 
 const Kinematics& Robot::Impl::GetKinematics() const { return kinematics_; }
@@ -1409,12 +1425,17 @@ void Robot::Impl::UpdateActuators(const TimeNano sim_time,
   // Initialize container to publish rotor parameters
   std::vector<RotorInfo> rotor_info_vec;
 
+  // The robot's heading, for gimbals holding a compass heading (yaw lock)
+  // or smoothly following the robot's turns
+  const float vehicle_yaw =
+      TransformUtils::ToRPY(kinematics_.pose.orientation).z();
+
   // Update non-tilt actuators
   for (auto& actuator : actuators_) {
     if (actuator->GetType() == ActuatorType::kGimbal) {
       auto gimbal_signal = controller_->GetGimbalSignal(actuator->GetId());
       auto gimbal = static_cast<Gimbal&>(*actuator);
-      gimbal.UpdateGimbal(gimbal_signal, sim_dt_nanos);
+      gimbal.UpdateGimbal(gimbal_signal, sim_dt_nanos, vehicle_yaw);
     } else if (actuator->GetType() != ActuatorType::kTilt) {
       // Do pre-processing specific to actuator type
       if (actuator->GetType() == ActuatorType::kRotor) {

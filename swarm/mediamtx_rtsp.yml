@@ -1,0 +1,20 @@
+# MediaMTX settings for the GimbalCam stream (started by run_cesium_sim.sh when
+# no RTSP server is running yet). px4_gimbal_cesium.py publishes to
+# rtsp://127.0.0.1:8554/gimbal; watch it as RTSP (QGC, the Pi) or in a browser
+# over WebRTC at http://127.0.0.1:8889/gimbal (lowest latency).
+logLevel: warn
+rtsp: true
+rtspAddress: :8554
+rtspTransports: [udp, tcp]
+rtmp: false
+hls: false
+webrtc: true
+webrtcAddress: :8889
+srt: false
+api: false
+metrics: false
+pprof: false
+playback: false
+
+paths:
+  all_others:

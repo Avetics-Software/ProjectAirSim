@@ -1,0 +1,31 @@
+# MOT experiment: two streams of identical cars cross at a junction while the
+# drone watches with its camera fixed on the junction (a compass heading, so
+# it stays put while the drone moves), then slowly crosses past it. Boxes
+# cross and overlap: a test of ID switches at crossings. Recorded frame by
+# frame (start the sim with --ground-truth): runs/mot_junction_<run>/.
+# See docs/features/mot-experiments.md.
+#
+#   mission load mot_junction   then   mission upload 1   then   mission start 1
+#
+# Timeline from `mission start`:
+#   ~35 s  drone 70 m south-west of the junction at 45 m, camera on it
+#   ~50 s  the cars (scenarios/junction.yml) start crossing for about 10 s
+#   ~55 s  the drone crosses slowly (3 m/s) past the junction, camera fixed
+mission: mot_junction
+origin: home
+speed: 12
+record: true
+actors: scenarios/junction.yml
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 45
+      - goto: {lat: 1.414485, lon: 103.867524, alt: 45}
+        heading: 65
+      - gimbal: {pitch: -33, heading: 65}
+        hold: 18
+      - goto: {lat: 1.414974, lon: 103.867296, alt: 45}
+        speed: 3
+      - hold: 5
+      - rtl: true

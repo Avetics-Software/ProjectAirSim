@@ -1,0 +1,45 @@
+# PX4 parameters applied at every launch by run_cesium_sim.sh (before any
+# --px4-params files, which can override them). Edit freely: one "NAME VALUE"
+# per line, '#' starts a comment. PX4 defaults and limits are noted alongside.
+#
+# Faster flight than PX4's defaults. How fast the drone really goes is also
+# limited by its thrust and by MPC_TILTMAX_AIR.
+
+# Horizontal speed (m/s)
+MPC_XY_VEL_MAX    18     # absolute limit in all modes        (default 12, max 20)
+MPC_XY_CRUISE     15     # missions and Go-To                 (default 5,  max 20)
+MPC_VEL_MANUAL    15     # Position mode, full stick          (default 10, max 20)
+
+# Horizontal acceleration (m/s^2) and jerk (m/s^3)
+MPC_ACC_HOR       6      # auto modes                         (default 3,  max 15)
+MPC_ACC_HOR_MAX   8      # manual modes                       (default 5,  max 15)
+MPC_JERK_AUTO     8      # auto modes                         (default 4,  max 80)
+
+# Vertical speed (m/s)
+MPC_Z_VEL_MAX_UP  5      # climb limit                        (default 3,  max 8)
+MPC_Z_V_AUTO_UP   5      # climb in auto modes                (default 3,  max 8)
+MPC_Z_VEL_MAX_DN  3      # descent limit                      (default 1.5, max 4)
+MPC_Z_V_AUTO_DN   3      # descent in auto modes              (default 1.5, max 4)
+MPC_TKO_SPEED     3      # takeoff climb                      (default 1.5, max 5)
+
+# Maximum tilt in flight (deg); higher allows more speed      (default 45, max 89)
+MPC_TILTMAX_AIR   45
+
+# Simulated battery (PX4's battery_simulator): drains 100% -> 0% over
+# SIM_BAT_DRAIN seconds while armed, but never below SIM_BAT_MIN_PCT. With 35%,
+# a normal session never reaches the ground station's 30% warning; the safety
+# panel's Sim tab lowers it to test low-battery responses.
+SIM_BAT_DRAIN     1200   # s, a 20-minute flight                (default 60)
+SIM_BAT_MIN_PCT   35     # % floor                              (default 50)
+
+# Return home when the ground station's link is lost, after COM_DL_LOSS_T
+# seconds, as the real drones should (the safety panel's Sim tab cuts the link).
+# Set here at boot: the sim's robot-config "parameters" are sent as floats,
+# which PX4 rejects for integer parameters like this one.
+NAV_DLL_ACT       2      # 0 off, 1 hold, 2 return, 3 land     (default 0)
+COM_DL_LOSS_T     10     # s without the ground station         (default 10)
+
+# Missions (gcs/mission.py): a mission's look_at (ROI) steers the camera only;
+# the drone keeps the mission's headings. 0 (PX4's default) turns the drone
+# to face the point instead. Set it on real drones too.
+MIS_MNT_YAW_CTL   1      # ROI: 1 = gimbal yaw, 0 = vehicle yaw (default 0)

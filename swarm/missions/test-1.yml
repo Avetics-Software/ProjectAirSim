@@ -1,0 +1,12 @@
+# Planned on the map editor (2026-10-27). Places are lat/lon.
+# Every step is explained in docs/features/missions.md.
+mission: test-1
+drones:
+  Drone1:
+    steps:
+    - goto: {lat: 1.415113, lon: 103.866146, alt: 30}
+    - goto: {lat: 1.414148, lon: 103.867739, alt: 60}
+      gimbal: {pitch: -20}
+    - goto: {lat: 1.4079, lon: 103.86378, alt: 60}
+    - goto: {lat: 1.408865, lon: 103.862332, alt: 30}
+    - land: {lat: 1.412845, lon: 103.864928, heading: 33, approach_m: 400, approach_alt: 30}

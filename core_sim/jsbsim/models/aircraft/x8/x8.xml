@@ -62,18 +62,69 @@
         </location>
     </mass_balance>
 
+    <!-- Project AirSim: belly skids so the X8 can land on a runway (it has no
+         wheels, and takes off from a catapult). Structural frame, metres from
+         the CG: x aft, y right, z up. A tripod under the fuselage (nose and two
+         rear belly points) carries it; the wingtip skids only stop it rolling
+         onto a tip. Spring: its 7.4 lbf on three skids settles about 0.03 ft;
+         damping near critical for that load; friction of a belly on asphalt
+         or grass (about 25 m to stop from a 13 m/s touchdown). -->
     <ground_reactions>
-      <!-- <contact type="STRUCTURE" name="Belly">
-        <location unit="IN">
-         <x> 0.0 </x>
-         <y> 0.0 </y>
-         <z> 0.0 </z>
+      <contact type="STRUCTURE" name="NOSE_SKID">
+        <location unit="M">
+          <x> -0.30 </x>
+          <y> 0.00 </y>
+          <z> -0.07 </z>
         </location>
-        <static_friction>  1.00 </static_friction>
-        <dynamic_friction> 1.00 </dynamic_friction>
-        <spring_coeff unit="LBS/FT">      10.00 </spring_coeff>
-        <damping_coeff unit="LBS/FT/SEC"> 10.00 </damping_coeff>
-      </contact> -->
+        <static_friction>  0.80 </static_friction>
+        <dynamic_friction> 0.50 </dynamic_friction>
+        <spring_coeff unit="LBS/FT">      100.0 </spring_coeff>
+        <damping_coeff unit="LBS/FT/SEC">   6.0 </damping_coeff>
+      </contact>
+      <contact type="STRUCTURE" name="LEFT_BELLY_SKID">
+        <location unit="M">
+          <x> 0.15 </x>
+          <y> -0.25 </y>
+          <z> -0.07 </z>
+        </location>
+        <static_friction>  0.80 </static_friction>
+        <dynamic_friction> 0.50 </dynamic_friction>
+        <spring_coeff unit="LBS/FT">      100.0 </spring_coeff>
+        <damping_coeff unit="LBS/FT/SEC">   6.0 </damping_coeff>
+      </contact>
+      <contact type="STRUCTURE" name="RIGHT_BELLY_SKID">
+        <location unit="M">
+          <x> 0.15 </x>
+          <y> 0.25 </y>
+          <z> -0.07 </z>
+        </location>
+        <static_friction>  0.80 </static_friction>
+        <dynamic_friction> 0.50 </dynamic_friction>
+        <spring_coeff unit="LBS/FT">      100.0 </spring_coeff>
+        <damping_coeff unit="LBS/FT/SEC">   6.0 </damping_coeff>
+      </contact>
+      <contact type="STRUCTURE" name="LEFT_WINGTIP">
+        <location unit="M">
+          <x> 0.20 </x>
+          <y> -1.05 </y>
+          <z> 0.00 </z>
+        </location>
+        <static_friction>  0.80 </static_friction>
+        <dynamic_friction> 0.50 </dynamic_friction>
+        <spring_coeff unit="LBS/FT">      100.0 </spring_coeff>
+        <damping_coeff unit="LBS/FT/SEC">   6.0 </damping_coeff>
+      </contact>
+      <contact type="STRUCTURE" name="RIGHT_WINGTIP">
+        <location unit="M">
+          <x> 0.20 </x>
+          <y> 1.05 </y>
+          <z> 0.00 </z>
+        </location>
+        <static_friction>  0.80 </static_friction>
+        <dynamic_friction> 0.50 </dynamic_friction>
+        <spring_coeff unit="LBS/FT">      100.0 </spring_coeff>
+        <damping_coeff unit="LBS/FT/SEC">   6.0 </damping_coeff>
+      </contact>
     </ground_reactions>
 
     <propulsion>
@@ -515,11 +566,16 @@
 
             <function name="aero/coefficient/Cnda">
                 <description>Yaw moment due to aileron</description>
+                <!-- Wind-tunnel value from Reinhardt, Gryte and Johansen,
+                     "Modeling of the Skywalker X8 Fixed-Wing UAV: Flight Tests
+                     and System Identification", ICUAS 2022, Table I. This was
+                     0.1202, a copy of Clda: aileron then yawed the X8 as hard
+                     as it rolled it, overpowering its weak Cnb. -->
                 <product>
                     <property>aero/qbar-area</property>
                     <property>metrics/bw-ft</property>
                     <property>fcs/effective-aileron-pos</property>
-                    <value>0.1202</value>
+                    <value>-0.004462</value>
                 </product>
             </function>
 

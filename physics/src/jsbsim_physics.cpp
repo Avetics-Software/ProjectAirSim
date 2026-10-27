@@ -268,6 +268,7 @@ void JSBSimPhysicsBody::CalculateExternalWrench() {
 
 void JSBSimPhysicsBody::ReadRobotData() {
   kinematics_ = sim_robot_.GetKinematics();
+  pose_set_requested_ = sim_robot_.ConsumePoseSetRequest();
   collision_info_ = sim_robot_.GetCollisionInfo();
   const auto& cur_env = sim_robot_.GetEnvironment();
   const auto& cur_env_info = cur_env.env_info;
@@ -349,6 +350,14 @@ void JSBSimPhysicsModel::StepPhysicsBody(TimeNano dt_nanos,
     // Step 1 - Update physics body's data from robot's latest data
     fp_body->ReadRobotData();
     fp_body->EnsureJSBSimInitialized();
+
+    // A pose set from outside (SetPose, e.g. placing an aircraft on the
+    // ground) moves JSBSim's own state too; otherwise the next step would
+    // recompute the old pose from it
+    if (fp_body->pose_set_requested_) {
+      fp_body->pose_set_requested_ = false;
+      fp_body->SyncJSBSimStateToKinematics(fp_body->kinematics_);
+    }
 
     // Step 2 - Calculate kinematics
     next_kin = CalcNextKinematicsNoCollision(dt_sec, fp_body);

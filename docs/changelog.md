@@ -5,6 +5,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- `arduplane-api` controller: ArduPlane SITL for JSBSim fixed-wing robots over ArduPilot's lockstep JSON interface, with an optional catapult launch for air-spawned aircraft and a Skywalker X8 example
+- `arduplane-api` `gimbal` settings: a gimbal driven by ArduPilot's mount servo outputs (`MNT1_TYPE 7`)
+- Skywalker X8 JSBSim model: belly and wingtip skid contacts, so it can land on a runway
+- `Robot::SetPose` is callable from C++ (it was only the `SetPose` service)
+
+### Fixed
+- `SetPose` was ignored for JSBSim robots: the physics step recomputed the pose from JSBSim's own state, so an aircraft could not be placed (on the ground, say) after the scene loaded. JSBSim's state now follows a pose that was set
+- Skywalker X8 JSBSim engine produced 590 lbf of thrust (about 80 g) at full throttle because its direct thruster treats engine power as thrust; restored the upstream setting of about 26 N
+- Skywalker X8 JSBSim yaw moment due to aileron (`Cnda`) was a copy of the roll coefficient (0.1202), so aileron yawed the aircraft as hard as it rolled it and banked turns wandered between 5° and 30°; set to the published wind-tunnel value (−0.004462)
+
 ## [1.1.0] - 2026-09-24
 
 ### Added

@@ -418,3 +418,29 @@ TEST(JSBSimPhysicsModel, CollisionOverrideSyncsNextNoCollisionStep) {
   EXPECT_NEAR(no_collision_kin.pose.position.z(), collision_kin.pose.position.z(),
               0.05f);
 }
+
+TEST(JSBSimPhysicsModel, SetPoseMovesJSBSimState) {
+  auto robot = MakeJSBSimRobot("set_pose");
+  robot.SetStartLanded(false);
+  robot.UpdateKinematics(
+      MakeKinematics({0.0f, 0.0f, -15.0f},
+                     projectairsim::TransformUtils::ToQuaternion(0.0f, 0.0f, 0.0f),
+                     projectairsim::Vector3::Zero()));
+
+  auto body = std::make_shared<projectairsim::JSBSimPhysicsBody>(robot);
+  projectairsim::JSBSimPhysicsModel model;
+  model.StepPhysicsBody(kThreeMsNanos, body);
+
+  // Placing the aircraft elsewhere must hold: JSBSim's own state moves too,
+  // instead of the next step recomputing the old pose from it
+  projectairsim::Transform target(
+      {30.0f, 20.0f, -1.0f},
+      projectairsim::TransformUtils::ToQuaternion(0.0f, 0.0f, 0.5f));
+  EXPECT_TRUE(robot.SetPose(target, true));
+  model.StepPhysicsBody(kThreeMsNanos, body);
+
+  const auto kin = robot.GetKinematics();
+  EXPECT_NEAR(kin.pose.position.x(), 30.0f, 0.5f);
+  EXPECT_NEAR(kin.pose.position.y(), 20.0f, 0.5f);
+  EXPECT_NEAR(kin.pose.position.z(), -1.0f, 0.5f);
+}
