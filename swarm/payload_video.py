@@ -28,21 +28,26 @@ class RtspStreamer:
 
     Frames from the sim arrive unevenly, so a writer thread repeats the newest
     one at `fps` to keep players (QGC, OpenCV, VLC) happy.
+
+    `bitrate_kbps` caps the H.264 bitrate; 0 leaves it to the encoder
+    (about 2 Mbit/s with h264_nvenc at 1080p, which blurs small vehicles).
     """
 
-    def __init__(self, url, resolution, fps=30):
+    def __init__(self, url, resolution, fps=30, bitrate_kbps=0):
         if shutil.which("ffmpeg") is None:
             raise RuntimeError("ffmpeg not found; install it or run with --no-rtsp")
         self.url = url
         self.width, self.height = resolution
         self.fps = fps
+        self.bitrate_kbps = bitrate_kbps
         self._frame = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._proc = self._start_ffmpeg()
         self._thread = threading.Thread(target=self._write_loop, daemon=True)
         self._thread.start()
-        projectairsim_log().info(f"GimbalCam RTSP stream: {url}")
+        rate = f"{bitrate_kbps} kbit/s" if bitrate_kbps else "encoder's default bitrate"
+        projectairsim_log().info(f"GimbalCam RTSP stream: {url} ({rate})")
 
     def _start_ffmpeg(self):
         encoders = subprocess.run(
@@ -52,6 +57,9 @@ class RtspStreamer:
             codec = ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-zerolatency", "1"]
         else:
             codec = ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"]
+        if self.bitrate_kbps:
+            b = self.bitrate_kbps
+            codec += ["-b:v", f"{b}k", "-maxrate", f"{b}k", "-bufsize", f"{2 * b}k"]
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-f", "rawvideo", "-pix_fmt", "bgr24",

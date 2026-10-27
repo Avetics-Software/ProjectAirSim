@@ -71,7 +71,7 @@ ground station never fights QGC for control.
 | `spotter_control.py`, `shared_frame.py` | The spotter: a person walked around the world, with a first-person view |
 | `missions/` | Mission files (`mission load NAME`), and `scenarios/`: the moving traffic some missions bring |
 | `mission_track.py` | A mission's `track` step in the sim: locks a tracker onto a target and scores every frame |
-| `experiment_recorder.py`, `mot_eval.py`, `cmc_eval.py` | Records `record: true` mission runs frame by frame; scores a tracker's ID switches, and its camera motion compensation, against them ([MOT experiments](docs/features/mot-experiments.md)) |
+| `experiment_recorder.py`, `mot_eval.py`, `cmc_eval.py`, `live_align.py` | Records `record: true` mission runs frame by frame; scores a tracker's ID switches, and its camera motion compensation, against them; lines a live X log up with its recording ([MOT experiments](docs/features/mot-experiments.md)) |
 | `gt_capture.py`, `gt_playback.py` | `--ground-truth`: labelled GimbalCam frames, and a viewer for them |
 | `track_test.py` | `sim tracktest`: the gimbal's stabilisation, measured |
 | `tests/` | Unit tests: `python -m unittest discover -s tests` |

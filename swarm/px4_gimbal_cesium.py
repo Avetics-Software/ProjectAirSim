@@ -200,6 +200,14 @@ def parse_args():
     )
     parser.add_argument("--no-rtsp", action="store_true", help="don't publish video")
     parser.add_argument(
+        "--stream-bitrate",
+        type=int,
+        default=0,
+        metavar="KBPS",
+        help="H.264 bitrate of the published video, kbit/s (0: the encoder's "
+        "default, about 2000 at 1080p)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="also print debug messages in the terminal (they always go to "
@@ -1158,7 +1166,8 @@ async def main():
         links, sim_cameras = [], []
         for i in range(args.drones):
             rtsp = None if args.no_rtsp else RtspStreamer(drone_url(args.rtsp_url, i),
-                                                          camera.resolution)
+                                                          camera.resolution,
+                                                          bitrate_kbps=args.stream_bitrate)
             rtsps.append(rtsp)
             conn = payload_connection(i)
             connections.append(conn)

@@ -57,10 +57,11 @@ Still to do:
   detection. First results: [tracker and CMC experiments](tracker-cmc-experiments.md)
   (the rknn-sim profile now runs VisDrone + ByteTrack + CMC: on the Radxa,
   8 / 25 / 24 ID switches on convoy / junction / drone motion, down from
-  11 / 34 / 89, at 25 frames/s).
-  CMC is as good as a perfect estimate at live X's frame rate; its inlier gate
-  is now off. Next: CMC for a nearly still camera, tune `MAX_LOST`, a live run
-  with X.
+  11 / 34 / 89, at 25 frames/s). CMC is as good as a perfect estimate at live
+  X's frame rate; its inlier gate is now off. Repeat flights show ±6 switches
+  of spread between flights; live X keeps up (about 25 frames/s), but the
+  compressed video stream costs it 4-14 switches per flight against replays.
+  Next: cars out of view for seconds, and live image quality.
 
 ## 3. Targets and tracking
 

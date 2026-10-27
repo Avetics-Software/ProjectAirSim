@@ -146,7 +146,41 @@ python cmc_eval.py runs/<run> [runs/<run>/tracker_* ...]
 
 Results: [Tracker and CMC experiments, section 5](../tracker-cmc-experiments.md#5-is-cmc-good-enough-scored-against-the-true-camera-motion).
 
-## Step by step: run it yourself on the Radxa
+## Live X: logging a live flight and scoring it
+
+To check that what the replays show holds live, fly a recorded mission with X
+running on the companion and score X's own log of the flight:
+
+1. **X logs every processed frame** when `MOT_LOG_DIR` is set in its
+   `config_cv.yml` (`logs` in rknn-sim):
+   - `logs/mot_log_<time>/frames.csv`, with capture time, detector and
+     tracker time, and frames skipped while busy
+   - `detections.csv` and `tracks.csv`, stamped with the board's clock
+2. **Fly the mission** with the companion connected:
+   - sim: `./run_cesium_sim.sh --qgc --pi-ip 192.168.199.99 --ground-truth`
+   - Radxa: `cd ~/Code/X_sim && venv/bin/python main.py`
+   - then `mission load mot_convoy`, `mission upload 1`, `mission start 1`
+   - one X session can cover several flights
+3. **Copy the log to the laptop and line it up** with each flight's recording:
+
+   ```bash
+   scp -r radxa@192.168.199.99:Code/X_sim/logs/mot_log_<time> .
+   python live_align.py runs/<recording> mot_log_<time>
+   python mot_eval.py runs/<recording> runs/<recording>/tracker_mot_log_<time>_live \
+       runs/<recording>/tracker_*_visdrone_bytetrack_cmc
+   ```
+
+   - **The shift.** `live_align.py` finds the shift between the board's
+     capture times and the recording's frame times (clock offset plus the
+     stream's delay) from the data, by matching X's boxes to the true boxes.
+     It was 0.15-0.18 s for every flight on 2026-10-26; the same shift on
+     every flight of a session confirms it.
+   - **Live rate.** It reports the live frame rate, and drops the stream's
+     repeated frames (one per rendered frame is kept).
+   - **Scoring.** Score next to a replay of the same recording on the board
+     to see what live operation costs (report, section 8).
+
+
 
 The same recordings and code as the
 [2026-10-26 experiments](../tracker-cmc-experiments.md). The three
@@ -328,6 +362,13 @@ Done (2026-10-26; see [tracker and CMC experiments](../tracker-cmc-experiments.m
   off; ignoring the detected cars did not help the junction.
 - **VisDrone + ByteTrack + CMC run end to end on the Radxa** with X as
   committed: 8 / 25 / 24 ID switches at 25 frames/s (report, section 7).
+- **Repeat runs:** three recordings per mission, replayed on the Radxa: ID
+  switches vary by up to ±6 between flights of one mission (report, section 8).
+- **Live X on the Radxa** during six flights, logged (`MOT_LOG_DIR`) and lined
+  up with the recordings (`live_align.py`): it keeps up at about 25 frames/s,
+  but the compressed stream costs 4-14 ID switches per flight against replays.
+- **CMC at a nearly still camera:** with the current tracker it no longer costs
+  IDs at the junction; skipping small corrections changed nothing.
 - **ByteTrack's remaining switches traced:** active tracks now get first claim
   on detections (junction 39 -> 26 switches on real detections); frame-edge
   and size-jump handling, a containment fallback and longer `MAX_LOST` were
@@ -337,11 +378,9 @@ Still to do:
 - **Cars out of view for seconds:** most remaining switches. `MAX_LOST`
   doesn't help (they reappear far from their old prediction); this needs
   prediction while unseen with distance-based matching, or re-identification.
-- **CMC at a nearly still camera:** with many cars moving through a still view
-  (the junction), any translation correction costs IDs; try skipping it when
-  the estimated motion is tiny, or rotation only.
-- **Error bars:** repeat runs of each setting.
-- **A live sim flight with X on the Radxa** using these settings, to confirm
-  the replay results and the live frame rate.
-- **Live logging:** writing X's tracks during a live flight, for checking
-  against a recording. It needs the Radxa's and laptop's clocks in sync.
+- **Live image quality:** raise the sim stream's bitrate (or send near-lossless
+  frames) and repeat the live flights, to measure how much of the live gap is
+  compression.
+- **Compare settings on every recording:** with ±6 switches of spread between
+  flights, a setting needs all three recordings per mission to show a real
+  difference.

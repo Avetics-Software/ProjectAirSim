@@ -424,6 +424,72 @@ These include fragmentations as well as ID switches.
 The levers left are detector recall and a way to carry cars through seconds
 out of view.
 
+## 8. Repeat runs, live X, and CMC at a nearly still camera
+
+**Live flights.** Six more flights in the sim (each mission twice), with X
+running live on the Radxa as Drone1's companion:
+- **Settings:** the rknn-sim profile, logging every frame (`MOT_LOG_DIR`).
+- **Recording:** the sim recorded each flight, so each mission now has three
+  recordings.
+- **Scoring:** `live_align.py` lined X's log up with each recording; the
+  shift (clocks plus stream delay) was 0.15-0.18 s on every flight.
+- **Stand-down:** X stood down live as designed. It logged "the autopilot is
+  flying a mission and holds the gimbal: standing down" at each start, and
+  "gimbal control resumed" after.
+
+**Repeat runs: replay on the Radxa, VisDrone + ByteTrack + CMC, three
+recordings per mission.**
+
+| Mission | ID switches (each recording) | Mean ± sd | IDs per car | IDF1 | MOTA | Detector recall |
+|---|---|---|---|---|---|---|
+| Convoy | 8, 18, 17 | 14.3 ± 5.5 | 3.5 ± 1.1 | 0.47 ± 0.06 | 0.52 ± 0.04 | 0.63 ± 0.04 |
+| Junction | 25, 14, 14 | 17.7 ± 6.4 | 2.9 ± 0.7 | 0.45 ± 0.02 | 0.44 ± 0.01 | 0.53 ± 0.00 |
+| Drone motion | 24, 27, 23 | 24.7 ± 2.1 | 3.6 ± 0.2 | 0.38 ± 0.01 | 0.48 ± 0.02 | 0.59 ± 0.01 |
+
+Flights of the same mission differ by up to ±6 ID switches. Differences of a
+few switches between settings measured on one recording (sections 1-7) are
+within that noise. The large effects hold: the tracker fixes and CMC took drone
+motion from 89 to 24.
+
+**Live X against replay, same flights:**
+
+| Flight | ID switches replay → live | IDs per car | IDF1 | Detector recall | MOTP (box overlap) |
+|---|---|---|---|---|---|
+| Convoy 1 | 18 → 26 | 4.2 → 5.2 | 0.45 → 0.41 | 0.61 → 0.61 | 0.86 → 0.84 |
+| Convoy 2 | 17 → 28 | 4.0 → 5.2 | 0.42 → 0.41 | 0.60 → 0.61 | 0.85 → 0.83 |
+| Junction 1 | 14 → 20 | 2.5 → 2.75 | 0.46 → 0.43 | 0.53 → 0.47 | 0.82 → 0.80 |
+| Junction 2 | 14 → 18 | 2.5 → 2.9 | 0.47 → 0.43 | 0.52 → 0.46 | 0.82 → 0.80 |
+| Drone motion 1 | 27 → 31 | 3.6 → 4.6 | 0.39 → 0.34 | 0.59 → 0.53 | 0.87 → 0.84 |
+| Drone motion 2 | 23 → 37 | 3.4 → 5.25 | 0.37 → 0.31 | 0.57 → 0.50 | 0.87 → 0.84 |
+
+- **Rate.** Live X processed 25.4-25.7 frames/s (detector and tracker
+  36.4 ms per frame on average). That is above the 16 frames/s the sim
+  rendered (with ground truth on), so it kept up.
+- **Repeats.** The video stream repeats the newest frame to hold 30
+  frames/s, so about 40% of X's frames were repeats.
+  - **Not the cause.** Re-tracking X's live detections with and without the
+    repeats gave 21 and 22 switches.
+- **The compressed stream is the cause.** Live X reads H.264 video, where the
+  replays read a near-lossless file:
+  - its boxes are less precise (MOTP down 0.02-0.03 on every flight)
+  - it detects about 6 points fewer cars at the junction and in drone motion
+  - that costs 4-14 ID switches per flight
+- **What follows.** Replays overstate live tracking quality by about that
+  much. A higher stream bitrate (the sim's `RtspStreamer`) would close part
+  of the gap.
+
+**CMC at a nearly still camera.** The concern from section 3: any CMC
+correction at the junction's nearly still camera seemed to cost IDs.
+- **What was tried.** A minimum-motion setting that applies no correction
+  below 1, 2, 4 or 8 px.
+- **Result.** It changed nothing: real detections 26-28 switches (26
+  without), true boxes 36-38 (36).
+- **Why.** With the current tracker CMC no longer costs IDs at the junction:
+  CMC off gives 25 switches against 26 with it on real detections. With true
+  boxes it gives 156 against 36. The earlier cost (25 vs 38-39) was with the
+  old matching order.
+- **Outcome.** The option was not kept, and CMC stays on.
+
 ## Conclusions
 
 1. **The detector matters most.** The VisDrone model at confidence 0.2 found 4-9×
@@ -445,23 +511,27 @@ out of view.
 7. **VisDrone + ByteTrack + CMC, run on the Radxa, holds up:** 8 / 25 / 24 ID
    switches (convoy / junction / drone motion), down from 11 / 34 / 89 with
    the tracker as it was, at 25 frames/s. It is now the rknn-sim profile.
+8. **Repeat runs and live X** (section 8): flights of one mission differ by up
+   to ±6 ID switches, so only large differences between settings are real.
+   Live X keeps up (about 25 frames/s), but the compressed video stream costs
+   it 4-14 switches per flight against replays.
 
 ## Next
 
 - **CMC** (section 5):
   - The inlier gate is now off in rknn-sim (A5X_RPI_Release; deploy it to the
     Radxa). Confirm with a run at 8 Hz.
-  - For a nearly still camera: try skipping CMC when the estimated motion is
-    below a few pixels, or compensating rotation only, and re-run the
-    junction.
+  - A nearly still camera no longer needs special handling (section 8).
   - Only if X must run at low rates: smooth the estimate over time, or check
     it against gimbal telemetry.
 
 - **Cars out of view for seconds** (section 6): keep predicting them while
   unseen and match on distance, or re-identification.
 - **The junction's switches during the fast turn home** (90-110°/s).
-- **A live sim flight with X on the Radxa** using these settings, to confirm
-  the replay results and the live frame rate.
-- **Repeat each setting several times** to put error bars on the differences.
+- **Live image quality:** raise the sim's stream bitrate (or stream the
+  near-lossless frames) and re-run the live flights, to separate compression
+  from everything else.
+- **More repeats per setting:** three recordings per mission show ±6 switches
+  of spread; compare settings on all of them, not one.
 - **SAHI false positives:** if SAHI is wanted later, raise its confidence and
   check the duplicate merge (`SAHI_MERGE_METHOD`, `SAHI_THRESH`).
