@@ -10,11 +10,13 @@ mouse wheel; the keyboard steers the gimbal.
 """
 
 import collections
+import glob
+import os
 import threading
 import time
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 import cv2
 import numpy as np
@@ -186,12 +188,12 @@ class CameraWindows:
     # ------------------------------------------------------------------
     # Control bar
 
-    def add_controls(self, drone_names, on_command, default_alt=30.0):
+    def add_controls(self, drone_names, on_command, default_alt=30.0, missions_dir=None):
         """Add the control bar: drone and camera choice, flight buttons for the
         selected drone or all of them, a command box and recent messages."""
         self.on_command = on_command
         self._drone_names = list(drone_names)
-        self.root.geometry(f"{self.SIZE[0]}x{self.SIZE[1] + 222}")
+        self.root.geometry(f"{self.SIZE[0]}x{self.SIZE[1] + 256}")
         bar = tk.Frame(self.root, bg=self.BG)
         bar.pack(side=tk.BOTTOM, fill=tk.X, before=self.label)
 
@@ -272,12 +274,31 @@ class CameraWindows:
                  insertbackground=self.FG, relief=tk.FLAT).pack(side=tk.LEFT, padx=(4, 10))
         for text, action in (("Take off", "takeoff"), ("Go to target", "goto"),
                              ("Set heading", "heading"),
-                             ("Hold", "hold"), ("Land", "land"), ("Return home", "rtl")):
+                             ("Hold", "hold"), ("Land", "land"), ("Return home", "rtl"),
+                             ("Disarm", "disarm")):
             button(row, text, lambda a=action: self._fly(a)).pack(side=tk.LEFT, padx=2)
         self._target_text = tk.StringVar()
         label(row, "").pack(side=tk.LEFT, padx=6)
         tk.Label(row, textvariable=self._target_text, bg=self.BG, fg="#ff8080").pack(side=tk.LEFT)
         self._show_target()
+
+        # Row 2b: a mission file, loaded, uploaded and started (the console's `mission` commands)
+        row = tk.Frame(bar, bg=self.BG)
+        row.pack(fill=tk.X, padx=8, pady=2)
+        label(row, "Mission").pack(side=tk.LEFT)
+        self._missions_dir = missions_dir
+        self._mission_var = tk.StringVar()
+        self._mission_box = ttk.Combobox(row, textvariable=self._mission_var, width=24,
+                                         postcommand=self._refresh_missions)
+        self._mission_box.pack(side=tk.LEFT, padx=(6, 4))
+        self._refresh_missions()
+        for text, sub, tip in (("Load", "load", "Read the mission file (mission load NAME)"),
+                               ("Upload", "upload", "Send it to every drone in the file"),
+                               ("Start", "start", "Arm and fly it"),
+                               ("Stop", "stop", "Stop the mission; the drones hold")):
+            b = button(row, text, lambda s=sub: self._mission_command(s))
+            b.pack(side=tk.LEFT, padx=2)
+            HoverTip(b, tip)
 
         # Row 3: grid search of an area drawn on the map
         row = tk.Frame(bar, bg=self.BG)
@@ -322,6 +343,27 @@ class CameraWindows:
         self._log = tk.Text(bar, height=5, bg="#141517", fg="#c8c8c8", relief=tk.FLAT,
                             font=("DejaVu Sans Mono", 9), state=tk.DISABLED, takefocus=False)
         self._log.pack(fill=tk.X, padx=8, pady=(2, 8))
+
+    # ------------------------------------------------------------------
+    # Missions
+
+    def _refresh_missions(self):
+        names = []
+        if self._missions_dir:
+            names = sorted(os.path.splitext(os.path.basename(f))[0]
+                           for f in glob.glob(os.path.join(self._missions_dir, "*.y*ml")))
+        self._mission_box["values"] = names
+
+    def _mission_command(self, sub):
+        name = self._mission_var.get().strip()
+        if sub == "load":
+            if not name:
+                return self.log("mission: choose a mission to load")
+            line = f"mission load {name}"
+        else:
+            line = f"mission {sub}"
+        self.log(line)
+        self.on_command(line)
 
     # ------------------------------------------------------------------
     # Safety

@@ -73,6 +73,9 @@ drone's status line shows its mission item, and `mission start` prints the run's
 CSV (5 Hz: position, height, heading, mode, mission item, gimbal angles) in
 `runs/`. `mission stop` stops it (and `Ctrl+H` / the dashboard's HOLD ALL holds
 every drone); see [Repeat and compare](#repeat-and-compare).
+After it lands, the dashboard's **Disarm** button (or `N disarm`) stops the
+motors; it is refused while the drone is in the air or moving, and
+`N disarm force` overrides that (the aircraft drops).
 
 **5. Change it and fly again.** Edit the file and `mission load` it again, then
 `mission upload` and `mission start`. A drone ends where it landed, so for the

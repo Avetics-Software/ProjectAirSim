@@ -24,16 +24,16 @@ gcs_sysid: 245                  # our MAVLink system id; not 255 (QGC's)
 #   `model` and `companion` (a Radxa running X's rknn-sim-* profile for that model) and makes
 #   the rest itself.
 drones:
-  - name: Drone1
-    sysid: 1
+  # - name: Drone1
+  #   sysid: 1
     # model: quad_px4
     # video: rtsp://192.168.144.25:8554/main
     # companion: 192.168.199.99
-  # - name: Drone2
-  #   sysid: 2
-  #   model: x8_arduplane
-  #   video: rtsp://192.168.144.26:8554/main
-  #   companion: 192.168.199.100
+  - name: Drone2
+    sysid: 2
+    model: x8_arduplane
+    #video: rtsp://192.168.144.26:8554/main
+    companion: 192.168.199.99
 
 swarm:
   layer_step_m: 5               # drone N flies (N-1) x this above the height asked for,

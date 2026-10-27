@@ -3,6 +3,7 @@ python -m unittest discover -s tests -v."""
 
 import contextlib
 import io
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -42,9 +43,13 @@ class ShippedMissionTests(unittest.TestCase):
 
 class CheckerTests(unittest.TestCase):
     def run_main(self, *args):
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = main([*args])
+        # Its own fleet file, so the tests don't depend on the config.yml being edited
+        with tempfile.NamedTemporaryFile("w", suffix=".yml") as config:
+            config.write("drones:\n  - name: Drone1\n    sysid: 1\n")
+            config.flush()
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = main([*args, "--config", config.name])
         return code, out.getvalue(), err.getvalue()
 
     def test_prints_what_the_aircraft_would_upload(self):

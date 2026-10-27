@@ -67,6 +67,8 @@ SWARM_HELP = """Swarm (name drones first: 2, 1,3 or all):
                                         grid-search a polygon, passes split between drones
   N search LAT1 LON1 LAT2 LON2 [ALT] [SPACING]
                                         the same for a box
+  N disarm [force]                      stop the motors after landing (refused in flight;
+                                        force drops it)
   select N                              show drone N in the dashboard (or keys 1-9)
   status                                every drone's mode, height and position
   Drone N flies (N-1) x the layer step higher than the height asked for."""
@@ -181,6 +183,9 @@ class SwarmControl:
                 self.check_crossings(targets)
             elif action in ("hold", "land", "rtl"):
                 self.act(targets, action)
+            elif action == "disarm" and len(args) <= 1 and (not args or args[0] == "force"):
+                for i in targets:
+                    self._start(i, self._disarm(i, bool(args)))
             elif action == "searcharea" and len(args) >= 3:
                 alt, spacing = float(args[0]), float(args[1])
                 polygon = [tuple(float(v) for v in p.split(",")) for p in
@@ -345,6 +350,21 @@ class SwarmControl:
         if heading is not None:
             await self._call(link.fly_to, lat, lon, alt, -1.0, heading)
             log.info(f"{self.links[i].name}: arrived; turning to {heading:.0f} deg")
+
+    async def _disarm(self, i, force):
+        """Disarm a drone that has landed: refused near the air (height over 3 m
+        or moving over 3 m/s) unless forced, which drops it."""
+        link = self.links[i]
+        if not force:
+            height = link.position[3] if link.position else 0.0
+            speed = math.hypot(*link.velocity[:2]) if link.velocity else 0.0
+            if height > 3.0 or speed > 3.0:
+                raise RuntimeError(f"not disarming in flight ({height:.0f} m up, {speed:.0f} m/s); "
+                                   f"`{i + 1} disarm force` drops it")
+        result = await self._call(link.disarm, force)
+        if result not in (None, M.MAV_RESULT_ACCEPTED):
+            raise RuntimeError(f"{link.ap.label} refused to disarm (result {result})")
+        log.info(f"{link.name}: disarmed")
 
     async def _simple(self, i, action):
         link = self.links[i]

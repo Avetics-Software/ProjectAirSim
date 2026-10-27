@@ -172,7 +172,10 @@ class GroundStation:
             on_gimbal=self.steer, on_zoom=self.nudge_zoom, on_select=self.select,
             initial_pitch=GIMBAL_INITIAL_PITCH, minimap=MiniMap(),
         )
-        self.windows.add_controls([link.name for link in links], self._dashboard_command)
+        self.windows.add_controls(
+            [link.name for link in links], self._dashboard_command,
+            missions_dir=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                      "missions"))
         self.windows.on_key_log = log.debug  # key presses in the debug log
         self.windows.on_target_picked = self._check_target
         self.windows.on_yaw_lock = self._toggle_yaw_lock

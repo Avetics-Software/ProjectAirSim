@@ -348,6 +348,11 @@ class VehicleLink:
     def arm(self):
         return self.command(M.MAV_CMD_COMPONENT_ARM_DISARM, 1)
 
+    def disarm(self, force=False):
+        """Stop the motors. The autopilot refuses in flight unless forced (the
+        magic number in param 2), which drops the aircraft."""
+        return self.command(M.MAV_CMD_COMPONENT_ARM_DISARM, 0, 21196 if force else 0)
+
     def set_mode(self, mode):
         """Switch to a mode by the ground station's name (HOLD, MISSION, ...;
         the dialect's SET_MODES)."""
