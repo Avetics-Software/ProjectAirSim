@@ -47,6 +47,7 @@ class JSBSimPhysicsBody : public BasePhysicsBody {
   Robot sim_robot_;
 
   bool is_grounded_;
+  bool pose_set_requested_ = false;  // the robot's pose was set from outside
   Vector3 env_gravity_;
   float env_air_density_;
   Vector3 env_wind_velocity_;

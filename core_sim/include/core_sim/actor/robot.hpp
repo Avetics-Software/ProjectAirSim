@@ -125,6 +125,14 @@ class Robot : public Actor {
   void SetCachedTerrainElevationASL(double elevation_asl_m);
   double GetCachedTerrainElevationASL() const;
 
+  // Sets the robot's pose (the SetPose service); reset_kinematics also zeroes
+  // its velocities and accelerations.
+  bool SetPose(const Transform& new_pose, bool reset_kinematics);
+
+  // True once after each SetPose, so a physics model that integrates its own
+  // state (JSBSim) can move that state to the pose that was set.
+  bool ConsumePoseSetRequest();
+
   const Kinematics& GetKinematics() const;
   const Environment& GetEnvironment() const;
   const CollisionInfo& GetCollisionInfo() const;
