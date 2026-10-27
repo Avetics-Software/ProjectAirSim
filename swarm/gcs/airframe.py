@@ -49,7 +49,9 @@ class Airframe:
 KINDS = {
     "multirotor": {"hovers": True},
     # ArduPlane's stock SITL plane (WP_LOITER_RAD 80) at the X8's speeds; a
-    # turn at cruise and 45 deg of bank: v^2 / (g tan 45) = 33 m
+    # turn at cruise and 45 deg of bank: v^2 / (g tan 45) = 33 m. (Flown in the
+    # sim it turns tighter, 12-15 m, as the stock plane banks to 65 deg: this
+    # is the planning figure, not the limit)
     "fixedwing": {"hovers": False, "loiter_radius_m": 80.0, "turn_radius_m": 35.0,
                   "cruise_mps": 18.0, "stall_mps": 13.0},
 }

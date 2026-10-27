@@ -385,6 +385,7 @@ class SimPayload(DroneCamera):
         self.applied_zoom = None
         self.last_gimbal_frame = None
         self.frame_counts = {"ChaseCam": 0, "GimbalCam": 0}
+        self.last_chase_msg = None  # the latest ChaseCam image, for `sim shot`
         # `sim attitude`: (csv writer, file, end time) while recording
         self.attitude_log = None
         self.camera_rotation = None
@@ -404,6 +405,7 @@ class SimPayload(DroneCamera):
 
     def on_chase_image(self, _, image_msg):
         self.frame_counts["ChaseCam"] += 1
+        self.last_chase_msg = image_msg
         if self.selected:
             self.windows.receive("ChaseCam", image_to_bgr(image_msg))
 
@@ -505,6 +507,7 @@ GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a ne
   sim attitude [SECONDS] [N]            log drone N's attitude and its camera's (stabilisation)
   sim tracktest [N] [follow|lock]       fly hard while pointing the gimbal at a ground target,
                                         and measure how well it stays in frame
+  sim shot [N]                          save drone N's latest ChaseCam frame (a PNG in the log dir)
   gt                                    --ground-truth: frames and boxes saved so far
   sim cut N | sim battery N PCT | sim reset N|all
                                         simulate a lost link or low battery on drone N;
@@ -623,6 +626,19 @@ async def sim_command(session, line, parts):
             session, camera, mode, os.environ.get("LOG_DIR", "/tmp/projectairsim-run"),
             run_tag(session)))
         print(f"Track test on {camera.name}, yaw {mode}: about a minute; results in the messages")
+    elif word == "sim" and len(parts) >= 2 and parts[1] == "shot":
+        try:
+            camera = session.station.cameras[int(parts[2]) - 1 if len(parts) > 2 else 0]
+        except (ValueError, IndexError):
+            print("Usage: sim shot [DRONE]")
+            return True
+        if camera.last_chase_msg is None:
+            print(f"No ChaseCam frame from {camera.name} yet")
+            return True
+        path = os.path.join(os.environ.get("LOG_DIR", "/tmp/projectairsim-run"),
+                            run_tag(session) + time.strftime(f"chase_{camera.name}_%H%M%S.png"))
+        cv2.imwrite(path, image_to_bgr(camera.last_chase_msg))
+        print(f"Saved {path}")
     elif word == "sim" and len(parts) >= 2 and parts[1] == "attitude":
         # sim attitude [SECONDS] [N]: how well drone N's camera is stabilised
         try:

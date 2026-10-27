@@ -108,7 +108,10 @@ Still to do:
   `swarm/` ([#40](https://github.com/Avetics-Software/ProjectAirSim/issues/40)); a companion X profile per airframe and autopilot
   (`rknn-sim-*`).
   Still to do:
-  - tune the flare and the skids (they are estimates; it lands 12 m past the
-    touchdown point), and replace the catapult with a real runway takeoff for
-    an aircraft with wheels
-  - an ArduCopter dialect, if the quads move to ArduPilot
+  - tune the flare and the skids (they are estimates; it lands 12-30 m past the
+    touchdown point)
+  - the X8's visible mesh is 60% of its physical span (flight is unaffected;
+    see [aircraft](features/aircraft.md#scale-and-the-turn-radius))
+  - an ArduCopter dialect, if the quads move to ArduPilot. A runway takeoff
+    (no catapult) only matters for an aircraft with wheels: a mission already
+    takes the X8 off and lands it

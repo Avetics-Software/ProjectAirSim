@@ -183,6 +183,27 @@ for `x8_arduplane`. The profiles differ in the autopilot (`FIRMWARE`), the
 airframe (`AIRFRAME`, which picks the control law) and nothing that sees the
 sim camera. See the [simulation guide](../simulation.md#x-vision-pipeline-on-a-radxa-a5x_rpi_release-rknn-sim--profiles).
 
+## Scale and the turn radius
+
+The flight model is the right size. JSBSim's X8 has the published Skywalker X8's
+numbers: span 2.10 m, wing area 0.75 m², mass 3.364 kg (`core_sim/jsbsim/models/
+aircraft/x8/x8.xml`, from Gryte's identification), and those, not the mesh, set
+how it turns. In the Unreal search flight (`1 search ...`, 18 m/s) its tightest
+turns came out at 12–15 m radius, because ArduPlane's stock SITL plane lets it
+bank to 65° (`LIM_ROLL_CD 6500`); at the more usual 45° it is 33 m
+(v² / g tan 45°). `turn_radius_m` (35 m, `gcs/airframe.py`) is that 45° figure
+with a margin, so a search plans passes it can always turn into. Set it to the
+real aircraft's bank limit when you know it.
+
+The visible mesh is not the right size. `/Drone/X8/X8_Wing_Body` measures
+0.78 x 1.25 x 0.21 m (the sim's object-aligned bounding box, and next to a car
+in the chase camera), against the physical 0.82 x 2.10 x 0.18 m: its span is
+60% of the aircraft's. That is visual (and the mesh's collision shape); it does
+not touch the flight, the skids (which sit at the physical span) or the gimbal.
+It matters for anything that looks at the X8 from outside, such as one drone
+detecting another. A `scale` on the link's `unreal_mesh` geometry
+(`"1 1.68 1"`) would match the span. `sim shot` saves the ChaseCam frame to check.
+
 ## Adding an aircraft
 
 1. **Airframe**: `aircraft/airframes/<name>.jsonc`. Write the physical
