@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Moving actor editor</title>
+<title>Mission and actor editor</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -40,12 +40,54 @@
   .err { color: var(--danger); }
   .ok { color: #7bd88f; }
   hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .tabs { display: flex; gap: 4px; margin: 8px 0; }
+  .tabs button { flex: 1; border-radius: 5px 5px 0 0; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  li .num { width: 20px; height: 20px; border-radius: 50%; background: #4a4e55; text-align: center;
+            line-height: 20px; font-size: 11px; flex: none; }
+  li.bad { background: #4a2a2e; }
+  li .mv { margin-left: auto; display: none; gap: 2px; }
+  li.sel .mv, li:hover .mv { display: flex; }
+  li .mv button { padding: 0 6px; }
+  label.chk, label.tool { display: flex; gap: 6px; align-items: center; color: var(--text); }
+  label.chk input, label.tool input { width: auto; }
+  #m-tools { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+  .selpin { outline: 3px solid #fff8; }
+  .landpin { border-radius: 4px; }
+  .eye { background: #222; width: 22px; height: 22px; line-height: 18px; border-radius: 50%; font-size: 10px; }
   .pin { color: #fff; font-weight: 700; font-size: 12px; text-align: center; line-height: 22px;
          border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 3px #0008; }
 </style>
 </head>
 <body>
 <div id="side">
+  <div class="tabs" id="tabs" hidden>
+    <button id="tab-mission">Drone mission</button><button id="tab-traffic">Traffic</button>
+  </div>
+  <div id="missionPane" hidden>
+    <h1>Drone mission</h1>
+    <div class="muted" id="m-file"></div>
+    <div class="grid">
+      <div><label>Mission name</label><input id="m-name"></div>
+      <div><label>Speed (m/s)</label><input id="m-speed" type="number" min="0.1" placeholder="per drone"></div>
+      <div><label>North/east from</label><select id="m-origin"><option value="start">where the drone is</option><option value="home">the map's home</option></select></div>
+      <div><label>Traffic file (actors)</label><input id="m-actors" placeholder="none"></div>
+    </div>
+    <label class="chk"><input type="checkbox" id="m-record"> Record the runs (sim)</label>
+    <div class="grid">
+      <div><label>Drone</label><select id="m-drone"></select></div>
+      <div><label>Aircraft (for the check)</label><select id="m-model"></select></div>
+    </div>
+    <label>A map click adds</label>
+    <div id="m-tools"></div>
+    <ul id="m-steps"></ul>
+    <div class="row"><select id="m-add" style="width:auto;flex:1"></select><button id="m-add-btn">+ Add step</button></div>
+    <div id="m-step" hidden></div>
+    <div id="m-result" style="margin-top:8px;font-size:13px;white-space:pre-wrap"></div>
+    <p class="muted">Pins are numbered by step; drag one to move it, click one to edit its step. Yellow circle: the
+      spawn. North/east places in a file are converted to lat/lon when you save.</p>
+  </div>
+  <div id="trafficPane">
   <h1>Moving actors</h1>
   <div class="muted" id="file"></div>
   <div class="row">
@@ -78,12 +120,19 @@
       <div><label>Copies</label><input id="f-count" type="number" step="1" min="1"></div>
       <div><label>Seed</label><input id="f-seed" type="number" step="1"></div>
     </div>
+    <div class="grid" id="partFields">
+      <div><label title="Skip this much of the path at the start: cars of a convoy wait in formation along one shared route">Start along the path (m)</label>
+        <input id="f-startat" type="number" step="1" min="0"></div>
+      <div><label title="Stop this far before the end of the path">Stop short of the end (m)</label>
+        <input id="f-stopshort" type="number" step="1" min="0"></div>
+    </div>
     <div id="hint"></div>
     <div class="row">
       <button id="clearPts">Clear points</button>
       <button id="zoomTo">Zoom to</button>
       <button id="delActor" class="danger">Delete actor</button>
     </div>
+  </div>
   </div>
   <hr>
   <div class="row">
@@ -96,6 +145,7 @@
 </div>
 <div id="map"></div>
 
+<script src="/mission_planner.js"></script>
 <script>
 const COLOURS = ["#4c9aff", "#ff9f43", "#7bd88f", "#c792ea", "#ff6b6b", "#f7d154", "#5ed6d6", "#f78fb3"];
 const MODES = {
@@ -110,7 +160,7 @@ const HINTS = {
   random_route: "Optional: click the map to choose the start. Without one, it starts somewhere within 400 m of the drone. Change the seed for a different route.",
 };
 const wait = new URLSearchParams(location.search).has("wait");
-let state = null, sel = -1;
+let state = null, sel = -1, tab = "traffic";
 const previews = new Map();  // actor index -> {paths, error}
 let previewTimer = null;
 
@@ -154,6 +204,27 @@ async function init() {
                    fill: false, interactive: false }).addTo(map);
   state.actors.forEach((_, i) => schedulePreview(i, 0));
   select(state.actors.length ? 0 : -1);
+  if (state.mission) {
+    $("tabs").hidden = false;
+    $("tab-mission").onclick = () => showTab("mission");
+    $("tab-traffic").onclick = () => showTab("traffic");
+    const first = Mission.init(state.mission);
+    showTab("mission");
+    // Frame the mission when it has places
+    if (first) map.setView(first, 16);
+  }
+}
+
+function showTab(t) {
+  tab = t;
+  $("missionPane").hidden = t !== "mission";
+  $("trafficPane").hidden = t !== "traffic";
+  $("tab-mission").className = t === "mission" ? "on" : "";
+  $("tab-traffic").className = t === "traffic" ? "on" : "";
+  $("save").textContent = t === "mission" ? "Save mission" : state.mission ? "Save traffic" : "Save";
+  Mission.show(t === "mission");
+  setStatus("");
+  drawAll();
 }
 
 function renderList() {
@@ -192,6 +263,8 @@ function select(i) {
     $("f-length").value = r.length_m ?? 1000;
     $("f-count").value = a.count ?? 1;
     $("f-seed").value = r.seed ?? 0;
+    $("f-startat").value = a.start_at_m ?? "";
+    $("f-stopshort").value = a.stop_short_m ?? "";
     $("hint").innerHTML = HINTS[type];
   }
   renderList();
@@ -239,6 +312,8 @@ $("f-roads").addEventListener("change", () => {
 });
 bind("f-length", (a, v) => { a.random_route = { ...(a.random_route || {}), length_m: +v }; });
 bind("f-seed", (a, v) => { a.random_route = { ...(a.random_route || {}), seed: +v }; });
+bind("f-startat", (a, v) => { if (v === "" || +v === 0) delete a.start_at_m; else a.start_at_m = +v; });
+bind("f-stopshort", (a, v) => { if (v === "" || +v === 0) delete a.stop_short_m; else a.stop_short_m = +v; });
 bind("f-count", (a, v) => { if (+v > 1) a.count = +v; else delete a.count; });
 $("f-type").addEventListener("change", () => {
   const a = current(), type = $("f-type").value;
@@ -267,6 +342,7 @@ function points(a) {
 }
 
 map.on("click", (e) => {
+  if (tab === "mission") return Mission.mapClick(e);
   const a = current();
   if (!a) return;
   const p = [r6(e.latlng.lat), r6(e.latlng.lng)];
@@ -334,13 +410,16 @@ function drawAll() {
         const line = path.points.slice();
         // In loop mode the sim drives from the last point back to the first
         if (path.mode === "loop") line.push(line[0]);
-        L.polyline(line, { color: colour(i), weight: isSel ? 5 : 3, opacity: isSel ? 0.95 : 0.6 })
+        // Beside the mission, the traffic is drawn faintly and can't be picked
+        const faint = tab === "mission";
+        L.polyline(line, { color: colour(i), weight: faint ? 2 : isSel ? 5 : 3,
+                           opacity: faint ? 0.4 : isSel ? 0.95 : 0.6, interactive: !faint })
           .bindTooltip(path.name, { sticky: true })
           .on("click", (e) => { L.DomEvent.stopPropagation(e); select(i); })
           .addTo(pathLayer);
       }
     }
-    if (!isSel) return;
+    if (!isSel || tab === "mission") return;
     const col = colour(i);
     if (a.route) {
       if (a.route.from) pin(a.route.from, "A", col, (v) => { a.route.from = v; });
@@ -373,11 +452,11 @@ async function preview(i) {
   if ((type === "route" && pts.length < 2) || (type === "waypoints" && pts.length < 2)) {
     previews.set(i, { error: type === "route" ? "place A and B" : "add at least two points" });
   } else {
-    if (i === sel) setStatus("Computing path...");
+    if (i === sel && tab === "traffic") setStatus("Computing path...");
     const res = await api("/api/preview", { defaults: state.defaults, actor: a });
     previews.set(i, res.error ? { error: res.error } : { paths: res.paths });
   }
-  if (i === sel) {
+  if (i === sel && tab === "traffic") {
     const p = previews.get(i);
     if (p.error) setStatus(`${a.name}: ${p.error}`, "err");
     else {
@@ -403,6 +482,14 @@ function pathLength(pts) {
 
 // --- Save ---------------------------------------------------------------------
 async function save(finish) {
+  const m = state.mission, traffic = tab === "traffic" || (finish && m && m.data.actors);
+  if (m && (tab === "mission" || Mission.dirty)) {
+    if (!(await Mission.save(finish && !traffic))) return;
+  }
+  if (traffic || !m) return saveTraffic(finish);
+}
+
+async function saveTraffic(finish) {
   const names = state.actors.map((a) => a.name);
   const dup = names.find((n, k) => names.indexOf(n) !== k);
   if (dup) return setStatus(`Two actors are named ${dup}; names must be unique.`, "err");

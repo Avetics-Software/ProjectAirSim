@@ -34,6 +34,9 @@
 #   --edit-actors          first open the map editor for the moving actors
 #                          (actor_editor.py) in the browser; the sim starts
 #                          after you press "Save & start"
+#   --edit-mission FILE    the same editor, to plan the drones' mission on the map
+#                          (a path, or a name in missions/; a new name starts an
+#                          empty mission). Its `actors:` traffic is edited beside it
 #
 # Environment (defaults in brackets):
 #   UE_ROOT           Unreal Engine 5.7 [~/UnrealEngine-5.7]
@@ -70,6 +73,7 @@ main() {
     PI_PORTS="15540,15541"
     CONFIG="$SCRIPT_DIR/config.yml"
     EDIT_ACTORS=0
+    EDIT_MISSION=""
     SCRIPT_ARGS=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -78,6 +82,7 @@ main() {
             --pi-ports) PI_PORTS="$2"; shift 2 ;;
             --config|--fleet) CONFIG="$(realpath "$2")"; shift 2 ;;
             --edit-actors) EDIT_ACTORS=1; shift ;;
+            --edit-mission) EDIT_MISSION="$2"; shift 2 ;;
             *) SCRIPT_ARGS+=("$1"); shift ;;
         esac
     done
@@ -110,14 +115,16 @@ main() {
     fi
     export CESIUM_ION_TOKEN
 
-    if [ "$EDIT_ACTORS" = 1 ]; then
+    if [ "$EDIT_ACTORS" = 1 ] || [ -n "$EDIT_MISSION" ]; then
         # Edit the same file and area the sim will use
-        EDITOR_ARGS=(--wait)
+        EDITOR_ARGS=(--wait --fleet "$CONFIG")
+        [ -n "$EDIT_MISSION" ] && EDITOR_ARGS+=(--mission "$EDIT_MISSION")
         i=0
         while [ $i -lt ${#SCRIPT_ARGS[@]} ]; do
             case "${SCRIPT_ARGS[$i]}" in
                 --lat) EDITOR_ARGS+=(--lat "${SCRIPT_ARGS[$((i + 1))]}") ;;
                 --lon) EDITOR_ARGS+=(--lon "${SCRIPT_ARGS[$((i + 1))]}") ;;
+                --model) EDITOR_ARGS+=(--model "${SCRIPT_ARGS[$((i + 1))]}") ;;
                 --actors) [ -n "${SCRIPT_ARGS[$((i + 1))]}" ] && EDITOR_ARGS+=(--config "${SCRIPT_ARGS[$((i + 1))]}") ;;
             esac
             i=$((i + 1))

@@ -85,7 +85,7 @@ Still to do:
 - ([#21](https://github.com/Avetics-Software/ProjectAirSim/issues/21)) **The map:** satellite imagery, free pan and zoom (it now follows the
   selected drone), measuring distances.
 - ([#22](https://github.com/Avetics-Software/ProjectAirSim/issues/22)) **Joystick or gamepad**, as A5X's `laptop_client.py` has.
-- ([#23](https://github.com/Avetics-Software/ProjectAirSim/issues/23)) **Save and reload** search areas, targets and geofences. Scripted flight plans are #32.
+- ([#23](https://github.com/Avetics-Software/ProjectAirSim/issues/23)) **Save and reload** search areas, targets and geofences. Scripted flight plans are #32, planned on the map (#33).
 - ([#24](https://github.com/Avetics-Software/ProjectAirSim/issues/24)) **X's gains with zoom:** have the camera report its zoom to X, so tracking
   doesn't overshoot when zoomed in.
 

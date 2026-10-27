@@ -30,6 +30,9 @@ python -m gcs.mission missions/my_mission.yml        # check it and see what the
 ./run_cesium_sim.sh --qgc                            # (--model x8_arduplane for the X8)
 ```
 
+To pick the route on a map instead (like QGC's plan view, and the scenario's cars
+and people beside it): `python actor_editor.py --mission my_mission`.
+
 then type in the terminal or the dashboard's command box:
 
 ```text
@@ -95,7 +98,7 @@ ground station never fights QGC for control.
 | `aircraft/`, `aircraft.py` | The aircraft a drone can be (`model:`): airframes, autopilot links, models, and the generator of each drone's robot config ([aircraft](docs/features/aircraft.md)) |
 | `px4_sitl.py`, `ardupilot_sitl.py` | Start and stop each drone's PX4 or ArduPilot SITL |
 | `payload_mavlink.py`, `payload_video.py`, `camera_properties.*` | The simulated gimbal camera: MAVLink camera, RTSP video, lens and zoom |
-| `spawned_objects.py`, `moving_actors.py`, `actor_editor.*`, `config_*.yml` | Objects, and people and vehicles moving along roads, to search for |
+| `spawned_objects.py`, `moving_actors.py`, `actor_editor.*`, `mission_planner.js`, `config_*.yml` | Objects, and people and vehicles moving along roads, to search for; the map editor for them and for planning a mission |
 | `spotter_control.py`, `shared_frame.py` | The spotter: a person walked around the world, with a first-person view |
 | `missions/` | Mission files (`mission load NAME`): `template.yml` and `template_fixedwing.yml` to copy, the X8's `x8_circuit.yml` and `x8_track.yml`, and `scenarios/`: the moving traffic some missions bring |
 | `mission_track.py` | A mission's `track` step in the sim: locks a tracker onto a target and scores every frame |

@@ -22,6 +22,19 @@ when you upload (`origin: start`), or `lat`/`lon`; heights are above where it
 took off. To read a place off in the sim, click it on the dashboard's minimap,
 or type `status`, which prints each drone's position.
 
+**Or plan it on the map**, the way QGC's plan view works, instead of typing
+coordinates ([#33](https://github.com/Avetics-Software/ProjectAirSim/issues/33)):
+
+```bash
+python actor_editor.py --mission my_mission                       # a name in missions/, or a path
+python actor_editor.py --mission my_flight --model x8_arduplane   # check it as the X8
+./run_cesium_sim.sh --qgc --edit-mission my_mission               # plan first; the sim starts on "Save & start"
+```
+
+A name that doesn't exist yet starts an empty mission; an existing file opens
+with its route drawn. See [Planning on the map](#planning-on-the-map) below, then
+carry on at step 3 (the file it writes is the same one, checked in step 2).
+
 **2. Check it, with no sim.**
 
 ```bash
@@ -71,6 +84,44 @@ the same file flies the same route from wherever the drones are.
 **On real drones** the commands are the same (`./run_real.sh`, then `mission
 load` ...). Check the camera and failsafe settings in the [ground station's
 checklist](../../gcs/README.md#before-flying-it-for-real) first.
+
+### Planning on the map
+
+The editor's **Drone mission** tab is a list of steps beside a satellite map:
+
+- **Click the map** to add what the tool above the list says: a waypoint (the
+  height is the last one's), a look-at point, or a landing. A quadrotor's
+  landing is a waypoint then `land`; a fixed-wing's is a runway landing, its
+  heading taken along the last leg (edit it in the step).
+- **Pins are numbered by step.** Drag one to move it; click one, or a row, to
+  edit that step: movement (take off, waypoint, land, return home, or none),
+  position and height, heading, hold or wait, speed, camera pitch and yaw (from
+  the nose, or a compass bearing), photo, track, and the look-at point.
+  ↑ ↓ ✕ on a row reorder or remove it; **+ Add step** inserts any other step
+  after the selected one.
+- **The check is the ground station's.** Each change is checked as that drone's
+  aircraft will have it uploaded (pick the aircraft beside the drone; it
+  defaults to its `model:` in `config.yml`, or `--model`). The route is drawn,
+  with its length and time, or the step that is wrong turns red with the same
+  message as `python -m gcs.mission`: a fixed-wing refuses a heading step.
+  Every drone's route is drawn at once; the selected drone's steps are the ones
+  you edit. The aircraft chosen here is for the check only; the sim and ground
+  station read it from `config.yml`.
+- **Save mission** writes the file (the previous one is kept as `.bak`, and
+  the comment block at its top stays). Places are saved as `lat`/`lon`: a file
+  with `north`/`east` steps is converted from where the drones spawn
+  (`--lat`/`--lon`), so a mission with `origin: start` keeps its meaning only
+  if it is flown from there. Comments between steps aren't kept.
+
+### Editing the scenario beside the mission
+
+A mission's `actors:` file (the people and vehicles it spawns) is edited in the
+same page: the **Traffic** tab is the [moving-actor editor](../simulation.md#moving-people-and-vehicles),
+for the file the mission names (the *Traffic file* box sets it). On the Drone
+mission tab the traffic is drawn faintly under the drone's route, so you can
+see where they meet; set a car's *Start along the path* and *Stop short of the
+end* (`start_at_m`, `stop_short_m`) to place it in a convoy. *Save & start*
+(from the launcher) saves both.
 
 ### What differs for a fixed-wing
 

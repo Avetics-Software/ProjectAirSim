@@ -192,6 +192,13 @@ def load_mission(path, drone_names):
     """Read and check a mission file; drones are named or numbered (1-based)."""
     with open(path) as f:
         data = yaml.safe_load(f) or {}
+    return parse_mission(data, drone_names, path)
+
+
+def parse_mission(data, drone_names, path=""):
+    """Check mission data (a loaded file, or what the map planner edits) and
+    return the Mission. `path` names it in messages, and the folder its `actors:`
+    file is relative to."""
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a mission mapping")
     unknown = set(data) - {"mission", "origin", "speed", "drones", "record", "actors"}

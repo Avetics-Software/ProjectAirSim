@@ -216,7 +216,13 @@ browser:
 ```bash
 python actor_editor.py                    # edit config_moving_actors.yml
 ./run_cesium_sim.sh --qgc --edit-actors   # edit first; the sim starts on "Save & start"
+python actor_editor.py --mission NAME     # a mission's drone steps and its own traffic, together
+./run_cesium_sim.sh --qgc --edit-mission NAME
 ```
+
+With `--mission`, the page has a second tab to plan the drones' flight on the
+same map; see [Planning on the map](features/missions.md#planning-on-the-map).
+The Traffic tab then edits the file the mission names (`actors:`).
 
 Choose or add an actor on the left, pick a path type, then click the map:
 
@@ -229,6 +235,8 @@ Choose or add an actor on the left, pick a path type, then click the map:
   takeoff point.
 - **Random route:** optionally click a start point; set the length, number of
   copies and seed.
+- **Start along the path / Stop short of the end** (`start_at_m`, `stop_short_m`):
+  use part of the path, so cars sharing one route wait and stop in formation.
 
 The line drawn is exactly the path the sim will use. Save writes the YAML and
 keeps the previous file as `.bak`. Comments inside the actor list aren't kept;
