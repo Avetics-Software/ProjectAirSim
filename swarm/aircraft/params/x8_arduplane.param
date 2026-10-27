@@ -1,9 +1,8 @@
-# This file configures ArduPlane SITL for the Skywalker X8 in Project AirSim (ardupilot_x8_plane.py).
-# Use it running the following command from ArduPilot's Tools/autotest directory:
-#   python sim_vehicle.py -v ArduPlane --model JSON --home=29.4296741,-95.16384722,7.5,0 --add-param-file=<path_to_this_file>
-# For more information go to Project AirSim Documentation --> Controllers --> ArduPilot Flight Controller
+# ArduPlane parameters for the Skywalker X8 (aircraft/models.yml x8_arduplane),
+# applied after ArduPilot's stock SITL plane.parm and before the swarm's own
+# arduplane_swarm.parm. The aircraft's tuning lives here and only here.
 
-# Servo outputs, in the order of arduplane-settings.actuator-order in robot_ardu_x8_plane.jsonc.
+# Servo outputs, in the order of the actuator-order in airframes/x8.jsonc.
 # The X8 JSBSim model mixes aileron and elevator onto its elevons, so ArduPlane flies it as a
 # conventional airframe without a rudder.
 SERVO1_FUNCTION 4

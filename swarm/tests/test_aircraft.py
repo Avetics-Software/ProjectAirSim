@@ -54,6 +54,15 @@ class RegistryTests(unittest.TestCase):
         gimbal = Aircraft("x8_arduplane").robot(0)["controller"]["arduplane-settings"]["gimbal"]
         self.assertEqual((gimbal["pitch-min-deg"], gimbal["pitch-max-deg"]), (-90, 25))
 
+    def test_swarm_needs_nothing_from_the_example_scripts(self):
+        import pathlib
+        swarm = pathlib.Path(__file__).resolve().parent.parent
+        users = [str(p.relative_to(swarm)) for p in swarm.rglob("*")
+                 if p.is_file() and p.suffix in (".py", ".yml", ".jsonc", ".parm", ".sh")
+                 and "tests" not in p.parts and "runs" not in p.parts
+                 and "example_user_scripts" in p.read_text(errors="ignore")]
+        self.assertEqual(users, [])
+
     def test_later_drones_save_gpu(self):
         sensors = by_id(Aircraft("x8_arduplane").robot(1)["sensors"], "id")
         self.assertEqual(sensors["Chase"]["capture-settings"][0]["width"], 640)
@@ -150,6 +159,18 @@ class FixedWingMissionTests(unittest.TestCase):
         quad = self.build([{"gimbal": {"pitch": -30}}], airframe=Airframe())
         self.assertIn(M.MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE, [i[1] for i in quad])
 
+    def test_track_steps_start_after_their_waypoint(self):
+        dm = DroneMission("Drone1", [{"goto": {"north": 100}, "track": {"target": "Car"}},
+                                     {"goto": {"north": 200}}, {"track": "off"},
+                                     {"goto": {"north": 300}}])
+        items = build_items(dm, (1, 103), (1, 103), 30, True, 1, airframe=FIXEDWING)
+        (start, spec), (end, none) = dm.track_steps
+        self.assertEqual(spec["target"], "Car")
+        self.assertIsNone(none)
+        waypoints = [n for n, i in enumerate(items) if i[1] == M.MAV_CMD_NAV_WAYPOINT]
+        # Tracking starts once the first waypoint is done, ends after the second
+        self.assertEqual((start, end), (waypoints[0] + 1, waypoints[1] + 1))
+
     def test_takeoff_climbs_out_and_waypoints_use_its_own_radius(self):
         items = self.build([{"goto": {"north": 100}}], airborne=False)
         takeoff = next(i for i in items if i[1] == M.MAV_CMD_NAV_TAKEOFF)
@@ -161,9 +182,29 @@ class FixedWingMissionTests(unittest.TestCase):
     def test_what_a_fixed_wing_cant_do(self):
         with self.assertRaisesRegex(ValueError, "heading"):
             self.build([{"heading": 90}])
-        with self.assertRaisesRegex(ValueError, "land"):
+        with self.assertRaisesRegex(ValueError, "runway"):
             self.build([{"goto": {"north": 10}, "land": True}])
         self.build([{"heading": "travel", "goto": {"north": 10}}])  # fine
+
+    def test_lands_on_a_runway_from_an_approach(self):
+        items = self.build([{"goto": {"north": 500}},
+                            {"land": {"north": 0, "east": 0, "heading": 90, "approach_m": 300}}])
+        start, approach, land = items[-3:]
+        self.assertEqual([start[1], approach[1], land[1]],
+                         [M.MAV_CMD_DO_LAND_START, M.MAV_CMD_NAV_WAYPOINT, M.MAV_CMD_NAV_LAND])
+        # Landing eastwards: the approach is 300 m west of the touchdown, at 30 m
+        self.assertAlmostEqual(land[3], 1.0, places=6)
+        self.assertAlmostEqual((approach[4] - land[4]) * 111_320 * math.cos(math.radians(1)), -300, delta=1)
+        self.assertEqual((approach[5], land[5]), (30, 0))
+
+    def test_land_step_is_validated(self):
+        from gcs.mission import _validate_step
+        _validate_step({"land": {"north": 0, "east": 0, "heading": 33}}, "step 1")
+        _validate_step({"land": True}, "step 1")
+        with self.assertRaisesRegex(ValueError, "heading"):
+            _validate_step({"land": {"north": 0, "east": 0}}, "step 1")
+        with self.assertRaisesRegex(ValueError, "approach_m"):
+            _validate_step({"land": {"north": 0, "east": 0, "heading": 3, "approach_m": 0}}, "step 1")
 
 
 class FixedWingLinkTests(unittest.TestCase):
@@ -179,3 +220,28 @@ class FixedWingLinkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FixedWingSearchTests(unittest.TestCase):
+    def test_consecutive_passes_leave_room_to_turn(self):
+        from gcs.search_planner import pass_order
+        for count, spacing, radius in ((10, 40, 35), (12, 25, 35), (30, 15, 50)):
+            order = pass_order(count, spacing, radius)
+            self.assertEqual(sorted(order), list(range(count)))
+            steps = [abs(b - a) * spacing for a, b in zip(order, order[1:])]
+            tight = [s for s in steps if s < 2 * radius]
+            self.assertLessEqual(len(tight), 2, (count, spacing, radius, order))
+
+    def test_multirotors_still_fly_in_order(self):
+        from gcs.search_planner import pass_order
+        self.assertEqual(pass_order(5, 40, 0), [0, 1, 2, 3, 4])
+        self.assertEqual(pass_order(5, 100, 35), [0, 1, 2, 3, 4])  # passes already 2R apart
+
+    def test_mixed_fleet_covers_the_same_passes(self):
+        from gcs.search_planner import plan_area_search
+        box = [(1.40, 103.86), (1.40, 103.87), (1.41, 103.87), (1.41, 103.86)]
+        quads, _ = plan_area_search(box, 2, 40)
+        mixed, _ = plan_area_search(box, 2, 40, [0.0, 35.0])
+        self.assertEqual(quads[0], mixed[0])
+        self.assertEqual(sorted(quads[1]), sorted(mixed[1]))
+        self.assertNotEqual(quads[1], mixed[1])

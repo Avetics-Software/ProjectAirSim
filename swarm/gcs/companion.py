@@ -3,7 +3,7 @@ Copyright (C) 2025 IAMAI CONSULTING CORP
 MIT License.
 
 Link to a companion computer running the X vision pipeline (A5X_RPI_Release,
-e.g. a Radxa) on one of the drones: in the sim the rknn-sim profile, on a real
+e.g. a Radxa) on one of the drones: in the sim an rknn-sim-* profile, on a real
 drone its flight profile.
 
 The companion reads the drone's gimbal camera and its PX4 over MAVLink,

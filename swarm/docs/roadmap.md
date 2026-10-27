@@ -101,10 +101,14 @@ Still to do:
 - ([#29](https://github.com/Avetics-Software/ProjectAirSim/issues/29)) **ArduPilot:** ArduPlane fixed-wings (the X8) fly in the swarm
   next to the PX4 quads, gimbal included ([aircraft](features/aircraft.md));
   flown in the Cesium world ([#34](https://github.com/Avetics-Software/ProjectAirSim/issues/34)).
+  Done, and flown in Unreal on Cesium ground: runway landings in missions ([#35](https://github.com/Avetics-Software/ProjectAirSim/issues/35)); belly skids on the X8
+  ([#36](https://github.com/Avetics-Software/ProjectAirSim/issues/36)); search passes that respect a fixed-wing's turn radius
+  ([#37](https://github.com/Avetics-Software/ProjectAirSim/issues/37)); the sim's fault controls for ArduPilot ([#38](https://github.com/Avetics-Software/ProjectAirSim/issues/38)); gimbal
+  hand-over for ArduPilot missions ([#39](https://github.com/Avetics-Software/ProjectAirSim/issues/39)); everything the swarm flies in
+  `swarm/` ([#40](https://github.com/Avetics-Software/ProjectAirSim/issues/40)); a companion X profile per airframe and autopilot
+  (`rknn-sim-*`).
   Still to do:
-  - ([#36](https://github.com/Avetics-Software/ProjectAirSim/issues/36)) runway takeoff and landing (the X8's JSBSim model has no gear;
-    it uses a virtual catapult), and ([#35](https://github.com/Avetics-Software/ProjectAirSim/issues/35)) landing approaches in missions
-  - ([#37](https://github.com/Avetics-Software/ProjectAirSim/issues/37)) search patterns that respect a fixed-wing's turn radius
-  - ([#38](https://github.com/Avetics-Software/ProjectAirSim/issues/38)) the sim's fault controls (link cut, battery) for ArduPilot drones
-  - ([#39](https://github.com/Avetics-Software/ProjectAirSim/issues/39)) gimbal ownership and the companion's stand-down with ArduPilot
+  - tune the flare and the skids (they are estimates; it lands 12 m past the
+    touchdown point), and replace the catapult with a real runway takeoff for
+    an aircraft with wheels
   - an ArduCopter dialect, if the quads move to ArduPilot

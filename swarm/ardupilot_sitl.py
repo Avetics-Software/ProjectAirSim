@@ -29,6 +29,7 @@ import time
 
 from projectairsim.utils import projectairsim_log
 
+from gcs.mavlink_link import M
 from payload_mavlink import PAYLOAD_PORT
 
 QGC_PORT = 14550
@@ -124,6 +125,24 @@ class ArduPilotSitl:
                 self.proc.kill()
                 self.proc.wait()
         self.proc = None
+
+    # The sim's faults (px4_gimbal_cesium.SimFaults). Its ground station is the
+    # payload link (MAV_GCS_SYSID): when that goes quiet, FS_GCS_ENABL acts
+    detects_link_loss = True
+
+    def set_battery(self, link, pct):
+        """Set the remaining charge to pct (MAV_CMD_BATTERY_RESET); it drains
+        on from there as it flies."""
+        self._battery_reset(link, pct)
+
+    def restore_battery(self, link):
+        self._battery_reset(link, 100.0)
+
+    @staticmethod
+    def _battery_reset(link, pct):
+        link.conn.send_as(link.compid, lambda mav: mav.command_long_send(
+            link.sysid, 1, M.MAV_CMD_BATTERY_RESET, 0,
+            1, float(pct), 0, 0, 0, 0, 0), bypass_outage=True)  # param1: battery 1
 
     def restart_modules(self, modules=None, timeout=15):
         """PX4 can restart its simulated hardware; ArduPilot SITL has no

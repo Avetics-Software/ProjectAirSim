@@ -912,8 +912,10 @@ class Session:
                     )
                 else:
                     for drone, craft in zip(self.drones, self.aircraft):
-                        # Fixed-wings stay where they spawned, held for launch
-                        if craft.capabilities.hovers and not place_drone_above_ground(drone, self.world):
+                        # Fixed-wings too, held there for launch: ArduPlane measures heights
+                        # from where it arms, so its landing point (height 0) is the runway
+                        # only if it starts on it
+                        if not place_drone_above_ground(drone, self.world):
                             projectairsim_log().warning(f"No ground under {drone.name} yet")
 
             self.world.resume()
@@ -1057,10 +1059,9 @@ def drone_url(url, index):
 
 class SimFaults:
     """The safety panel's Sim tab: faults injected into the sim's drones to
-    test the ground station's and PX4's responses."""
-
-    NORMAL_DRAIN_S, NORMAL_FLOOR_PCT = 1200.0, 35.0  # as in px4_params.parm
-    FAST_DRAIN_S = 30.0
+    test the ground station's and the autopilots' responses. What differs
+    between PX4 and ArduPilot (the battery, the link-loss failsafe) is each
+    drone's SITL's (px4_sitl.py, ardupilot_sitl.py)."""
 
     def __init__(self, connections, links, autopilots):
         self.connections = connections
@@ -1072,11 +1073,13 @@ class SimFaults:
 
     def cut_link(self, i, cut):
         """Stop (or restart) all MAVLink between the ground station and drone i's
-        PX4, like a radio dropping out.
+        autopilot, like a radio dropping out.
 
-        PX4 can't notice by itself in the sim: the simulator sends it GCS
-        heartbeats of its own on its control link (mavlink_api.cpp), so PX4
-        never loses "a ground station". This stands in for PX4's link-loss
+        ArduPilot notices by itself: its ground station is the payload link
+        (MAV_GCS_SYSID), whose heartbeats stop, and after FS_LONG_TIMEOUT it
+        runs FS_LONG_ACTN. PX4 can't notice in the sim: the simulator sends it
+        GCS heartbeats of its own on its control link (mavlink_api.cpp), so
+        PX4 never loses "a ground station". This stands in for PX4's link-loss
         failsafe: after COM_DL_LOSS_T it sends PX4 its NAV_DLL_ACT action."""
         if not cut:
             self.connections[i].outage = False
@@ -1085,6 +1088,12 @@ class SimFaults:
         if self.connections[i].outage:
             return
         link = self.links[i]
+        if self.autopilots[i].detects_link_loss:
+            self.connections[i].outage = True
+            projectairsim_log().warning(
+                f"Sim: {link.name} link CUT; {link.ap.label}'s own link-loss failsafe acts "
+                f"after {link.ap.link_loss_timeout_param}")
+            return
 
         def run():
             # Read PX4's own setting while the link is still up
@@ -1112,22 +1121,22 @@ class SimFaults:
         threading.Thread(target=run, daemon=True).start()
 
     def set_battery(self, i, pct):
-        """Bring drone i's simulated battery to pct within seconds, and keep it
-        there while armed (it resets to full when disarmed)."""
-        self._set_params(i, [("SIM_BAT_MIN_PCT", float(pct)), ("SIM_BAT_DRAIN", self.FAST_DRAIN_S)])
+        """Bring drone i's simulated battery to pct within seconds (each SITL's
+        set_battery says how it holds there)."""
+        self._background(lambda: self.autopilots[i].set_battery(self.links[i], pct))
         projectairsim_log().warning(f"Sim: {self.links[i].name} battery set to {pct}%")
 
     def restore(self, i):
         """Undo the faults: reconnect, and the battery back to normal."""
         self.cut_link(i, False)
-        self._set_params(i, [("SIM_BAT_MIN_PCT", self.NORMAL_FLOOR_PCT),
-                             ("SIM_BAT_DRAIN", self.NORMAL_DRAIN_S)])
+        self._background(lambda: self.autopilots[i].restore_battery(self.links[i]))
 
     def reset(self, i):
         """restore(), and restart drone i's simulated hardware in PX4 (the
         battery and power simulators), e.g. after PX4's battery simulator has
         hung and PX4 refuses to arm with "Battery unhealthy". Restarting all of
-        PX4 isn't possible without reloading the scene for every drone (goto)."""
+        PX4 isn't possible without reloading the scene for every drone (goto).
+        ArduPilot has no such restart (restart_modules says so)."""
         self.restore(i)
         name = self.links[i].name
 
@@ -1141,13 +1150,10 @@ class SimFaults:
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _set_params(self, i, params):
-        # In the background: PX4's confirmation can't arrive while the link is cut
-        def run():
-            for name, value in params:
-                self.links[i].set_param(name, value, timeout=1.0, bypass_outage=True)
-
-        threading.Thread(target=run, daemon=True).start()
+    @staticmethod
+    def _background(action):
+        # The autopilot's confirmation can't arrive while the link is cut
+        threading.Thread(target=action, daemon=True).start()
 
 
 def share_sim_logging():
@@ -1205,6 +1211,10 @@ async def main():
                                          camera))
 
         session = Session(args, client, camera, models, companions)
+        for i, ip in sorted(companions.items()):
+            profile = session.aircraft[i].companion_profile
+            projectairsim_log().info(f"Drone{i + 1} ({models[i]}): its companion {ip} should run "
+                                     f"X's {profile or 'sim'} profile")
         station = GroundStation(
             links,
             lambda i, link, windows: SimPayload(link, windows, sim_cameras[i], rtsps[i], camera),

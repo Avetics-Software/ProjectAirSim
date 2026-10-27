@@ -33,6 +33,13 @@ SERVO7_MIN       1000
 SERVO7_MAX       2000
 SERVO7_TRIM      1500
 
+# --- Landing -----------------------------------------------------------------
+# RTL lands through the mission's landing sequence (DO_LAND_START, which the
+# ground station's missions plan from a `land` step), straight from wherever
+# it is; without one it circles home. ArduPlane refuses to arm with a landing
+# sequence and RTL_AUTOLAND 0.
+RTL_AUTOLAND     2
+
 # --- Ground station link loss -----------------------------------------------
 # Return home when the ground station's heartbeats stop for FS_LONG_TIMEOUT s,
 # as the PX4 quads do (NAV_DLL_ACT 2 in px4_params.parm). The ground station

@@ -289,6 +289,14 @@ class VehicleLink:
             ),
         )
 
+    def give_gimbal(self, to_autopilot):
+        """Hand the gimbal to the autopilot itself (as a PX4 mission's claim
+        item does) or to nobody (a mission's `track` step), as a command: an
+        ArduPilot mission can't carry DO_GIMBAL_MANAGER_CONFIGURE items. Who
+        holds it is what a companion (X) stands down on."""
+        sysid, compid = (self.sysid, PX4_COMPID) if to_autopilot else (0, 0)
+        return self.command(M.MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE, sysid, compid, -1, -1, 0, 0, 0)
+
     def set_gimbal_attitude(self, pitch_deg, yaw_deg, pitch_rate_dps=math.nan,
                             yaw_rate_dps=math.nan, yaw_lock=False):
         """Stream a gimbal setpoint. The yaw is from the drone's nose, or with

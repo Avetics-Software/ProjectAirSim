@@ -17,11 +17,11 @@ drones:
   - companion: 192.168.199.100    # Drone2
 ```
 
-In the sim, each Radxa runs X's `rknn-sim` profile, whose `INPUT_RTSP` must
+In the sim, each Radxa runs X's `rknn-sim-*` profile for its drone's model, whose `INPUT_RTSP` must
 name its own drone's stream: `rtsp://<laptop>:8554/gimbal` for Drone1,
 `/gimbal2` for Drone2, and so on. The sim's PX4 for that drone sends it
 MAVLink on UDP 15540/15541. Deploying and running X is in the
-[simulation guide](../simulation.md#x-vision-pipeline-on-a-radxa-a5x_rpi_release-rknn-sim-profile).
+[simulation guide](../simulation.md#x-vision-pipeline-on-a-radxa-a5x_rpi_release-rknn-sim--profiles).
 
 ## In the dashboard
 
@@ -54,7 +54,7 @@ reported by PX4, since X is the one moving it.
 | GimbalCam title | `(via X)` | `(via PX4)` |
 
 So the ground station never takes the camera from X. X keeps it too: with
-`MAVLINK_RECLAIM_GIMBAL` (on in `rknn-sim`) it takes the gimbal back when PX4
+`MAVLINK_RECLAIM_GIMBAL` (on in `rknn-sim-*`) it takes the gimbal back when PX4
 hands it away around takeoff and return-home, and it repeats a held jog every
 0.5 s, as PX4 drops a gimbal rate that isn't refreshed within 2 s.
 

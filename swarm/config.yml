@@ -21,7 +21,7 @@ gcs_sysid: 245                  # our MAVLink system id; not 255 (QGC's)
 #   then X's). Optional: mavlink (this drone on its own link), chase_video (a
 #   second camera).
 # The sim: one autopilot per entry, named Drone1, Drone2, ...; it uses only
-#   `model` and `companion` (a Radxa running X's rknn-sim profile) and makes
+#   `model` and `companion` (a Radxa running X's rknn-sim-* profile for that model) and makes
 #   the rest itself.
 drones:
   - name: Drone1

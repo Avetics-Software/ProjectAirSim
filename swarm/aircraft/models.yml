@@ -9,8 +9,9 @@
 #   autopilots (below)       the link to an autopilot: controller type, ports
 #                            (offset per drone), clock. Never a gain.
 #   models (below)           a launchable airframe + autopilot pair: how its
-#                            SITL starts (frame, parameter files) and what the
-#                            ground station may ask of it (capabilities).
+#                            SITL starts (frame, parameter files), what the
+#                            ground station may ask of it (capabilities) and
+#                            the companion's X profile (companion-profile).
 # Tuning (gains) lives only in a model's parameter files.
 #
 #   python aircraft.py --list | --dump MODEL [--index N] | --audit
@@ -76,6 +77,7 @@ models:
       params:
         - ${SWARM}/px4_params.parm
     capabilities: multirotor
+    companion-profile: rknn-sim-quad-px4   # X (A5X_RPI_Release) on the drone's Radxa
 
   x8_arduplane:
     label: Skywalker X8 flying wing, ArduPlane
@@ -84,10 +86,10 @@ models:
     sitl:
       binary: ${ARDUPILOT_DIR}/build/sitl/bin/arduplane
       # One --defaults list, later files win: ArduPilot's stock SITL plane,
-      # the X8's tuning (from the ArduPilot example), the swarm's links and
-      # failsafes
+      # the X8's tuning, the swarm's links and failsafes
       params:
         - ${ARDUPILOT_DIR}/Tools/autotest/models/plane.parm
-        - ${REPO}/client/python/example_user_scripts/ardupilot/x8-arduplane.param
+        - ${SWARM}/aircraft/params/x8_arduplane.param
         - ${SWARM}/aircraft/params/arduplane_swarm.parm
     capabilities: fixedwing
+    companion-profile: rknn-sim-fw-ardupilot

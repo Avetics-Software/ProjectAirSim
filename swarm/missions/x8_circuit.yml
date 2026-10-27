@@ -1,0 +1,19 @@
+# A fixed-wing's circuit and landing, for the Seletar runway (03/21, 033 deg): the
+# X8 launches along the runway, flies out 700 m, across 250 m, back to 600 m
+# behind where it started, and lands on the runway where it started, heading 033.
+#   ./run_cesium_sim.sh --qgc --model x8_arduplane
+#   mission load x8_circuit   then   mission upload   then   mission start
+# north/east are metres from where the drone is at upload (origin: start), which
+# is on the runway centreline. See docs/features/aircraft.md.
+mission: x8_circuit
+origin: start
+speed: 18                # m/s
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 40
+      - goto: {north: 587, east: 381, alt: 40}      # 700 m ahead
+      - goto: {north: 451, east: 591, alt: 40}      # 250 m to the right
+      - goto: {north: -639, east: -117, alt: 40}     # 600 m behind the start
+      - land: {north: 0, east: 0, heading: 33, approach_m: 400, approach_alt: 30}

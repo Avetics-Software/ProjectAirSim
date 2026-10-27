@@ -10,6 +10,11 @@ are split into one contiguous block per drone, balanced by length, and each
 block is flown back and forth. Concave polygons work: a pass that crosses the
 polygon more than once is flown as several pieces.
 
+A drone that can't turn on the spot (a fixed-wing, with a turn radius R) can't
+turn into the next pass when passes are closer than 2R. It flies its block's
+passes in another order instead (pass_order), each at least 2R from the last,
+and turns beyond the pass ends.
+
 Also checks planned paths against each other for crossings, for deconfliction.
 """
 
@@ -85,12 +90,28 @@ def _partition(costs, k):
     return ranges[::-1]
 
 
-def plan_area_search(polygon, drones, spacing):
+def pass_order(count, spacing, turn_radius_m):
+    """The order to fly `count` adjacent passes `spacing` apart in, for a
+    drone whose tightest turn has radius turn_radius_m. With passes closer than
+    2 x radius, it flies every g-th pass across the area (g passes being at
+    least 2 x radius), then the next set: 0, g, 2g, ..., 1, 1+g, ... Each step
+    is then at least g passes, except, in a block of fewer than 2g passes,
+    from one set's last to the next's first (a loop turn). 0: in order."""
+    gap = math.ceil(2 * turn_radius_m / spacing - 1e-9) if turn_radius_m > 0 else 1
+    if gap <= 1:
+        return list(range(count))
+    return [j for first in range(min(gap, count)) for j in range(first, count, gap)]
+
+
+def plan_area_search(polygon, drones, spacing, turn_radii=None):
     """Split a [(lat, lon), ...] polygon between `drones` drones.
 
-    Returns one waypoint list [(lat, lon), ...] per drone (some may be empty
-    for a small area) and the sweep heading in degrees.
+    turn_radii: each drone's tightest turn radius in metres (0 or None: it
+    turns on the spot). Returns one waypoint list [(lat, lon), ...] per drone
+    (some may be empty for a small area) and the sweep heading in degrees.
     """
+    turn_radii = list(turn_radii or [])
+    turn_radii += [0.0] * (drones - len(turn_radii))
     if len(polygon) < 3:
         raise ValueError("an area needs at least 3 corners")
     lat0 = sum(p[0] for p in polygon) / len(polygon)
@@ -116,9 +137,10 @@ def plan_area_search(polygon, drones, spacing):
     blocks += [[] for _ in range(drones - len(blocks))]
 
     paths = []
-    for block in blocks:
+    for block, radius in zip(blocks, turn_radii):
         pts = []
-        for k, (y, a, b) in enumerate(block):
+        for k, n in enumerate(pass_order(len(block), spacing, radius)):
+            y, a, b = block[n]
             ends = [(a, y), (b, y)]
             pts += ends if k % 2 == 0 else ends[::-1]
         geo = [frame.to_geo(x, y) for x, y in _rotate(pts, angle)]

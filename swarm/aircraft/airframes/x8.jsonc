@@ -1,10 +1,11 @@
+// Skywalker X8 flying wing on JSBSim, flown by ArduPlane (aircraft/models.yml
+// x8_arduplane). Its tuned ArduPlane parameters are params/x8_arduplane.param.
 {
-  "$schema": "../../../projectairsim/src/projectairsim/schema/robot_config_schema.jsonc",
-  // Skywalker X8 flown by ArduPlane SITL through ArduPilot's JSON backend.
-  // The airframe matches jsbsim/x8_skywalker/sim_config/robot_x8_jsbsim.jsonc;
+  // The airframe matches Project AirSim's JSBSim X8 example (robot_x8_jsbsim.jsonc);
   // only the controller and the actuators that feed JSBSim differ.
   "physics-type": "jsbsim-physics",
-  "jsbsim-ground-mode": "constant",
+  // Ground height from the Unreal terrain (Cesium tiles) under the aircraft
+  "jsbsim-ground-mode": "terrain",
   "jsbsim-root-path": "/SimLibs/core_sim/jsbsim/models/",
   "jsbsim-aircraft-path": "aircraft",
   "jsbsim-engine-path": "engine",
@@ -121,34 +122,35 @@
       "axis": "0 1 0"
     }
   ],
-  "controller": {
-    "id": "ArduPlane_Controller",
-    "airframe-setup": "fixed-wing",
-    "type": "arduplane-api",
-    "arduplane-settings": {
-      // ArduPilot sends servo frames to this port: 9002 + 10 * SITL instance.
-      "local-host-ip": "0.0.0.0",
-      "local-host-udp-port": 9002,
-      // Once connected, how long each tick waits for ArduPilot's next frame.
-      "frame-timeout-ms": 1000,
-      "send-airspeed": true,
-      // The X8 has no landing gear and spawns airborne. Hold it on a virtual
-      // catapult until ArduPlane raises throttle (TAKEOFF mode, armed), then
-      // accelerate it to flying speed.
-      "launch": {
-        "hold": true,
-        "release-throttle": 0.5,
-        "speed": 18.0,
-        "duration": 0.5
+  // No "controller": aircraft.py builds it from the autopilot's link settings
+  // (aircraft/models.yml) plus what this airframe needs from each family.
+  "autopilot": {
+    "ardupilot": {
+      "controller": {
+        "airframe-setup": "fixed-wing"
       },
-      // One entry per ArduPilot servo output: index 0 is SERVO1. Matches
-      // x8-arduplane.parm (SERVO1 aileron, SERVO2 elevator, SERVO3 throttle).
+      "settings": {
+        // Once connected, how long each tick waits for ArduPilot's next frame
+        "frame-timeout-ms": 1000,
+        "send-airspeed": true,
+        // The X8 has no landing gear: it is held at the runway spawn on a
+        // virtual catapult and launched when ArduPlane's TAKEOFF applies
+        // throttle (docs/controllers/ardupilot.md)
+        "launch": {
+          "hold": true,
+          "release-throttle": 0.5,
+          "speed": 18.0,
+          "duration": 0.5
+        }
+      },
+      // One entry per ArduPilot servo output: index 0 is SERVO1, as in
+      // params/x8_arduplane.param (SERVO1 aileron, SERVO2 elevator, SERVO3 throttle)
       "actuator-order": [
         {
           "id": "Aileron_actuator"
         },
         {
-          // ArduPilot's positive elevator is nose-up; JSBSim's is nose-down.
+          // ArduPilot's positive elevator is nose-up; JSBSim's is nose-down
           "id": "Elevator_actuator",
           "scale": -1.0
         },
@@ -156,6 +158,15 @@
           "id": "Throttle_actuator"
         }
       ]
+    }
+  },
+  // Belly camera just ahead of the centre of gravity, looking 45 deg down
+  "gimbal-mount": {
+    "parent-link": "Frame",
+    "child-link": "Prop",
+    "origin": {
+      "xyz": "0.25 0.0 0.08",
+      "rpy-deg": "0 -45 0"
     }
   },
   "actuators": [

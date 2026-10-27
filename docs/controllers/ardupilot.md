@@ -1,6 +1,6 @@
 # ArduPilot Flight Controller
 
-[ArduPilot](https://ardupilot.org/) is a flexible open-source autopilot that can run with Project AirSim through Software-In-The-Loop (SITL). The repository includes quadrotor, hexarotor and fixed-wing examples in [`client/python/example_user_scripts/ardupilot`](../../client/python/example_user_scripts/ardupilot). Multirotors use the `ardupilot-api` controller; fixed-wing aircraft use `arduplane-api`, described in [ArduPlane fixed-wing aircraft](#arduplane-fixed-wing-aircraft).
+[ArduPilot](https://ardupilot.org/) is a flexible open-source autopilot that can run with Project AirSim through Software-In-The-Loop (SITL). The repository includes quadrotor and hexarotor examples in [`client/python/example_user_scripts/ardupilot`](../../client/python/example_user_scripts/ardupilot). Multirotors use the `ardupilot-api` controller; fixed-wing aircraft use `arduplane-api`, described in [ArduPlane fixed-wing aircraft](#arduplane-fixed-wing-aircraft); the swarm simulation's Skywalker X8 uses it.
 
 **Compatibility note:** this integration has not been recently validated against the latest ArduPilot release. Start with the supplied examples and their parameter files before adapting it to a different vehicle.
 
@@ -12,7 +12,6 @@ Project AirSim includes these ArduPilot SITL examples:
 | --- | --- | --- | --- |
 | Quadrotor | `sim_config/scene_ardu_quadrotor.jsonc` | `ardupilot_quadrotor.py` | `project-airsim-quad.param` |
 | Hexarotor | `sim_config/scene_ardu_hexarotor.jsonc` | `ardupilot_hexarotor.py` | `project-airsim-hexa.param` |
-| Skywalker X8 (fixed wing, JSBSim) | `sim_config/scene_ardu_x8_plane.jsonc` | `ardupilot_x8_plane.py` | `x8-arduplane.param` |
 
 The examples display camera streams and load the scene; Project AirSim Client API flight commands such as arm, takeoff, and move are not supported with `ardupilot-api`. Control the vehicle from the ArduPilot console or through a ground control station (GCS), for example Mission Planner or QGroundControl.
 
@@ -157,33 +156,13 @@ Actuators forward the normalized outputs to JSBSim through their `jsbsim-cmd` pr
 
 #### Catapult launch
 
-The X8 model has no landing gear, so the example spawns it 120 m above the ground. With `launch.hold`, the controller freezes the JSBSim model at its spawn pose (`FGFDMExec::Hold`) and reports a stationary vehicle to ArduPilot. That gives ArduPilot time to boot, align its EKF and arm. When a throttle output (any `unipolar` entry) reaches `release-throttle`, the hold is released. JSBSim then accelerates the aircraft along its body x axis to `speed` (m/s) over `duration` (s), and the push shows up in the reported accelerometer reading. A `speed` of `0` releases the hold without the push.
+An aircraft without landing gear can't start on the ground. With `launch.hold`, the controller freezes the JSBSim model at its spawn pose (`FGFDMExec::Hold`) and reports a stationary vehicle to ArduPilot. That gives ArduPilot time to boot, align its EKF and arm. When a throttle output (any `unipolar` entry) reaches `release-throttle`, the hold is released. JSBSim then accelerates the aircraft along its body x axis to `speed` (m/s) over `duration` (s), and the push shows up in the reported accelerometer reading. A `speed` of `0` releases the hold without the push.
 
-### Run the X8 with ArduPlane
+### The Skywalker X8
 
-1. Build ArduPlane SITL from an ArduPilot checkout (see [Install and run ArduPilot SITL](#install-and-run-ardupilot-sitl)) with `./waf configure --board sitl && ./waf plane`.
-2. Start Project AirSim, then run `python ardupilot_x8_plane.py` from `client/python/example_user_scripts/ardupilot`. The X8 is held on the catapult.
-3. Start ArduPlane with the JSON backend. Use the scene's home point, which ArduPilot needs to place the positions it receives:
+The Skywalker X8 (JSBSim) flown by ArduPlane is part of the swarm simulation: the `x8_arduplane` aircraft model in [`swarm/aircraft/`](../../swarm/aircraft/). Its robot config is `swarm/aircraft/airframes/x8.jsonc` and its ArduPlane parameters `swarm/aircraft/params/x8_arduplane.param`; the swarm launcher starts ArduPlane SITL itself. See `swarm/docs/features/aircraft.md` for how to fly it.
 
-   ```bash
-   cd ardupilot/Tools/autotest
-   python sim_vehicle.py -v ArduPlane --model JSON \
-       --home=29.4296741,-95.16384722,7.5,0 \
-       --add-param-file=<project-airsim>/client/python/example_user_scripts/ardupilot/x8-arduplane.param
-   ```
-
-4. Once the console reports that the EKF is using GPS, launch:
-
-   ```text
-   mode TAKEOFF
-   arm throttle
-   ```
-
-   ArduPlane applies takeoff throttle, the catapult releases, and the X8 climbs `TKOFF_ALT` metres. It then loiters, and you can switch to `LOITER`, `RTL` or `AUTO` from the console or a GCS.
-
-`x8-arduplane.param` maps `SERVO1`–`SERVO3` to aileron, elevator and throttle. The X8 JSBSim model mixes those commands onto its elevons itself, so ArduPlane flies it as a conventional airframe without a rudder. Attitude control uses ArduPlane's default SITL gains. On this model they hold a loiter bank to within 0.2° RMS and reach 90% of a roll or pitch stick step in about 1 s or less. Two `AUTOTUNE` passes did not improve them overall, so the parameter file adds no tuned gains. Re-tune if you change the airframe model.
-
-**Note:** ArduPlane sets home where it arms, which in this example is on the catapult 120 m above the ground. Landing at home would therefore land in mid-air, so use loiter and RTL rather than `LAND`.
+The parameters map `SERVO1`–`SERVO3` to aileron, elevator and throttle. The X8 JSBSim model mixes those commands onto its elevons itself, so ArduPlane flies it as a conventional airframe without a rudder. Attitude control uses ArduPlane's default SITL gains. On this model they hold a loiter bank to within 0.2° RMS and reach 90% of a roll or pitch stick step in about 1 s or less. Two `AUTOTUNE` passes did not improve them overall, so the parameter file adds no tuned gains. Re-tune if you change the airframe model.
 
 ## Autotune a different vehicle
 

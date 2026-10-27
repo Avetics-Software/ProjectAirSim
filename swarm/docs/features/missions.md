@@ -57,7 +57,7 @@ drones:
 | `wait` | Seconds of delay, including after a camera-only step |
 | `track` | Hand the camera to a tracker while the drone keeps flying: `{target: NAME}` (a sim object to lock onto and score; optional `tracker: auto\|x\|truth`), `on` (real drones: pick the target yourself), `off` to take it back. A `gimbal` or `look_at` step also takes it back. See [Tracking from a mission](#tracking-from-a-mission) |
 | `photo` | `true` sends a native image-capture command |
-| `land`, `rtl` | `true` ends with landing or return home; no later steps allowed |
+| `land`, `rtl` | `true` ends with landing or return home; no later steps allowed. A fixed-wing lands on a runway: `land: {north: N, east: E, heading: DEG}` (or `lat`/`lon`; optional `approach_m`, `approach_alt`), see [aircraft](aircraft.md#takeoff-and-landing) |
 
 Camera steps on a `goto` apply on arrival. Put a camera step **before** the
 `goto` to set it for that flight leg. Gimbal travel/slew limits still apply.
@@ -90,7 +90,7 @@ MAVLINK_RECLAIM_GIMBAL: true
 MAVLINK_CLAIM_MODE: explicit
 ```
 
-The local `rknn-sim` profile enables these. Older deployed binaries need
+The `rknn-sim-*` profiles enable these. Older deployed binaries need
 updating too; the laptop cannot confirm this setting through X's current
 UDP protocol.
 

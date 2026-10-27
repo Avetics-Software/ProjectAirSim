@@ -65,7 +65,7 @@ runs at about real time); the CSVs carry each frame's true time.
 Copy the run folder to the Radxa, then from X's directory:
 
 ```bash
-A5X_PROFILE=rknn-sim python3 mot_replay.py ~/runs/mot_convoy_<run>
+A5X_PROFILE=rknn-sim-quad-px4 python3 mot_replay.py ~/runs/mot_convoy_<run>
 ```
 
 It reads the video frame by frame, resizes to `INPUT_WIDTH`×`INPUT_HEIGHT`,
@@ -158,13 +158,13 @@ running on the companion and score X's own log of the flight:
    - `detections.csv` and `tracks.csv`, stamped with the board's clock
 2. **Fly the mission** with the companion connected:
    - sim: `./run_cesium_sim.sh --qgc --pi-ip 192.168.199.99 --ground-truth`
-   - Radxa: `cd ~/Code/X_sim && venv/bin/python main.py`
+   - Radxa: `cd ~/Code/X_sim_quad_px4 && venv/bin/python main.py`
    - then `mission load mot_convoy`, `mission upload 1`, `mission start 1`
    - one X session can cover several flights
 3. **Copy the log to the laptop and line it up** with each flight's recording:
 
    ```bash
-   scp -r radxa@192.168.199.99:Code/X_sim/logs/mot_log_<time> .
+   scp -r radxa@192.168.199.99:Code/X_sim_quad_px4/logs/mot_log_<time> .
    python live_align.py runs/<recording> mot_log_<time>
    python mot_eval.py runs/<recording> runs/<recording>/tracker_mot_log_<time>_live \
        runs/<recording>/tracker_*_visdrone_bytetrack_cmc
@@ -198,7 +198,7 @@ to the Radxa:
 
 ```bash
 cd ~/Documents/A5X_RPI_Release/X
-./deploy.sh --profile rknn-sim --dir radxa@192.168.199.99:~/Code/X_sim/ --code-only
+./deploy.sh --profile rknn-sim-quad-px4 --dir radxa@192.168.199.99:~/Code/X_sim_quad_px4/ --code-only
 ```
 
 This copies the tracker, CMC, `mot_replay.py` and the rknn-sim
@@ -209,8 +209,8 @@ without the inlier gate.
 
 ```bash
 ssh radxa@192.168.199.99
-cd ~/Code/X_sim
-A5X_PROFILE=rknn-sim venv/bin/python mot_replay.py ~/mot_runs/mot_convoy_20261026_110740_184801946 --tag mine
+cd ~/Code/X_sim_quad_px4
+A5X_PROFILE=rknn-sim-quad-px4 venv/bin/python mot_replay.py ~/mot_runs/mot_convoy_20261026_110740_184801946 --tag mine
 ```
 
 - **Time:** about 1.5-2 minutes per recording without SAHI.
@@ -232,7 +232,7 @@ To try tracker settings only, without re-running the detector (seconds
 instead of minutes), feed a previous run's detections:
 
 ```bash
-A5X_PROFILE=rknn-sim venv/bin/python mot_replay.py ~/mot_runs/<recording> \
+A5X_PROFILE=rknn-sim-quad-px4 venv/bin/python mot_replay.py ~/mot_runs/<recording> \
     --detections ~/mot_runs/<recording>/tracker_<...>_mine/detections.csv \
     --set BYTETRACK_MAX_LOST=60 --tag lost60
 ```

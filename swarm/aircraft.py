@@ -72,6 +72,14 @@ def load_jsonc(path):
         return commentjson.load(f)
 
 
+def outside_swarm(path):
+    """True for a file the swarm reads from outside swarm/, other than the
+    autopilots' own checkouts (their binaries and stock parameter files)."""
+    path = os.path.realpath(path)
+    allowed = [SWARM_DIR] + [os.path.realpath(expand("${" + d + "}")) for d in ("PX4_DIR", "ARDUPILOT_DIR")]
+    return not any(path == a or path.startswith(a + os.sep) for a in allowed)
+
+
 def load_airframe(name):
     """An airframe file, with the file it extends merged under it."""
     path = os.path.join(AIRCRAFT_DIR, "airframes", f"{name}.jsonc")
@@ -137,6 +145,8 @@ class Aircraft:
         self.family = self.autopilot["family"]
         self.airframe = load_airframe(self.entry["airframe"])
         self.capabilities = airframe_of(model, self.models)
+        # The X profile its companion computer runs in the sim
+        self.companion_profile = self.entry.get("companion-profile", "")
 
     def instance(self, index):
         return index + self.autopilot.get("instance-offset", 0)
@@ -218,6 +228,12 @@ class Aircraft:
         for path in sitl.params:
             if not os.path.exists(path):
                 problems.append(("ERROR", f"parameter file missing: {path}"))
+        extends = load_jsonc(os.path.join(AIRCRAFT_DIR, "airframes",
+                                          f"{self.entry['airframe']}.jsonc")).get("extends")
+        for path in sitl.params + ([expand(extends)] if extends else []):
+            if outside_swarm(path):
+                problems.append(("ERROR", f"reads {path}, outside swarm/: keep what the "
+                                          "swarm flies in swarm/aircraft/"))
         if sitl.binary and not os.path.exists(sitl.binary):
             problems.append(("NOTE", f"SITL binary not built yet: {sitl.binary}"))
         try:

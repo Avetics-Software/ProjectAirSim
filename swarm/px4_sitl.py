@@ -88,6 +88,26 @@ class Px4Sitl:
         if self.pi_ip:
             threading.Thread(target=self._add_companion_links, daemon=True).start()
 
+    # The sim's faults (px4_gimbal_cesium.SimFaults). The simulator sends PX4
+    # GCS heartbeats of its own, so PX4 never notices a cut ground-station link
+    detects_link_loss = False
+    NORMAL_DRAIN_S, NORMAL_FLOOR_PCT = 1200.0, 35.0  # as in px4_params.parm
+    FAST_DRAIN_S = 30.0
+
+    def set_battery(self, link, pct):
+        """PX4's battery simulator: drain to pct within seconds and stay there
+        while armed (it resets to full when disarmed)."""
+        self._set_params(link, [("SIM_BAT_MIN_PCT", float(pct)), ("SIM_BAT_DRAIN", self.FAST_DRAIN_S)])
+
+    def restore_battery(self, link):
+        self._set_params(link, [("SIM_BAT_MIN_PCT", self.NORMAL_FLOOR_PCT),
+                                ("SIM_BAT_DRAIN", self.NORMAL_DRAIN_S)])
+
+    @staticmethod
+    def _set_params(link, params):
+        for name, value in params:
+            link.set_param(name, value, timeout=1.0, bypass_outage=True)
+
     def _boot_params(self):
         """PX4_PARAM_<NAME> for the model's parameter files, which PX4 applies
         at boot. The environment's own (--px4-params) win over them."""

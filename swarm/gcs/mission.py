@@ -37,10 +37,13 @@ IMAGE_START_CAPTURE, NAV_LAND, NAV_RETURN_TO_LAUNCH. PX4 doesn't accept
 camera zoom in a mission, so there is no zoom step.
 
 A fixed-wing (gcs/airframe.py) flies the same steps where it can: it climbs
-out along the runway for takeoff, circles for a hold (NAV_LOITER_TIME), has no
-heading of its own (a heading step is an error) and lands only through a
-landing approach, which missions don't plan yet (a land step is an error; use
-rtl).
+out along the runway for takeoff, circles for a hold (NAV_LOITER_TIME) and has
+no heading of its own (a heading step is an error). It lands on a runway:
+`land: {north: 0, east: 0, heading: 33}` (or lat/lon) is the touchdown point
+and the direction it lands in, and the mission flies an approach to it,
+`approach_m` (400) back at `approach_alt` (30 m), as ArduPlane's landing
+sequence: DO_LAND_START, the approach waypoint, NAV_LAND. RTL then lands
+through the same sequence (RTL_AUTOLAND).
 
 Runs: each `mission start` gets a run id; every drone's position, heading,
 gimbal angle and mission step are logged at 5 Hz to runs/<mission>_<run>.csv,
@@ -124,9 +127,20 @@ def _validate_step(step, label):
         if "gimbal" in step or "look_at" in step:
             raise ValueError(f"{label}: track hands the camera to the tracker; it can't share "
                              "a step with gimbal or look_at")
+    if isinstance(step.get("land"), dict):
+        spec = dict(step["land"])
+        if "heading" not in spec:
+            raise ValueError(f"{label}: land needs the heading it lands in")
+        _number(spec.pop("heading"), label + " land heading")
+        for key in ("approach_m", "approach_alt"):
+            if key in spec:
+                _number(spec.pop(key), f"{label} land {key}", 1)
+        _validate_place(spec, label + " land")
     for key in ("land", "rtl", "photo"):
-        if key in step and not isinstance(step[key], bool):
-            raise ValueError(f"{label}: {key} must be true or false")
+        if key in step and not isinstance(step[key], bool) and not (
+                key == "land" and isinstance(step[key], dict)):
+            raise ValueError(f"{label}: {key} must be true or false"
+                             + (", or a runway {north/east or lat/lon, heading}" if key == "land" else ""))
     if sum(bool(step.get(k)) for k in ("takeoff", "goto", "land", "rtl")) > 1:
         raise ValueError(f"{label}: use one flight action per step")
 
@@ -285,9 +299,9 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
         for n, step in enumerate(dm.steps, start=1):
             if "heading" in step and step["heading"] != "travel":
                 raise ValueError(f"step {n}: a fixed-wing has no heading of its own")
-            if step.get("land"):
-                raise ValueError(f"step {n}: a fixed-wing lands only from a landing approach, "
-                                 "which missions don't plan yet; use rtl")
+            if step.get("land") is True:
+                raise ValueError(f"step {n}: a fixed-wing lands on a runway: give its touchdown "
+                                 "point and heading, land: {north: N, east: E, heading: DEG}")
     takeoff_params = (0, 0, 0, math.nan) if hovers else (FIXEDWING_TAKEOFF_PITCH, 0, 0, 0)
     speed_type = 1 if hovers else 0  # ground speed; a fixed-wing's airspeed
     accept_m = 3.0 if hovers else 0.0  # a fixed-wing's own (WP_RADIUS)
@@ -384,6 +398,8 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
                           here[0], here[1], alt))
         if "track" in step:
             spec = track_spec(step["track"])
+            # Where a track step starts or ends (track_steps): its release or
+            # claim item, or (an autopilot without them) the item after it
             if spec and not tracking:
                 if roi:
                     # Clearing the ROI centres the camera, so hand it over
@@ -400,12 +416,12 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
                                                "heading": bearing}))
                 # The gimbal to nobody: the tracker (X re-claims it) takes over
                 items.extend(release_items)
-                track_steps.append((len(items) - 1, spec))
+                track_steps.append((len(items) - (1 if claims_gimbal else 0), spec))
                 camera_steps.append((*here, "TRACK" + (f" {spec['target']}" if spec["target"]
                                                        else "")))
             elif not spec and tracking:
                 items.extend(claim_items)
-                track_steps.append((len(items) - 1, None))
+                track_steps.append((len(items) - (1 if claims_gimbal else 0), None))
             tracking = bool(spec)
         if "gimbal" in step:
             roi = None
@@ -420,7 +436,7 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
             if tracking:  # the mission takes the camera back to point it
                 tracking = False
                 items.extend(claim_items)
-                track_steps.append((len(items) - 1, None))
+                track_steps.append((len(items) - (1 if claims_gimbal else 0), None))
             spec = step["look_at"]
             if spec in (None, "none", False):
                 roi = None
@@ -439,7 +455,20 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
                          if hovers else circle(float(step["wait"]), here[0], here[1], alt))
         if step.get("photo"):
             items.append((F_MISSION, M.MAV_CMD_IMAGE_START_CAPTURE, (0, 0, 1, 0), 0, 0, 0))
-        if step.get("land"):
+        if isinstance(step.get("land"), dict):
+            spec = step["land"]
+            lat, lon, _ = _place({k: v for k, v in spec.items()
+                                  if k in ("lat", "lon", "north", "east")}, origin, 0)
+            if hovers:
+                items.append((F_REL, M.MAV_CMD_NAV_LAND, (0, 0, 0, nan), lat, lon, 0))
+            else:
+                items += landing_sequence(lat, lon, float(spec["heading"]),
+                                          float(spec.get("approach_m", 400)),
+                                          float(spec.get("approach_alt", 30)))
+                route += [tuple(items[-2][3:5]), (lat, lon)]
+                heights.append(float(spec.get("approach_alt", 30)))
+            here = (lat, lon)
+        elif step.get("land"):
             items.append((F_REL, M.MAV_CMD_NAV_LAND, (0, 0, 0, nan), here[0], here[1], 0))
         if step.get("rtl"):
             items.append((F_MISSION, M.MAV_CMD_NAV_RETURN_TO_LAUNCH, (0, 0, 0, 0), 0, 0, 0))
@@ -450,6 +479,22 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
     dm.camera_steps = camera_steps
     dm.track_steps = track_steps
     return items
+
+
+def landing_sequence(lat, lon, heading_deg, approach_m=400.0, approach_alt=30.0):
+    """A fixed-wing's landing on a runway as ArduPlane mission items: the
+    sequence marker (DO_LAND_START, which RTL and a `land` command jump to),
+    the approach waypoint approach_m back from the touchdown at approach_alt
+    m above home, and the landing at lat/lon in direction heading_deg."""
+    h = math.radians(heading_deg)
+    north, east = -approach_m * math.cos(h), -approach_m * math.sin(h)
+    a_lat = lat + north / EARTH_M_PER_DEG
+    a_lon = lon + east / (EARTH_M_PER_DEG * math.cos(math.radians(lat)))
+    return [
+        (F_REL, M.MAV_CMD_DO_LAND_START, (0, 0, 0, 0), a_lat, a_lon, 0),
+        (F_REL, M.MAV_CMD_NAV_WAYPOINT, (0, 0, 0, 0), a_lat, a_lon, approach_alt),
+        (F_REL, M.MAV_CMD_NAV_LAND, (0, 0, 0, 0), lat, lon, 0),
+    ]
 
 
 def track_summaries(run_path):
@@ -745,6 +790,9 @@ class MissionControl:
             started = time.monotonic()
             # (a previous run's progress mustn't count as this one's)
             link.mission_seq = link.mission_reached = -1
+            if not link.ap.mission_gimbal_claim:
+                # The mission's claim, which its items can't make (see _set_tracking)
+                await self.swarm._call(link.give_gimbal, True)
             await self.swarm._arm_and(i, link.start_mission)
             # PX4 switches to MISSION within a moment; then follow it until it
             # leaves. Armed too: a drone that landed at the end of a mission is
@@ -815,6 +863,11 @@ class MissionControl:
         else:
             self.tracking[i] = spec
         name = self.links[i].name
+        link = self.links[i]
+        if not link.ap.mission_gimbal_claim and link.mode == "MISSION":
+            # The release or claim a PX4 mission's items make, made from here:
+            # needs this station's link to the drone
+            asyncio.get_running_loop().run_in_executor(None, link.give_gimbal, spec is None)
         companion = self.companions.get(i)
         if companion and spec:
             # Operator input reaches X again (the station keeps this in step

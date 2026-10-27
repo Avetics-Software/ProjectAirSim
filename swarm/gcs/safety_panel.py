@@ -6,7 +6,7 @@ SafetyPanel: the dashboard's safety drawer (F2), docked at the right of the
 cameras. Tabs:
 
   Alerts     active alerts, most urgent first, to acknowledge; recent history
-  Health     each drone's battery, GPS, link and what PX4 does on link loss
+  Health     each drone's battery, GPS, link and what its autopilot does on link loss
   Responses  thresholds and what the ground station does about them
   Geofence   draw a fence on the map and upload it to every drone
   Sim        (sim only, F9) cut a drone's link, drain its battery
@@ -195,9 +195,9 @@ class SafetyPanel:
             t.insert(tk.END, f"  link     {link_text}\n",
                      str(CRITICAL) if age is not None and age > s.link_lost_s else "")
             dll = self.safety.dll_info.get(i, "?")
-            t.insert(tk.END, f"  on link loss PX4 will {dll}\n", "grey")
+            t.insert(tk.END, f"  on link loss {link.ap.label} will {dll}\n", "grey")
             if link.status_text:
-                t.insert(tk.END, f"  PX4: {link.status_text}\n", "grey")
+                t.insert(tk.END, f"  {link.ap.label}: {link.status_text}\n", "grey")
             t.insert(tk.END, "\n")
         t.configure(state=tk.DISABLED)
 
@@ -227,7 +227,8 @@ class SafetyPanel:
             self._field(grid, key, var).grid(row=r, column=1, sticky="e", padx=(6, 0))
         self._button(f, "Apply", self._apply_responses).pack(anchor="w", pady=8)
         self._label(f, "Battery action: rtl returns home, land lands where it is, warn only "
-                    "alerts. PX4's own low-battery failsafe still applies.", fg=GREY,
+                    "alerts (a fixed-wing returns home instead of landing). The autopilot's own "
+                    "low-battery failsafe still applies.", fg=GREY,
                     wraplength=self.windows.DRAWER_WIDTH - 24).pack(fill=tk.X)
 
     def _field(self, parent, key, var):
@@ -268,7 +269,7 @@ class SafetyPanel:
         grid.pack(fill=tk.X, pady=4)
         for r, (key, text) in enumerate((("fence_max_alt_m", "Ceiling above home (m)"),
                                          ("fence_margin_m", "Warn this close (m)"),
-                                         ("fence_action", "PX4 action at the fence"))):
+                                         ("fence_action", "Autopilot's action at the fence"))):
             self._label(grid, text).grid(row=r, column=0, sticky="w", pady=2)
             var = tk.StringVar(value=str(getattr(self.safety.settings, key)))
             self._vars[key] = var
@@ -277,7 +278,7 @@ class SafetyPanel:
         self._fence_status = self._label(f, "", fg=GREY,
                                          wraplength=self.windows.DRAWER_WIDTH - 24)
         self._fence_status.pack(fill=tk.X)
-        self._label(f, "The fence is uploaded to each PX4, which enforces it itself (even "
+        self._label(f, "The fence is uploaded to each autopilot, which enforces it itself (even "
                     "without this link). Uploading an empty fence removes it. The ground "
                     "station also warns near it and alerts outside it.", fg=GREY,
                     wraplength=self.windows.DRAWER_WIDTH - 24).pack(fill=tk.X, pady=(8, 0))
@@ -339,13 +340,15 @@ class SafetyPanel:
             self._button(row, "Set",
                          lambda i=i, v=bat: self.sim_faults.set_battery(i, v.get())
                          ).pack(side=tk.LEFT)
-        self._label(f, "Cut link stops all MAVLink between this station and that PX4. "
-                    "After COM_DL_LOSS_T the drone does its link-loss action (NAV_DLL_ACT; "
-                    "the sim sends it on PX4's behalf, since the simulator itself keeps PX4's "
-                    "link alive).\n\nBattery: the sim's battery falls to the level set within "
-                    "seconds and stays there while armed; it is full again once disarmed.\n\n"
-                    "Reset reconnects, returns the battery to normal and restarts the "
-                    "drone's simulated hardware in PX4 (battery and power simulators): use it "
+        self._label(f, "Cut link stops all MAVLink between this station and that drone. "
+                    "PX4: after COM_DL_LOSS_T the drone does its link-loss action "
+                    "(NAV_DLL_ACT; the sim sends it on PX4's behalf, since the simulator "
+                    "itself keeps PX4's link alive). ArduPilot notices by itself and runs "
+                    "FS_LONG_ACTN after FS_LONG_TIMEOUT.\n\nBattery: PX4's falls to the level "
+                    "set within seconds and stays there while armed (full again once "
+                    "disarmed); ArduPilot's is set to it and drains on from there.\n\n"
+                    "Reset reconnects, returns the battery to normal and, on PX4, restarts "
+                    "the drone's simulated hardware (battery and power simulators): use it "
                     "if PX4 refuses to arm with \"Battery unhealthy\".", fg=GREY,
                     wraplength=self.windows.DRAWER_WIDTH - 24).pack(fill=tk.X, pady=(12, 0))
 

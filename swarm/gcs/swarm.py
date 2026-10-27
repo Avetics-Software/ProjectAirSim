@@ -361,7 +361,8 @@ class SwarmControl:
 
     def search_area(self, targets, polygon, alt, spacing):
         """Grid-search a [(lat, lon), ...] polygon with the target drones."""
-        paths, heading = plan_area_search(polygon, len(targets), spacing)
+        radii = [self.links[i].airframe.turn_radius_m for i in targets]
+        paths, heading = plan_area_search(polygon, len(targets), spacing, radii)
         used = 0
         for i, path in zip(targets, paths):
             if not path:

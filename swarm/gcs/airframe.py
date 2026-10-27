@@ -14,6 +14,8 @@ The commands ask these capabilities rather than the kind of aircraft:
                    it the aircraft circles a held point (loiter_radius_m), gives
                    way by changing height only, and has no heading of its own.
   loiter_radius_m  how far from a held point it circles (0: holds the point)
+  turn_radius_m    the tightest turn it flies between search passes (0: turns
+                   on the spot)
   cruise_mps       its normal airspeed; stall_mps the slowest it can fly
 """
 
@@ -33,6 +35,7 @@ class Airframe:
     autopilot: str = "px4"  # MAVLink dialect: px4 | ardupilot
     hovers: bool = True
     loiter_radius_m: float = 0.0
+    turn_radius_m: float = 0.0
     cruise_mps: float = 0.0
     stall_mps: float = 0.0
 
@@ -45,9 +48,10 @@ class Airframe:
 # also give a mapping: {kind: fixedwing, loiter_radius_m: 50, ...}.
 KINDS = {
     "multirotor": {"hovers": True},
-    # ArduPlane's stock SITL plane (WP_LOITER_RAD 80) at the X8's speeds
-    "fixedwing": {"hovers": False, "loiter_radius_m": 80.0, "cruise_mps": 18.0,
-                  "stall_mps": 13.0},
+    # ArduPlane's stock SITL plane (WP_LOITER_RAD 80) at the X8's speeds; a
+    # turn at cruise and 45 deg of bank: v^2 / (g tan 45) = 33 m
+    "fixedwing": {"hovers": False, "loiter_radius_m": 80.0, "turn_radius_m": 35.0,
+                  "cruise_mps": 18.0, "stall_mps": 13.0},
 }
 
 
