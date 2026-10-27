@@ -646,6 +646,24 @@
               "range": { "type": "string", "enum": [ "unipolar", "bipolar" ] }
             }
           }
+        },
+        // A self-stabilising gimbal on ArduPilot's mount servo outputs
+        // (MNT1_TYPE 7): each axis 1000..2000 us across its travel
+        "gimbal": {
+          "type": "object",
+          "required": [ "id" ],
+          "properties": {
+            "id": { "type": "string" },
+            "roll-channel": { "type": "integer", "minimum": 0, "maximum": 32 },
+            "pitch-channel": { "type": "integer", "minimum": 0, "maximum": 32 },
+            "yaw-channel": { "type": "integer", "minimum": 0, "maximum": 32 },
+            "roll-min-deg": { "type": "number" },
+            "roll-max-deg": { "type": "number" },
+            "pitch-min-deg": { "type": "number" },
+            "pitch-max-deg": { "type": "number" },
+            "yaw-min-deg": { "type": "number" },
+            "yaw-max-deg": { "type": "number" }
+          }
         }
       }
     },

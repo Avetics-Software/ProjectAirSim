@@ -81,6 +81,8 @@ class ArduPlaneApi : public IController {
   static bool ParseServoPacket(const uint8_t* data, size_t size,
                                ServoPacket& packet);
   static float NormalizePwm(uint16_t pwm, OutputRange range);
+  // A mount servo's angle: 1000..2000 us across its travel min..max (deg).
+  static float PwmToAngleDeg(uint16_t pwm, float min_deg, float max_deg);
   // One newline-terminated JSON frame for ArduPilot's JSON backend.
   static std::string FormatFrameState(const FrameState& state);
 
@@ -91,6 +93,17 @@ class ArduPlaneApi : public IController {
     float scale = 1.0f;
   };
 
+  // A self-stabilising gimbal on ArduPilot's mount servo outputs (MNT1_TYPE
+  // 7, BrushlessPWM): roll and pitch from the horizon, yaw from the nose, as
+  // the gimbal actuator takes them. The travel must equal MNT1_*_MIN/MAX, and
+  // the outputs' SERVOn_MIN/MAX 1000/2000.
+  struct GimbalOutputs {
+    std::string id;                  // the gimbal actuator; empty: no gimbal
+    std::array<int, 3> channel{};    // roll, pitch, yaw: SERVOn, 0 = none
+    std::array<float, 3> min_deg{};  // travel
+    std::array<float, 3> max_deg{};
+  };
+
   // Phases of the optional catapult launch for robots that start airborne.
   enum class LaunchPhase { kNone, kHeld, kLaunching, kFlying };
 
@@ -99,6 +112,7 @@ class ArduPlaneApi : public IController {
   void CloseSocket();
   bool ReceiveServoPacket(uint32_t timeout_ms, ServoPacket& packet);
   void ApplyServoPacket(const ServoPacket& packet);
+  void ApplyGimbalOutputs(const ServoPacket& packet);
   float GetLaunchThrottle() const;
   void UpdateLaunch(double now_sec);
   FrameState BuildFrameState(double now_sec) const;
@@ -120,6 +134,7 @@ class ArduPlaneApi : public IController {
   float launch_duration_sec_ = 0.5f;
 
   std::vector<OutputMapping> output_mappings_;  // index = SERVOn - 1
+  GimbalOutputs gimbal_outputs_;
   std::unordered_map<std::string, int> actuator_id_to_output_idx_map_;
 
   // Runtime state

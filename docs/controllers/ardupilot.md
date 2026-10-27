@@ -151,6 +151,7 @@ The state sent to ArduPilot is ground truth: position and velocity in NED from t
 | `send-airspeed` | boolean | Send the airspeed along the body x axis, relative to the scene's wind. Default `true`. |
 | `launch` | object | Optional catapult launch for aircraft that spawn airborne; see below. |
 | `actuator-order` | array | One entry per ArduPilot servo output; the first entry is `SERVO1`. `scale` multiplies the normalized output. `range` is `unipolar` (1000–2000 µs to 0–1, the default for rotor actuators) or `bipolar` (1000–2000 µs to −1–1 around 1500 µs, the default for everything else). |
+| `gimbal` | object | Optional gimbal on ArduPilot's mount outputs. `id` names the robot's `gimbal` actuator. `roll-channel`, `pitch-channel` and `yaw-channel` are the `SERVOn` outputs. `<axis>-min-deg` and `<axis>-max-deg` give each axis's travel. Set `MNT1_TYPE 7` (BrushlessPWM, a self-stabilising gimbal): ArduPilot then sends roll and pitch relative to the horizon and yaw relative to the nose, which is what the gimbal actuator takes. Each output must span `SERVOn_MIN 1000` to `SERVOn_MAX 2000` across exactly that travel, which must equal `MNT1_<AXIS>_MIN/MAX`. ArduPilot is then the gimbal manager, so ground stations steer it with the MAVLink gimbal protocol. |
 
 Actuators forward the normalized outputs to JSBSim through their `jsbsim-cmd` property. In ArduPilot, a high PWM means nose up or roll right. In JSBSim models, positive `fcs/elevator-cmd-norm` usually means nose down, so the elevator needs `"scale": -1.0`.
 

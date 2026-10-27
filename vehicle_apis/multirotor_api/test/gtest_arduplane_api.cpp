@@ -140,3 +140,15 @@ TEST(ArduPlaneApi, OmitsAirspeedWhenDisabled) {
   EXPECT_TRUE(parsed.contains("timestamp"));
   EXPECT_TRUE(parsed.contains("velocity"));
 }
+
+TEST(ArduPlaneApi, DecodesMountServoAngles) {
+  // ArduPilot's mount moves a servo linearly across MNT1_*_MIN..MAX, sent as
+  // SERVOn_MIN..MAX = 1000..2000 us
+  EXPECT_FLOAT_EQ(ArduPlaneApi::PwmToAngleDeg(1000, -90.0f, 25.0f), -90.0f);
+  EXPECT_FLOAT_EQ(ArduPlaneApi::PwmToAngleDeg(2000, -90.0f, 25.0f), 25.0f);
+  EXPECT_NEAR(ArduPlaneApi::PwmToAngleDeg(1500, -160.0f, 160.0f), 0.0f, 1e-4);
+  EXPECT_NEAR(ArduPlaneApi::PwmToAngleDeg(1783, -90.0f, 25.0f), 0.045f, 1e-3);
+  // Beyond the range: at the stops
+  EXPECT_FLOAT_EQ(ArduPlaneApi::PwmToAngleDeg(900, -30.0f, 30.0f), -30.0f);
+  EXPECT_FLOAT_EQ(ArduPlaneApi::PwmToAngleDeg(2100, -30.0f, 30.0f), 30.0f);
+}

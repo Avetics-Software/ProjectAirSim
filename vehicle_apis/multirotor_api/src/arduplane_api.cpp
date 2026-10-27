@@ -35,6 +35,7 @@ constexpr uint16_t kServoPacket32Magic = 29569;
 constexpr size_t kServoPacketHeaderSize = 8;
 
 constexpr double kMetersToFeet = 3.28083989501;
+constexpr float kDegToRad = 3.14159265358979f / 180.0f;
 
 uint16_t ReadU16(const uint8_t* data) {
   return static_cast<uint16_t>(data[0] | (data[1] << 8));
@@ -141,6 +142,29 @@ void ArduPlaneApi::LoadSettings(const Robot& robot) {
   }
 
   control_outputs_.assign(output_mappings_.size(), 0.0f);
+
+  // Optional gimbal on the mount's servo outputs
+  const json gimbal_json = settings_json.value("gimbal", "{ }"_json);
+  if (!gimbal_json.empty()) {
+    gimbal_outputs_.id = gimbal_json.value("id", "");
+    static const char* kAxes[3] = {"roll", "pitch", "yaw"};
+    for (int axis = 0; axis < 3; ++axis) {
+      const std::string name = kAxes[axis];
+      const int channel = gimbal_json.value(name + "-channel", 0);
+      if (channel < 0 || channel > kMaxServoChannels) {
+        throw std::invalid_argument("ArduPlaneApi: gimbal " + name +
+                                    "-channel must be in 0..32");
+      }
+      gimbal_outputs_.channel[axis] = channel;
+      gimbal_outputs_.min_deg[axis] = gimbal_json.value(name + "-min-deg", 0.0f);
+      gimbal_outputs_.max_deg[axis] = gimbal_json.value(name + "-max-deg", 0.0f);
+      if (channel > 0 &&
+          gimbal_outputs_.max_deg[axis] < gimbal_outputs_.min_deg[axis]) {
+        throw std::invalid_argument("ArduPlaneApi: gimbal " + name +
+                                    "-max-deg is below its min");
+      }
+    }
+  }
 }
 
 //---------------------------------------------------------------------------
@@ -159,6 +183,7 @@ void ArduPlaneApi::Reset() {
   last_frame_count_ = 0;
   launch_phase_ = launch_hold_ ? LaunchPhase::kHeld : LaunchPhase::kNone;
   launch_start_sec_ = 0.0;
+  gimbal_state_ = GimbalState{};
 }
 
 void ArduPlaneApi::SetKinematics(const Kinematics* /*kinematics*/) {}
@@ -247,6 +272,12 @@ std::vector<float> ArduPlaneApi::GetControlSignals(
 const IController::GimbalState& ArduPlaneApi::GetGimbalSignal(
     const std::string& /*gimbal_id*/) {
   return gimbal_state_;
+}
+
+float ArduPlaneApi::PwmToAngleDeg(uint16_t pwm, float min_deg, float max_deg) {
+  const float fraction =
+      std::clamp((static_cast<float>(pwm) - 1000.0f) / 1000.0f, 0.0f, 1.0f);
+  return min_deg + fraction * (max_deg - min_deg);
 }
 
 //---------------------------------------------------------------------------
@@ -368,6 +399,28 @@ void ArduPlaneApi::ApplyServoPacket(const ServoPacket& packet) {
     control_outputs_[i] =
         NormalizePwm(packet.pwm[i], mapping.range) * mapping.scale;
   }
+  ApplyGimbalOutputs(packet);
+}
+
+void ArduPlaneApi::ApplyGimbalOutputs(const ServoPacket& packet) {
+  if (gimbal_outputs_.id.empty()) return;
+  float* angles[3] = {&gimbal_state_.roll, &gimbal_state_.pitch,
+                      &gimbal_state_.yaw};
+  for (int axis = 0; axis < 3; ++axis) {
+    const int channel = gimbal_outputs_.channel[axis];
+    // An output ArduPilot isn't driving (0 us, e.g. before the mount starts)
+    // leaves the angle where it was
+    if (channel <= 0 || channel > packet.channel_count) continue;
+    const uint16_t pwm = packet.pwm[channel - 1];
+    if (pwm == 0) continue;
+    *angles[axis] = PwmToAngleDeg(pwm, gimbal_outputs_.min_deg[axis],
+                                  gimbal_outputs_.max_deg[axis]) *
+                    kDegToRad;
+  }
+  // Level-referenced roll and pitch; yaw from the nose
+  gimbal_state_.roll_lock = true;
+  gimbal_state_.pitch_lock = true;
+  gimbal_state_.yaw_lock = false;
 }
 
 float ArduPlaneApi::GetLaunchThrottle() const {
