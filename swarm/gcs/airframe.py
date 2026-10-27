@@ -63,9 +63,19 @@ def load_models(path=MODELS_FILE):
 
 
 def airframe_of(model, models=None):
-    """The Airframe of a models.yml model name (None: the default model)."""
+    """The Airframe of a models.yml model name (None: the default model).
+
+    gcs/ copied alone to a field laptop has no aircraft/models.yml: every drone
+    is then the default (a PX4 multirotor), and another model is an error that
+    says what to copy."""
     model = model or DEFAULT_MODEL
-    models = models or load_models()
+    if models is None:
+        if not os.path.exists(MODELS_FILE):
+            if model == DEFAULT_MODEL:
+                return Airframe()
+            raise ValueError(f"model {model!r}: {MODELS_FILE} not found; copy the swarm's "
+                             "aircraft/ folder next to gcs/ to fly other aircraft")
+        models = load_models()
     entry = models["models"].get(model)
     if entry is None:
         raise ValueError(f"unknown model {model!r} (known: {', '.join(models['models'])})")

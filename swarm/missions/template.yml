@@ -1,0 +1,38 @@
+# Starter mission for a quadrotor: copy this file, give it your own name, edit the steps.
+#
+#   cp missions/template.yml missions/my_mission.yml
+#   python -m gcs.mission missions/my_mission.yml                 # check it, no sim needed
+#   ./run_cesium_sim.sh --qgc                                     # the sim
+#   mission load my_mission                                       # then, in its console:
+#   mission show        # the steps
+#   mission upload      # to the drone (every drone in the file)
+#   mission start       # fly it; each run is logged to runs/
+#
+# Every key and step is explained in docs/features/missions.md.
+
+mission: my_mission      # names this mission's run logs in runs/ (letters, digits, _ . -)
+origin: start            # north/east are metres from where each drone is when you upload;
+                         #   `home`: from the map's home, so a rerun from anywhere flies the same way
+speed: 6                 # m/s for every drone (a drone or a step can set its own)
+
+drones:
+  Drone1:                # a drone's name from config.yml, or its number
+    steps:
+      - takeoff: 30                          # metres above home; only as the first step
+
+      # fly 100 m north at 30 m, facing east on the way, camera 45 deg down, then wait 5 s
+      - goto: {north: 100, east: 0, alt: 30}
+        heading: 90                          # degrees from north; kept until the next heading
+        gimbal: {pitch: -45, yaw: 0}         # on arrival; yaw is from the nose
+        hold: 5                              # seconds at the waypoint
+
+      # keep the camera on a spot while flying past it
+      - look_at: {north: 150, east: 40}      # re-aimed at each later waypoint
+      - goto: {north: 100, east: 80}         # no alt: keeps the last one
+      - look_at: none
+
+      # a compass bearing for the camera, whichever way the drone points
+      - gimbal: {pitch: -60, heading: 180}
+      - goto: {north: 0, east: 80}
+
+      - rtl: true                            # or `land: true`; the last step, nothing after it

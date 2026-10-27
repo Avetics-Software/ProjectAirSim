@@ -1,8 +1,15 @@
 # Swarm commands
 
 One command, or one button, for any group of drones. Every command goes to
-each drone's PX4 over MAVLink, the way QGC's would, so QGC shows what the
-drones are doing and can take over at any time.
+each drone's autopilot (PX4 or ArduPilot) over MAVLink, the way QGC's would, so
+QGC shows what the drones are doing and can take over at any time.
+
+A fixed-wing (the X8) can't hover or turn on the spot, so the commands do the
+nearest thing: `goto` flies there and circles it (several fixed-wings circle the
+same point at different heights), `hold` circles where it is, `heading` is
+refused, `land` needs a mission's landing sequence (fly a
+[mission](missions.md) with a `land` step), and `rtl` returns and circles
+home (or lands, if the mission has a landing). See [aircraft](aircraft.md).
 
 ## Console
 
@@ -12,9 +19,9 @@ a number (`2`), a list (`1,3`) or `all`.
 | Command | Effect |
 |---|---|
 | `all takeoff [ALT]` | Arm and climb to ALT m above home (default 30), each drone on its own [height layer](deconfliction.md) |
-| `2 goto LAT LON [ALT] [HEADING]` | Fly there and hover. Several drones form an east-west line 15 m apart, centred on the point. With HEADING (degrees from north) the drone turns to face it on arrival. `-` for ALT keeps the current height |
-| `2 heading DEG` | Turn in place to face DEG from north |
-| `1,3 hold` / `land` / `rtl` | Hover / land where they are / return home and land |
+| `2 goto LAT LON [ALT] [HEADING]` | Fly there and hover (a fixed-wing circles it). Several drones form an east-west line 15 m apart, centred on the point. With HEADING (degrees from north) the drone turns to face it on arrival. `-` for ALT keeps the current height |
+| `2 heading DEG` | Turn in place to face DEG from north (not a fixed-wing) |
+| `1,3 hold` / `land` / `rtl` | Hover / land where they are / return home and land (a fixed-wing: circle / its mission's landing / return and circle) |
 | `1,3 searcharea ALT SPACING LAT,LON;...` | [Search an area](area-search.md), split between the drones |
 | `all search LAT1 LON1 LAT2 LON2 [ALT] [SPACING]` | The same for a lat/lon box |
 | `status` | Each drone's mode, arming, height, position, position rate and current task |

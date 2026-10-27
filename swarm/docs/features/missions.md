@@ -1,24 +1,111 @@
 # Repeatable missions
 
-A YAML file gives each drone a scripted flight, including aircraft heading
-and camera pitch/yaw. Native PX4 missions execute the steps onboard without
-the laptop timing every move. Tracked in [#32](https://github.com/Avetics-Software/ProjectAirSim/issues/32).
+A YAML file gives each drone a scripted flight: where to fly, the aircraft's
+heading, the camera's pitch and yaw, holds, photos, a landing. The ground
+station turns it into the autopilot's own mission and uploads it, so it flies
+onboard at the autopilot's timing, the same way every run, and keeps flying if
+the link drops. It works with PX4 and ArduPilot drones, quadrotors and
+fixed-wings (the sim's X8). Tracked in [#32](https://github.com/Avetics-Software/ProjectAirSim/issues/32).
 
-Start the simulator with `./run_cesium_sim.sh --qgc --drones 2`, then type in
-the dashboard command box or terminal:
+## Write and fly your own mission
 
-```text
-mission load example
-mission show
-mission upload
-mission start
+**1. Start from a template.** In `swarm/`:
+
+```bash
+cp missions/template.yml missions/my_mission.yml              # a quadrotor
+cp missions/template_fixedwing.yml missions/my_mission.yml    # the X8 (lands on a runway)
 ```
 
-The same commands work on real drones. `missions/example.yml` lists two
-drones; use a file listing only your drone when flying one. `mission upload 1`
-and `mission start 1` select Drone1; no number selects every drone in the
-file. Every selected drone must have a successful upload before start.
-Starting again restarts the uploaded mission at item zero.
+Edit the steps. Every one is commented in the template, and [Format](#format)
+below lists them all. Positions are `north`/`east` metres from where the drone is
+when you upload (`origin: start`), or `lat`/`lon`; heights are above where it
+took off. To read a place off in the sim, click it on the dashboard's minimap,
+or type `status`, which prints each drone's position.
+
+**2. Check it, with no sim.**
+
+```bash
+python -m gcs.mission missions/my_mission.yml                        # for the drones in config.yml
+python -m gcs.mission missions/my_mission.yml --model x8_arduplane --drones 1
+```
+
+It loads the file as the ground station will, then prints what each drone's
+autopilot would be sent (every item, the route's length and time), so you can
+see a quadrotor's and a fixed-wing's missions differ. A mistake stops with a
+message naming the step: `error: ... step 3: unknown speeed`, `a fixed-wing has
+no heading of its own`, `no steps allowed after land or rtl`.
+
+**3. Run it in the sim.**
+
+```bash
+./run_cesium_sim.sh --qgc                         # a PX4 quadrotor, Drone1
+./run_cesium_sim.sh --qgc --model x8_arduplane    # the X8 instead
+```
+
+When the log says `World ready` (the X8 also needs its GPS, about 30 s more),
+type in the terminal or the dashboard's command box:
+
+```text
+mission load my_mission      # a name in missions/, or a path
+mission show                 # the steps, and whether each drone has it uploaded
+mission upload               # to every drone in the file (mission upload 1: Drone1 only)
+mission start                # arms, flies it; mission start 1: Drone1 only
+```
+
+Several drones, or a mix of aircraft: list each drone in the mission file by
+name and give it its `model:` in `config.yml` (see [aircraft](aircraft.md)).
+
+**4. Watch it, and stop it.** The map draws the route and the camera steps, the
+drone's status line shows its mission item, and `mission start` prints the run's
+CSV (5 Hz: position, height, heading, mode, mission item, gimbal angles) in
+`runs/`. `mission stop` stops it (and `Ctrl+H` / the dashboard's HOLD ALL holds
+every drone); see [Repeat and compare](#repeat-and-compare).
+
+**5. Change it and fly again.** Edit the file and `mission load` it again, then
+`mission upload` and `mission start`. A drone ends where it landed, so for the
+next run from the start point reload the world, which puts every drone back:
+`goto 1.413425 103.865 33` (the default spawn; see
+[changing location](../simulation.md#changing-location)). With `origin: home`
+the same file flies the same route from wherever the drones are.
+
+**On real drones** the commands are the same (`./run_real.sh`, then `mission
+load` ...). Check the camera and failsafe settings in the [ground station's
+checklist](../../gcs/README.md#before-flying-it-for-real) first.
+
+### What differs for a fixed-wing
+
+A fixed-wing can't stop or turn on the spot, so the same steps mean a little
+more or less. The checker above reports each case.
+
+| Step | Quadrotor | Fixed-wing (the X8) |
+|---|---|---|
+| `takeoff: H` | climbs in place | launched (the sim's catapult), climbs to H and circles |
+| `goto` | flies there; stops if there is a `hold` | flies through it; `hold`/`wait` make it circle there |
+| `heading` | turns the aircraft | an error: it faces the way it flies |
+| `speed` | ground speed | airspeed (the X8 cruises at 18 m/s, stalls near 12) |
+| `land: true` | lands where it is | an error: give a runway |
+| `land: {north, east, heading}` | lands at that point | flies an approach `approach_m` (400) back at `approach_alt` (30 m), then lands along `heading` |
+| `rtl: true` | returns and lands | returns and circles home (lands if the mission has a landing) |
+| camera steps, `look_at`, `track` | work | work the same |
+
+### With a companion (X)
+
+Give the drone a companion (`--pi-ip`, or `companion:` in `config.yml`) and run
+the X profile for its aircraft: the launch log names it (`Drone1 (x8_arduplane):
+its companion ... should run X's rknn-sim-fw-ardupilot profile`). During a
+mission X stands down while the mission holds the camera, and takes it back for a
+`track` step: see [X and camera ownership](#x-and-camera-ownership).
+`missions/x8_track.yml` is a ready example for the X8.
+
+### If something goes wrong
+
+| You see | Why |
+|---|---|
+| `mission upload failed: ... rejected (MAV_MISSION_RESULT 8)` | The autopilot refused an item's parameter 3. ArduPilot refuses a NaN in an item's parameters 1-4; a gimbal step needs a `pitch` on an ArduPilot drone |
+| `mission start: upload it first` | A drone in the file has no successful upload (`mission show`); a `goto` reload also clears uploads |
+| `PX4 refused (...)` or `ArduPilot refused (...)`, or no arming | The autopilot isn't ready; arming is retried for 60 s. The X8 needs its GPS first (30-45 s after `World ready`) |
+| A fixed-wing won't arm again after a landing | Reload the world (`goto 1.413425 103.865 33`); it is back on the runway with a fresh autopilot |
+| `no drone 'Drone2'` | The mission names a drone `config.yml` doesn't list: add it there, or `--drones 2` to the checker |
 
 ## Format
 
@@ -63,7 +150,8 @@ Camera steps on a `goto` apply on arrival. Put a camera step **before** the
 `goto` to set it for that flight leg. Gimbal travel/slew limits still apply.
 Zoom steps and QGC `.plan` import are not supported in this version.
 
-How PX4 runs the camera steps (the station allows for these):
+How PX4 runs the camera steps (the station allows for these; ArduPilot's
+differences are below):
 
 - **Gimbal control.** PX4 ignores a mission's gimbal commands unless the
   autopilot holds the gimbal, which a mission doesn't claim by itself. Each
@@ -78,6 +166,15 @@ How PX4 runs the camera steps (the station allows for these):
   keeps its headings. **Set it on real drones too.**
 - **End of a mission.** PX4 centres the camera when the mission ends or a
   `look_at` is cleared.
+
+ArduPilot differs in three ways. Its missions can't carry the
+`DO_GIMBAL_MANAGER_CONFIGURE` claim items (it rejects the upload), and it obeys a
+mission's gimbal items whoever holds the gimbal, so the ground station makes the
+hand-overs itself, by command (see below). It refuses a NaN in an item's
+parameters 1-4, so a gimbal step's unused rates are sent as 0 and a gimbal step
+needs a `pitch`. And item 0 of its missions is home, which the station
+accounts for, so item numbers (the run log, the status line) count the same as
+PX4's.
 
 ## X and camera ownership
 
@@ -94,13 +191,18 @@ The `rknn-sim-*` profiles enable these. Older deployed binaries need
 updating too; the laptop cannot confirm this setting through X's current
 UDP protocol.
 
-**Who has the camera:** the mission claims the gimbal for the autopilot right
-after takeoff, and X stands down while the drone is in MISSION mode **and**
-the autopilot holds the gimbal (PX4's `GIMBAL_MANAGER_STATUS`; not yet
-reported counts as holding it). It reads both from PX4 itself, so this holds
-without the ground link. A `track` step gives the gimbal to nobody; X re-claims
-it and tracks as usual until `track: off` (or a `gimbal`/`look_at` step) claims
-it back. The station applies the same rule to the dashboard's controls.
+**Who has the camera:** the mission claims the gimbal for the autopilot (on PX4
+with an item right after takeoff; on ArduPilot the station does it by command
+once the drone is flying the mission), and X stands down while the drone is in
+its mission mode (PX4 AUTO.MISSION, ArduCopter or ArduPlane AUTO) **and** the
+autopilot holds the gimbal (`GIMBAL_MANAGER_STATUS`; not yet reported counts as
+holding it). It reads both from the autopilot itself, so the stand-down holds
+without the ground link (on ArduPilot the hand-overs at `track` steps need the
+link). A `track` step gives the gimbal to nobody; X re-claims it and tracks as
+usual until `track: off` (or a `gimbal`/`look_at` step) claims it back. The
+station applies the same rule to the dashboard's controls. If the autopilot
+restarts (the sim's `goto`), X claims the gimbal and requests its streams again
+when it hears it.
 
 The station cancels the selected track and held jogs before start and blocks
 new manual gimbal/tracking input while the mission holds the camera. Video and heartbeat
@@ -225,6 +327,20 @@ the road after the hand-over, the station sent X `BOX:50` and the click 7.7 s
 later as the car came down the road, and `CANCEL` at `track: off`. With nobody
 steering, the car was in frame 20% of the time: the baseline X has to beat.
 
-Not yet tested: a live Radxa running X through a mission (X's stand-down and
-hand-back were checked against stand-in heartbeats and gimbal status only),
-and real drones.
+Not yet tested: real drones, and X locking onto a target during a `track` step
+on an ArduPilot drone (the hand-overs below were).
+
+The X8 in the sim (2026-10-27, ArduPlane 4.7.2, Cesium ground at Seletar):
+
+| Check | Result |
+|---|---|
+| `missions/x8_circuit.yml`: takeoff, three legs, a runway landing | flown; touched down at 12-14 m/s with a 0.4 m/s sink rate, stopped 12-29 m past the touchdown point, ArduPlane disarmed |
+| `missions/x8_track.yml` with a live Radxa running X (`rknn-sim-fw-ardupilot`) | X's log matched the station's to the millisecond: stood down once the mission was flying, resumed at `track` (15 ms), stood down at `track: off` (5 ms), resumed after the landing |
+| Gimbal steps on ArduPlane | pitch -60 then -30 / yaw 20 reached; X's own pitch jog moved the camera through ArduPlane |
+| A search (`1 search ...`) over 334 m x 334 m at 40 m spacing | all 8 passes flown in the planned order, 91-100% of each covered |
+
+The quadrotor starter, `missions/template.yml` copied to `my_mission.yml` and run
+with the steps above (PX4, same day): 15 items uploaded, 104 s, heading 90 held
+on the legs, the camera at -45° on arrival, the `look_at` aiming it at the spot,
+the compass-bearing step holding 180° while the drone faced 90°, then RTL, the
+landing and HOLD.

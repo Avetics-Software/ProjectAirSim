@@ -1,15 +1,20 @@
-# Simulation guide: PX4 drones in a Cesium world
+# Simulation guide: PX4 and ArduPilot drones in a Cesium world
 
-Flies a PX4 quadrotor with a gimbaled payload camera (GimbalCam) over real-world
-Google 3D tiles streamed through Cesium for Unreal. The default spawn is Seletar
-Airport's runway, Singapore. For what the project is and its other docs, see the
-[README](../README.md).
+Flies PX4 quadrotors and ArduPilot fixed-wings (the Skywalker X8), each with a
+gimbaled payload camera (GimbalCam), over real-world Google 3D tiles streamed
+through Cesium for Unreal. The default spawn is Seletar Airport's runway,
+Singapore. For what the project is and its other docs, see the
+[README](../README.md). To fly your own scripted flight, start with
+[Repeatable missions](features/missions.md#write-and-fly-your-own-mission).
 
 ## Prerequisites
 
 - Unreal Engine 5.7 at `~/UnrealEngine-5.7`, with the Blocks editor built
   (Cesium for Unreal installed in `unreal/Blocks/Plugins/CesiumForUnreal`)
 - PX4-Autopilot SITL built at `~/Documents/PX4-Autopilot`
+- For the X8 (ArduPlane): ArduPilot's SITL built at `~/Documents/ardupilot`
+  (`./waf configure --board sitl && ./waf plane`, ArduPlane 4.7); `ARDUPILOT_DIR`
+  names another checkout
 - Conda env `projectairsim` (Python client, pymavlink, PyYAML)
 - For the spotter: UE's template Mannequin, copied in once with
   `./install_spotter_assets.sh` (then restart the simulator)
@@ -38,6 +43,8 @@ sets the drone on it.
 | `./run_cesium_sim.sh` | Scripted demo at Seletar: take off, climb to 40 m, sweep the gimbal, land |
 | `./run_cesium_sim.sh --qgc` | Load the world and wait; fly and steer the gimbal from QGroundControl or the dashboard window |
 | `./run_cesium_sim.sh --qgc --lat 1.3521 --lon 103.8198 --heading 90` | Same, spawning somewhere else |
+| `./run_cesium_sim.sh --qgc --model x8_arduplane` | The Skywalker X8 fixed-wing (ArduPlane) instead of a quadrotor; see [aircraft](features/aircraft.md). Wait for `World ready` and its GPS (about 30 s), then `1 takeoff 40`, `1 goto LAT LON 40`, `1 hold`, `1 rtl`, or fly a [mission](features/missions.md) |
+| `./run_cesium_sim.sh --qgc --config my_fleet.yml` | A mixed fleet: each drone's `model:` in the file (`quad_px4` or `x8_arduplane`) |
 | `./run_cesium_sim.sh --qgc --spotter` | Also open the spotter window |
 | `./run_cesium_sim.sh --px4-params my.params --pi-ip 192.168.199.73 --qgc` | Your PX4 parameters, plus MAVLink and video for the Raspberry Pi |
 

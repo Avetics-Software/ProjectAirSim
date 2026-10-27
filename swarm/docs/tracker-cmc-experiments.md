@@ -5,7 +5,7 @@ and what it took to improve it: the detector, ByteTrack's matching, and camera
 motion compensation (CMC). The method and tools are in
 [MOT experiments](features/mot-experiments.md). This page is the record of
 the first round of experiments and what they showed. To repeat them yourself, see
-[step by step: run it yourself on the Radxa](features/mot-experiments.md#step-by-step-run-it-yourself-on-the-radxa).
+[step by step: run it yourself on the Radxa](features/mot-experiments.md#1-record).
 
 **Outcome.** The rknn-sim profile now runs **VisDrone + ByteTrack + CMC**:
 `yolov8n_visdrone` at confidence 0.2, ByteTrack with active tracks matched

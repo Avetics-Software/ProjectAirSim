@@ -982,3 +982,81 @@ class MissionControl:
             scores = [track_summaries(p).get(drone) for p in paths]
             print(f"  {drone} tracking: " + " vs ".join(
                 f"in frame {s[0]:.0%}, offset {s[1]:.1f} deg" if s else "none" for s in scores))
+
+
+# ----------------------------------------------------------------------
+# `python -m gcs.mission FILE`: check a mission without the sim
+
+def _item_text(item):
+    frame, command, (p1, p2, p3, p4), lat, lon, alt = item
+    entry = M.enums["MAV_CMD"].get(command)
+    name = entry.name.replace("MAV_CMD_", "") if entry else str(command)
+    if frame == F_MISSION:  # no position: params 5-7 travel in the position fields
+        shown = [p for p in (p1, p2, p3, p4) if not (isinstance(p, float) and math.isnan(p))]
+        return f"{name:<28} {' '.join(f'{p:g}' for p in shown)}"
+    where = f"{lat:.6f}, {lon:.6f}, {alt:g} m"
+    return f"{name:<28} {where}"
+
+
+def main(argv=None):
+    """Load a mission file as the ground station would and print what it would
+    upload to each drone, for that drone's autopilot and airframe. Exits 1 on a
+    mistake in the file."""
+    import argparse
+    import sys
+
+    from .airframe import airframe_of
+    from .fleet import load_fleet
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    parser = argparse.ArgumentParser(
+        prog="python -m gcs.mission", description=main.__doc__,
+        epilog="e.g. python -m gcs.mission missions/x8_circuit.yml --model x8_arduplane")
+    parser.add_argument("file", help="the mission file")
+    parser.add_argument("--config", default=os.path.join(os.path.dirname(here), "config.yml"),
+                        help="the config file whose drones (and their `model:`) the mission "
+                        "is for [swarm/config.yml]")
+    parser.add_argument("--drones", type=int, help="how many drones there are (Drone1..N), "
+                        "if the config file lists fewer")
+    parser.add_argument("--model", help="an aircraft model for every drone "
+                        "(see python aircraft.py --list)")
+    parser.add_argument("--origin", type=float, nargs=2, metavar=("LAT", "LON"),
+                        default=(1.413425, 103.865), help="where north/east offsets start "
+                        "[the Seletar spawn point]")
+    parser.add_argument("--airborne", action="store_true",
+                        help="as if the drones were already in the air")
+    args = parser.parse_args(argv)
+
+    fleet = load_fleet(args.config) if os.path.exists(args.config) else None
+    listed = [(d.name, d.model) for d in fleet.drones] if fleet else []
+    count = args.drones or len(listed) or 4
+    names = [listed[i][0] if i < len(listed) else f"Drone{i + 1}" for i in range(count)]
+    models = [args.model or (listed[i][1] if i < len(listed) else None) for i in range(count)]
+    try:
+        mission = load_mission(args.file, names)
+        print(f"Mission {mission.name}: north/east from "
+              f"{'where each drone is at upload' if mission.origin == 'start' else 'home'}, "
+              f"here {args.origin[0]:.6f}, {args.origin[1]:.6f}")
+        for i in sorted(mission.drones):
+            dm = mission.drones[i]
+            airframe = airframe_of(models[i])
+            build_items(dm, tuple(args.origin), tuple(args.origin), 30.0 if args.airborne else 0.0,
+                        args.airborne, i + 1, airframe=airframe)
+            length = sum(math.hypot((b[0] - a[0]) * EARTH_M_PER_DEG,
+                                    (b[1] - a[1]) * EARTH_M_PER_DEG * math.cos(math.radians(a[0])))
+                         for a, b in zip(dm.route, dm.route[1:]))
+            speed = dm.speed
+            print(f"\n{dm.name} ({airframe.model}, {airframe.label}): {len(dm.steps)} steps, "
+                  f"{len(dm.items)} items, {len(dm.route)} waypoints, {length / 1000:.2f} km"
+                  + (f", about {length / speed / 60:.1f} min at {speed:g} m/s" if speed and length
+                     else "") + f", highest {dm.max_alt:g} m")
+            for n, item in enumerate(dm.items, start=1):
+                print(f"  {n:2d}  {_item_text(item)}")
+    except ValueError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

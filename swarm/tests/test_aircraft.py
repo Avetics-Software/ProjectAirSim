@@ -74,6 +74,19 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(Aircraft("quad_px4").sitl(0).frame, "none_iris")
 
 
+class CopiedGcsTests(unittest.TestCase):
+    """gcs/ alone on a field laptop, without aircraft/models.yml."""
+
+    def test_default_drones_need_no_registry(self):
+        from unittest import mock
+        import gcs.airframe
+        with mock.patch.object(gcs.airframe, "MODELS_FILE", "/nonexistent/models.yml"):
+            self.assertEqual(gcs.airframe.airframe_of(None), Airframe())
+            self.assertEqual(gcs.airframe.airframe_of("quad_px4"), Airframe())
+            with self.assertRaisesRegex(ValueError, "copy the swarm's aircraft/"):
+                gcs.airframe.airframe_of("x8_arduplane")
+
+
 class DialectTests(unittest.TestCase):
     def test_modes_share_the_ground_stations_names(self):
         px4, ap = dialect("px4"), dialect("ardupilot")

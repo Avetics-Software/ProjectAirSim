@@ -1,20 +1,45 @@
 # Swarm
 
-A ground station that plans, flies and watches a swarm of PX4 drones carrying
-gimbal cameras and companion computers running the X vision pipeline. It
-comes with a simulation to develop and test it in: Project AirSim over
-photorealistic Cesium tiles of Singapore (Seletar by default), with moving
-people and vehicles to search for.
+A ground station that plans, flies and watches a swarm of drones, PX4 or
+ArduPilot, quadrotors or fixed-wings, carrying gimbal cameras and companion
+computers running the X vision pipeline. It comes with a simulation to develop
+and test it in: Project AirSim over photorealistic Cesium tiles of Singapore
+(Seletar by default), with moving people and vehicles to search for.
 
 The same ground station code flies the simulated swarm and real drones.
 
 ```bash
-# Simulation: two drones, the first with a Radxa running X
+# Simulation: two PX4 quadrotors, the first with a Radxa running X
 ./run_cesium_sim.sh --qgc --drones 2 --pi-ip 192.168.199.99
+
+# The Skywalker X8 fixed-wing on ArduPlane (a drone's `model:` in config.yml picks its aircraft)
+./run_cesium_sim.sh --qgc --model x8_arduplane
 
 # Real drones, each with its own Radxa: fill in config.yml's drones and mavlink, then
 ./run_real.sh
 ```
+
+## Fly your own mission
+
+A mission is a YAML file of steps (takeoff, goto, gimbal, hold, land ...) that the
+ground station uploads to the autopilot. In `swarm/`:
+
+```bash
+cp missions/template.yml missions/my_mission.yml     # or template_fixedwing.yml for the X8
+python -m gcs.mission missions/my_mission.yml        # check it and see what the drone is sent
+./run_cesium_sim.sh --qgc                            # (--model x8_arduplane for the X8)
+```
+
+then type in the terminal or the dashboard's command box:
+
+```text
+mission load my_mission
+mission upload
+mission start
+```
+
+[Repeatable missions](docs/features/missions.md) has every step, what differs
+for a fixed-wing, working with a companion, and what to do when something goes wrong.
 
 ## Why not just QGroundControl?
 
@@ -41,6 +66,8 @@ ground station never fights QGC for control.
 
 - [Simulation guide](docs/simulation.md): running the sim, its options,
   objects and moving actors, cameras, the spotter, companions, ports
+- [Aircraft](docs/features/aircraft.md): the quadrotor and the X8 fixed-wing,
+  `model:`, how to add one, and how a fixed-wing flies differently
 - [Ground station](gcs/README.md): running it against real drones, the fleet
   file, what to check before flying
 - Features:
@@ -52,8 +79,8 @@ ground station never fights QGC for control.
   [sim to real](docs/features/sim-to-real.md) ·
   [architecture](docs/features/architecture.md)
 - [Roadmap](docs/roadmap.md): what is still missing, in priority order
-- [Repeatable missions](docs/features/missions.md): uploaded flights with aircraft
-  headings, camera pitch/yaw, and per-run logs
+- [Repeatable missions](docs/features/missions.md): write and fly your own,
+  with aircraft headings, camera pitch/yaw, landings and per-run logs
 - [MOT experiments](docs/features/mot-experiments.md): record missions past
   scripted traffic, replay them through X's detector and ByteTrack, score ID
   switches; first results in [tracker and CMC experiments](docs/tracker-cmc-experiments.md)
@@ -70,7 +97,7 @@ ground station never fights QGC for control.
 | `payload_mavlink.py`, `payload_video.py`, `camera_properties.*` | The simulated gimbal camera: MAVLink camera, RTSP video, lens and zoom |
 | `spawned_objects.py`, `moving_actors.py`, `actor_editor.*`, `config_*.yml` | Objects, and people and vehicles moving along roads, to search for |
 | `spotter_control.py`, `shared_frame.py` | The spotter: a person walked around the world, with a first-person view |
-| `missions/` | Mission files (`mission load NAME`), and `scenarios/`: the moving traffic some missions bring |
+| `missions/` | Mission files (`mission load NAME`): `template.yml` and `template_fixedwing.yml` to copy, the X8's `x8_circuit.yml` and `x8_track.yml`, and `scenarios/`: the moving traffic some missions bring |
 | `mission_track.py` | A mission's `track` step in the sim: locks a tracker onto a target and scores every frame |
 | `experiment_recorder.py`, `mot_eval.py`, `cmc_eval.py`, `live_align.py` | Records `record: true` mission runs frame by frame; scores a tracker's ID switches, and its camera motion compensation, against them; lines a live X log up with its recording ([MOT experiments](docs/features/mot-experiments.md)) |
 | `gt_capture.py`, `gt_playback.py` | `--ground-truth`: labelled GimbalCam frames, and a viewer for them |

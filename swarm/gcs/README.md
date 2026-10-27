@@ -1,7 +1,7 @@
 # Swarm ground station
 
 The dashboard, swarm control, deconfliction and companion-computer link from
-the Cesium sim, for real PX4 drones. It reaches the drones only through MAVLink,
+the Cesium sim, for real PX4 or ArduPilot drones. It reaches the drones only through MAVLink,
 their video streams and their companions' UDP, so the sim and real drones run
 the same code:
 
@@ -11,7 +11,9 @@ the same code:
   checks first; `--config FILE` for another), or `python -m gcs --fleet FILE`
 
 Nothing here imports Project AirSim. To use it on a field laptop, copy this
-folder, then:
+folder (and, if any drone is not a PX4 multirotor, `aircraft/models.yml` in an
+`aircraft/` folder beside `gcs/`: only each model's autopilot and capabilities
+are read), then:
 
 ```bash
 pip install -r gcs/requirements.txt    # plus python3-tk on Debian/Ubuntu
@@ -29,7 +31,8 @@ mavlink: udpin:0.0.0.0:14550     # the link carrying every drone (radio, mesh, m
 gcs_sysid: 245                   # our MAVLink system id; not 255, so QGC can share the link
 drones:
   - name: Drone1
-    sysid: 1                     # its PX4's MAV_SYS_ID
+    sysid: 1                     # its autopilot's MAV_SYS_ID (ArduPilot: SYSID_THISMAV)
+    model: quad_px4              # its aircraft (aircraft/models.yml); the default
     video: rtsp://192.168.144.25:8554/main
     companion: 192.168.199.99    # Radxa running X
   - name: Drone2
@@ -37,7 +40,10 @@ drones:
     mavlink: udpin:0.0.0.0:14560 # a drone can have its own link instead
 ```
 
-Every drone needs a unique `MAV_SYS_ID` on its PX4.
+Every drone needs a unique system id on its autopilot. `model:` tells the ground
+station which autopilot it speaks to and what the aircraft can do (a
+fixed-wing circles instead of hovering and has no heading of its own); see
+[aircraft](../docs/features/aircraft.md).
 
 ## What it does on real drones
 
@@ -73,12 +79,16 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
 
 ## Before flying it for real
 
-- **Firmware.** Gimbal control assumes PX4 with its gimbal manager
-  (`MNT_MODE_IN=4`, `MNT_MODE_OUT=2`). An ArduPilot drone, or a gimbal driven
-  directly by the companion (e.g. a DS60), needs checking first.
-- **Set each PX4's own failsafes:** `NAV_DLL_ACT` / `COM_DL_LOSS_T` (link
-  loss), the battery thresholds and `COM_LOW_BAT_ACT`, and upload the
-  geofence. The ground station's responses and separation monitor come on top
+- **Firmware.** Gimbal control goes through the autopilot's gimbal manager:
+  PX4 with `MNT_MODE_IN=4`, `MNT_MODE_OUT=2`, or ArduPilot with a mount that
+  speaks it (the sim's ArduPlane uses `MNT1_TYPE 7`, a self-stabilising PWM
+  gimbal; a real mount's type, travel and stops are yours to check). A gimbal
+  driven directly by the companion (e.g. a DS60) needs checking first. ArduPlane
+  has been flown only in the sim.
+- **Set each autopilot's own failsafes:** PX4's `NAV_DLL_ACT` / `COM_DL_LOSS_T`
+  (link loss), ArduPilot's `FS_GCS_ENABL`, `FS_LONG_ACTN`, `FS_LONG_TIMEOUT`
+  (and `MAV_GCS_SYSID`, the ground station's system id), the battery thresholds
+  and `COM_LOW_BAT_ACT` (PX4) or `BATT_*` (ArduPilot), and upload the geofence. The ground station's responses and separation monitor come on top
   and only work while the link holds; the monitor was tuned on the sim's clean
   GPS (its margins widen with reported GPS inaccuracy). Treat them as advisory,
   not as the safety system.
@@ -96,7 +106,8 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
 | `dashboard.py` | The Tk dashboard window |
 | `mavlink_link.py` | `MavConnection` (a link shared by several drones) and `VehicleLink` (one drone) |
 | `swarm.py`, `search_planner.py` | Swarm commands, area search, deconfliction |
-| `mission.py` | Mission files: checking, conversion to PX4 mission items, upload, start, run logs and comparison |
+| `mission.py` | Mission files: checking, conversion to mission items, upload, start, run logs and comparison; `python -m gcs.mission FILE` checks a file without the sim |
+| `autopilot.py`, `airframe.py` | Where PX4 and ArduPilot differ on MAVLink, and what a drone's aircraft can do (hover or not) |
 | `safety.py`, `safety_panel.py` | Health alerts and responses; the safety drawer (F2) |
 | `companion.py`, `video.py` | X on a companion computer; RTSP video readers |
 | `minimap.py`, `road_routes.py` | The map and its OpenStreetMap roads |

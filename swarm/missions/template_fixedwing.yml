@@ -1,0 +1,33 @@
+# Starter mission for a fixed-wing (the sim's X8): copy this file, give it your own
+# name, edit the legs. A fixed-wing can't stop or turn on the spot, so a mission differs
+# from a quadrotor's: there is no `heading`, a `hold` or `wait` circles, and it lands on
+# a runway you name. docs/features/aircraft.md has the differences.
+#
+#   cp missions/template_fixedwing.yml missions/my_flight.yml
+#   python -m gcs.mission missions/my_flight.yml --model x8_arduplane   # check it, no sim needed
+#   ./run_cesium_sim.sh --qgc --model x8_arduplane                      # the sim
+#   mission load my_flight                                              # then, in its console:
+#   mission upload
+#   mission start       # catapult launch, the legs, the landing
+#
+# The X8 spawns on the Seletar runway (033 degrees): the legs below are along it.
+# North/east from where it starts: 100 m ahead is about north 84, east 54.
+
+mission: my_flight
+origin: start            # north/east: metres from where the aircraft is when you upload
+speed: 18                # m/s airspeed; the X8 cruises at 18 and stalls near 12
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 40                          # height above the runway; launched and climbed to it
+
+      - goto: {north: 587, east: 381, alt: 40}   # 700 m along the runway
+        gimbal: {pitch: -60, yaw: 0}             # camera 60 deg down while it flies this leg
+      - goto: {north: 451, east: 591}            # 250 m to the right; no alt keeps 40 m
+      - goto: {north: -639, east: -117}          # back past the start
+        hold: 20                                 # circle there for 20 s (the radius is the aircraft's)
+
+      # land on the runway where it started, heading 033: an approach 400 m back at 30 m,
+      # then the landing (ArduPlane's own flare). `rtl: true` instead circles home.
+      - land: {north: 0, east: 0, heading: 33, approach_m: 400, approach_alt: 30}
