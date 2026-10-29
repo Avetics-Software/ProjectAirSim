@@ -1,0 +1,14 @@
+# Fleet file for the fixed-wing strike mission (strike_fw.yml).
+#
+#   ./run_cesium_sim.sh --qgc --config config_strike_fw.yml
+#   mission load strike_fw
+#   mission upload
+#   mission start
+#
+# The companion is the Radxa running X's rknn-sim-fw-ardupilot (or -px4)
+# profile. It must be able to reach this laptop's GimbalCam stream; the X
+# profile's INPUT_RTSP names this laptop's address.
+drones:
+  - name: Drone1
+    model: x8_arduplane
+    companion: 192.168.199.99

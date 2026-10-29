@@ -1,0 +1,15 @@
+# Fleet file for the quad strike mission (strike_quad.yml).
+#
+#   ./run_cesium_sim.sh --qgc --config config_strike_quad.yml
+#   mission load strike_quad
+#   mission upload
+#   mission start
+#
+# The companion is the Radxa running X's rknn-sim-quad-px4 (or -ardupilot)
+# profile. It must be able to reach this laptop's GimbalCam stream; the X
+# profile's INPUT_RTSP names this laptop's address. The sim's defaults
+# (swarm, deconfliction, safety, controls) come from config.yml.
+drones:
+  - name: Drone1
+    model: quad_px4        # quad_arducopter for the ArduCopter variant
+    companion: 192.168.199.99

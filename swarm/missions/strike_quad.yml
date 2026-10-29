@@ -1,0 +1,39 @@
+# Strike test, quadrotor (pitch-only camera profile).
+#
+# The quad holds at the Seletar spawn, 50 m up, nose on the runway heading,
+# with TargetVehicle 120 m ahead. `track` hands the camera to X and lets it
+# lock onto the target from ground truth (the same hand-over an operator's
+# click makes); X then owns the gimbal and the target-state estimator runs on
+# the drone's own motion.
+#
+#   ./run_cesium_sim.sh --qgc --drones 1 --model quad_px4 \
+#       --config config.yml --companion <this-laptop-ip>
+#   mission load strike_quad
+#   mission upload
+#   mission start
+#   (with X's rknn-sim-quad-px4 profile running on the companion)
+#
+# Then, in the map-plot client or the dashboard, arm STRIKE. X's strike profile
+# takes over: if the estimate is not yet observable it flies the survey (a
+# lateral/descending move), then hands the run to the strike law. Releasing
+# STRIKE returns the sticks; the mission's hold and RTL continue.
+#
+# Fixed-wing sibling: strike_fw.yml, same target and scenario.
+mission: strike_quad
+origin: home
+speed: 6
+actors: scenarios/strike_targets.yml
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 50
+      # Straight up, then face the runway heading (033) so the target is ahead.
+      - goto: {lat: 1.413425, lon: 103.865000, alt: 50}
+        heading: 33
+      # Point the camera at the target for the hand-over; `track` then gives it
+      # to X, which keeps it centred and starts estimating.
+      - look_at: {lat: 1.414329, lon: 103.865587, alt: 12}
+      - track: {target: TargetVehicle, tracker: x}
+      - hold: 120          # arm STRIKE in this window
+      - rtl: true

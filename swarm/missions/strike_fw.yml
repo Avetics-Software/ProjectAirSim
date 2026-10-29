@@ -1,0 +1,40 @@
+# Strike test, fixed wing (three-axis gimbal profile, the sim's X8).
+#
+# The X8 takes off, flies back to a point 200 m short of TargetVehicle, aims
+# the camera at it, and `track` hands the camera to X. It then circles there
+# (a fixed wing cannot hold), bringing the target in and out of the camera's
+# view; X pans the gimbal to hold it and the estimator accumulates bearings
+# from the circle — the survey the fixed-wing profile relies on.
+#
+#   ./run_cesium_sim.sh --qgc --drones 1 --model x8_arduplane \
+#       --config config.yml --companion <this-laptop-ip>
+#   mission load strike_fw
+#   mission upload
+#   mission start
+#   (with X's rknn-sim-fw-ardupilot or rknn-sim-fw-px4 profile on the companion)
+#
+# Arm STRIKE during the hold. X's profile surveys if the estimate is still
+# poor, then hands the run to the fixed-wing strike law, which dives on the
+# target. The final land step only runs if the strike has not taken the
+# aircraft out of AUTO.
+#
+# The 200 m stand-off is chosen so the target is large enough (>= 50 px) for
+# the sim's ground-truth hand-over at the closest point of the circle. For a
+# longer attack run, move the hold point back along 213 deg and click the
+# target in the Tracker view instead of relying on the auto-lock.
+mission: strike_fw
+origin: home
+speed: 18
+actors: scenarios/strike_targets.yml
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 60
+      - goto: {lat: 1.412822, lon: 103.864608, alt: 60}   # 200 m short of the target
+        gimbal: {pitch: -10, yaw: 0}
+      - look_at: {lat: 1.414329, lon: 103.865587, alt: 12}
+      - track: {target: TargetVehicle, tracker: x}
+      - hold: 120          # circles here; arm STRIKE in this window
+      - land: {lat: 1.413425, lon: 103.865000, heading: 33,
+               approach_m: 400, approach_alt: 30}
