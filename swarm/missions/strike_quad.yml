@@ -1,7 +1,7 @@
 # Strike test, quadrotor (pitch-only camera profile).
 #
 # The quad holds at the Seletar spawn, 50 m up, nose on the runway heading,
-# with TargetVehicle 120 m ahead. `track` hands the camera to X and lets it
+# with TargetVehicle 80 m ahead. `track` hands the camera to X and lets it
 # lock onto the target from ground truth (the same hand-over an operator's
 # click makes); X then owns the gimbal and the target-state estimator runs on
 # the drone's own motion.
@@ -33,7 +33,7 @@ drones:
         heading: 33
       # Point the camera at the target for the hand-over; `track` then gives it
       # to X, which keeps it centred and starts estimating.
-      - look_at: {lat: 1.414329, lon: 103.865587, alt: 12}
+      - look_at: {lat: 1.414028, lon: 103.865392, alt: 12}
       - track: {target: TargetVehicle, tracker: x}
       - hold: 120          # arm STRIKE in this window
       - rtl: true

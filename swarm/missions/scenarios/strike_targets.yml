@@ -4,12 +4,13 @@
 # start` respawns them at their seeded places, so every run sees the same
 # geometry.
 #
-# TargetVehicle sits on the runway about 120 m north-east of the Seletar spawn
-# (heading 033), clear of the ground clutter and inside the fixed forward
-# camera's view from the quad's hover. It stands still for ten minutes before
-# creeping 13 m, so over a strike run it is a static target — the case the
-# sim profiles' TARGET_MOTION: "STATIC" is tuned for. Change it to "MOVING" in
-# X's profile to exercise the constant-velocity fit, and give it a longer path.
+# TargetVehicle sits on the runway about 80 m north-east of the Seletar spawn
+# (heading 033), clear of the ground clutter and close enough that the sim's
+# ground-truth hand-over (>= 50 px in the GimbalCam frame) can lock X onto it.
+# It stands still for ten minutes before creeping 13 m, so over a strike run it
+# is a static target — the case the sim profiles' TARGET_MOTION: "STATIC" is
+# tuned for. Change it to "MOVING" in X's profile to exercise the
+# constant-velocity fit, and give it a longer path.
 #
 # Traffic is a car working along the roads near the target: something for the
 # tracker and, if it is selected instead, for the moving-target path. It is
@@ -25,8 +26,8 @@ actors:
   mode: once
   follow_roads: false
   waypoints:
-  - [1.414329, 103.865587]
-  - [1.414420, 103.865700]
+  - [1.414028, 103.865392]
+  - [1.414126, 103.865455]
 
 - name: Traffic
   kind: vehicle
