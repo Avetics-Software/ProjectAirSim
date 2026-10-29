@@ -1,4 +1,4 @@
-"""The camera panel (F3) and the `sim camera` commands it sends."""
+"""The sim settings panel (F3) and the `sim camera` commands it sends."""
 
 import contextlib
 import io
@@ -79,32 +79,58 @@ class CameraCommandTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_DISPLAY, "needs a display for Tk")
-class CameraPanelTests(unittest.TestCase):
+class SimPanelTests(unittest.TestCase):
     def setUp(self):
-        from gcs.camera_panel import CameraPanel
         from gcs.dashboard import CameraWindows
+        from gcs.sim_panel import SimPanel
         self.sent = []
         self.windows = CameraWindows(on_gimbal=lambda *a: None, on_zoom=lambda *a: None)
         self.windows.add_controls(["Drone1"], self.sent.append)
         self.camera = CameraProperties(os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "camera_properties.json"))
-        self.panel = CameraPanel(self.windows, self.camera)
-        self.windows.add_camera_drawer(self.panel.load)
+        self.time = {"time": None, "sun": "", "timezone": "Asia/Singapore"}
+        self.panel = SimPanel(self.windows, lambda: {**self.camera.settings(), **self.time})
+        self.windows.add_settings_drawer(self.panel.load)
 
     def tearDown(self):
         self.windows.root.destroy()
 
     def test_f3_and_f2_share_the_dock(self):
         w = self.windows
-        w.toggle_camera_drawer()
-        self.assertTrue(w.camera_drawer_open)
+        w.toggle_settings_drawer()
+        self.assertTrue(w.settings_drawer_open)
         w.toggle_drawer(True)  # the safety drawer replaces it
-        self.assertFalse(w.camera_drawer_open)
-        w.toggle_camera_drawer(True)
+        self.assertFalse(w.settings_drawer_open)
+        w.toggle_settings_drawer(True)
         self.assertFalse(w.drawer_open)
 
+    def test_time_tab_sends_sim_time(self):
+        self.windows.toggle_settings_drawer(True)
+        p = self.panel
+        p.show_tab("Time of day")
+        self.assertIn("The map's own sun", p._time_now.cget("text"))
+        self.assertIn("Asia/Singapore", p._time_zone.cget("text"))
+        p._time.set("18:45")
+        p._apply_time()
+        p._date.set("2026-12-21")
+        p._set_time("06:45")  # the Dawn button
+        p._time.set("")
+        p._apply_time()  # no time: nothing sent
+        self.assertEqual(self.sent, ["sim time 18:45", "sim time 06:45 2026-12-21"])
+
+    def test_time_summary_follows_the_sim(self):
+        import datetime as dt
+        self.windows.toggle_settings_drawer(True)
+        self.time.update(time=dt.datetime(2026, 3, 20, 19, 0),
+                         sun="2026-03-20 19:00 +08: sun 4 deg up, azimuth 269 deg (low sun)")
+        self.panel.refresh()
+        self.assertIn("low sun", self.panel._time_now.cget("text"))
+        self.panel.load()  # on opening: the fields show what is set
+        self.assertEqual((self.panel._time.get(), self.panel._date.get()),
+                         ("19:00", "2026-03-20"))
+
     def test_controls_send_sim_camera_commands(self):
-        self.windows.toggle_camera_drawer(True)
+        self.windows.toggle_settings_drawer(True)
         p = self.panel
         self.assertEqual(p._res.get(), "1080p")  # from camera_properties.json
         p._res.set("720p")
@@ -125,12 +151,12 @@ class CameraPanelTests(unittest.TestCase):
         self.assertEqual(len(self.sent), 4)  # not a number: nothing sent
 
     def test_tick_boxes_follow_the_camera(self):
-        self.windows.toggle_camera_drawer(True)
+        self.windows.toggle_settings_drawer(True)
         self.assertFalse(self.panel._noise_on.get())
         self.camera.effects.set_noise(True)  # e.g. typed in the console
         self.panel.refresh()
         self.assertTrue(self.panel._noise_on.get())
-        self.assertIn("noise      2.0 levels", self.panel._now.cget("text"))
+        self.assertIn("noise      2.0 levels", self.panel._camera_now.cget("text"))
 
 
 if __name__ == "__main__":

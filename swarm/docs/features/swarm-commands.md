@@ -57,13 +57,17 @@ The same without typing:
 **F1** opens a sheet of every shortcut, over the camera pane, grouped into
 Camera, Map, Drones and Safety; it lists only the keys that work for the
 selected drone (the companion's keys when it has one). F1 or Esc closes it.
-The buttons with a shortcut (drones, views, Safety, Camera, HOLD ALL, RTL ALL)
+The buttons with a shortcut (drones, views, Safety, Sim, HOLD ALL, RTL ALL)
 show it when the pointer rests on them, and the status panel keeps one line: `F1
-shortcuts  F2 safety and alerts  F3 camera  Ctrl+H hold all  Ctrl+R return all`.
+shortcuts  F2 safety and alerts  F3 sim settings  Ctrl+H hold all  Ctrl+R return all`.
 
-In the sim, **F3** opens the camera drawer where the safety drawer goes (one at
-a time): resolution, aperture, sensor noise, lens distortion and vibration of
-every GimbalCam. See [changing the camera while the sim runs](../simulation.md#changing-the-camera-while-the-sim-runs).
+In the sim, **F3** (or the **Sim** button) opens the sim settings drawer where
+the safety drawer goes (one at a time). Its tabs:
+
+- **Camera:** resolution, aperture, sensor noise, lens distortion and vibration
+  of every GimbalCam. See [changing the camera while the sim runs](../simulation.md#changing-the-camera-while-the-sim-runs).
+- **Time of day:** a time and date at the site, Now, and quick times (dawn,
+  morning, noon, afternoon, dusk, night). See [time of day](../simulation.md#time-of-day).
 
 ## The map and status panel
 

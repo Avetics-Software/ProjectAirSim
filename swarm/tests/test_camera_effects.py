@@ -146,7 +146,7 @@ class NoiseTests(unittest.TestCase):
 
 
 class LiveSwitchingTests(unittest.TestCase):
-    """The camera panel (F3) and `sim camera` turn effects on and off while
+    """The sim settings panel (F3) and `sim camera` turn effects on and off while
     frames are being made."""
 
     def test_distortion_on_off_and_new_coefficients(self):

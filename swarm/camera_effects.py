@@ -3,7 +3,7 @@ Image defects of a real payload camera, added to the sim's clean frames:
 lens distortion, platform vibration and sensor noise. They are set in
 camera_properties.json (lens.distortion_*, platform.vibration_*,
 sensor.noise_*), changed while running by `sim camera ...` and the dashboard's
-camera panel (F3), and applied wherever the frames leave the sim: the RTSP stream
+sim settings panel (F3), and applied wherever the frames leave the sim: the RTSP stream
 and the dashboard, and the experiment and ground-truth recordings.
 
 Distortion and vibration move pixels, so a segmentation image is moved the same

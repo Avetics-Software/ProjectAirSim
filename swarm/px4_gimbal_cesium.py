@@ -543,9 +543,9 @@ GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a ne
   sim camera distortion on|off|K1 [K2 P1 P2 K3]  lens distortion (OpenCV coefficients)
   sim camera vibration on|off|DEG [HZ]  the camera shaking, by an angle at a rate
   sim camera aperture F                 the lens aperture (f-number): depth of field
-                                        (F3 in the dashboard: all of these as a panel)
   sim time [HH:MM|now] [YYYY-MM-DD]     the time of day at the site (--timezone), which
                                         places the sun; without a time, show it
+                                        (F3 in the dashboard: sim camera and time as a panel)
   sim attitude [SECONDS] [N]            log drone N's attitude and its camera's (stabilisation)
   sim tracktest [N] [follow|lock]       fly hard while pointing the gimbal at a ground target,
                                         and measure how well it stays in frame
@@ -631,7 +631,7 @@ def mission_track(session, index, spec, run_id):
 def camera_command(session, args):
     """sim camera res|noise|distortion|vibration|aperture ...: change every
     drone's GimbalCam while the sim runs (the camera_properties.json values are
-    what it starts with). The dashboard's camera panel (F3) sends these too."""
+    what it starts with). The dashboard's sim settings panel (F3) sends these too."""
     usage = ("Usage: sim camera res 720p|1080p|4k|WxH | noise on|off|GAIN_DB [TEMP_C]"
              " | distortion on|off|K1 [K2 P1 P2 K3] | vibration on|off|DEG [HZ] | aperture F")
     payloads = session.station.cameras
@@ -998,6 +998,7 @@ class Session:
         self.zone = site_zone(args.timezone)
         self.site_time = (parse_site_time(args.time, self.zone, args.date)
                           if args.time else None)
+        self.sun_text = ""  # where the sun is at site_time, once set
         # The spotter window runs in its own process, which can't receive camera
         # topics, so its POV frames are passed on through shared memory
         self.pov_frames = (
@@ -1136,7 +1137,13 @@ class Session:
             text += (f". {self.zone.key} is {mismatch:+.1f} h from the sun's time here: "
                      "is it this place's time zone? (--timezone)")
         projectairsim_log().info(f"Time of day {text}")
+        self.sun_text = text
         return text
+
+    def settings(self):
+        """What the sim is set to, for the dashboard's sim settings panel (F3)."""
+        return {**self.camera.settings(), "time": self.site_time, "sun": self.sun_text,
+                "timezone": self.zone.key}
 
     async def _clear_stored_plans(self):
         """Start without a geofence or a mission. PX4 keeps both on disk across
@@ -1395,7 +1402,7 @@ async def main():
             extra_status=lambda: sim_status(session),
             config=config,
             sim_faults=SimFaults(connections, links, session.autopilots),
-            sim_camera=camera,
+            sim_settings=session.settings,
             before_mission=lambda: reset_actors_for_mission(session),
             on_mission_track=lambda i, spec, run_id: mission_track(session, i, spec, run_id),
             on_mission_run=lambda event, mission, run_id, indices: record_mission(

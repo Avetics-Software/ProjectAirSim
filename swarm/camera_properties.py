@@ -106,7 +106,7 @@ class CameraProperties:
             ]
 
     def settings(self):
-        """What the camera is set to now, for the dashboard's camera panel."""
+        """What the camera is set to now, for the dashboard's sim settings panel (F3)."""
         return {"resolution": self.resolution, "aperture_f": self.aperture_f,
                 **self.effects.settings()}
 

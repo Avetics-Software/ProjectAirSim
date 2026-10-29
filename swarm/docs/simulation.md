@@ -437,7 +437,8 @@ Objects and spotter points are absolute lat/lon, so edit
 The sun is wherever the map left it unless a time is given. `--time HH:MM`
 (or `now`) and `--date YYYY-MM-DD` (default today) set the time at the site, in
 `--timezone` (default `Asia/Singapore`), with its daylight saving. While
-running:
+running, use the **Time of day** tab of the sim settings panel (F3): a time
+and date, Now, and quick times from dawn to night. Or type:
 
 | Command | What it does |
 |---|---|
@@ -508,8 +509,8 @@ the video looks like a real payload's. Each is off until enabled:
 ### Changing the camera while the sim runs
 
 `camera_properties.json` is what the camera starts with. While the sim runs,
-change every drone's GimbalCam at once from the **camera panel (F3**, or the
-Camera button in the dashboard) or with these commands, typed in the terminal
+change every drone's GimbalCam at once from the **sim settings panel (F3**, or
+the Sim button in the dashboard, Camera tab) or with these commands, typed in the terminal
 or the dashboard's command box. The panel sends the same commands, so its
 replies show in the messages.
 
