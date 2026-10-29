@@ -77,6 +77,10 @@ bool TimeOfDay::SetLocation(float latitude, float longitude) {
   auto approx_timezone = longitude / 15.0;
   status = status & this->SetDoublePropertyValue(LongitudeName, longitude);
   status = status & this->SetDoublePropertyValue(TimeZone, approx_timezone);
+  // Times are given in the zone above (longitude / 15), which has no daylight
+  // saving. The SunSky's own DST (US dates by default) would otherwise put the
+  // sun an hour behind for half the year.
+  status = status & this->SetBoolPropertyValue(DSTEnableName, false);
   return status;
 }
 
@@ -127,6 +131,17 @@ bool TimeOfDay::SetIntPropertyValue(FName propertyName, int value) {
       FindFProperty<FIntProperty>(sun_sky_->GetClass(), propertyName);
   if (IntProp != NULL) {
     IntProp->SetPropertyValue_InContainer(sun_sky_, value);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+bool TimeOfDay::SetBoolPropertyValue(FName propertyName, bool value) {
+  FBoolProperty* BoolProp =
+      FindFProperty<FBoolProperty>(sun_sky_->GetClass(), propertyName);
+  if (BoolProp != NULL) {
+    BoolProp->SetPropertyValue_InContainer(sun_sky_, value);
   } else {
     return false;
   }

@@ -132,6 +132,8 @@ and mission are cleared: PX4 keeps both on disk across restarts.
 | `--gt-rate HZ` | 2 | Labelled frames saved per second per drone |
 | `--tile-wait SEC` | 90 | Longest time to wait for the ground under the drone to load |
 | `--scene FILE` | | Load a scene from `sim_config/` as-is instead of building one from `--lat/--lon` |
+| `--time HH:MM\|now`, `--date YYYY-MM-DD` | the map's sun, today | Time of day at the site, which places the sun ([Time of day](#time-of-day)) |
+| `--timezone ZONE` | `Asia/Singapore` | The site's time zone (IANA name) for `--time` and `sim time` |
 
 Run `python px4_gimbal_cesium.py --help` for the full list.
 
@@ -429,6 +431,36 @@ QGroundControl afterwards.
 
 Objects and spotter points are absolute lat/lon, so edit
 `config_spawned_objects.yml` and `config_spotter_points.yml` for the new area.
+
+## Time of day
+
+The sun is wherever the map left it unless a time is given. `--time HH:MM`
+(or `now`) and `--date YYYY-MM-DD` (default today) set the time at the site, in
+`--timezone` (default `Asia/Singapore`), with its daylight saving. While
+running:
+
+| Command | What it does |
+|---|---|
+| `sim time 18:45` (`now`, `HH:MM:SS`) | Put the sun where it is at that time today, at the site |
+| `sim time 06:30 2026-12-21` | ... on that date |
+| `sim time` | Show the time set |
+
+The reply says where the sun is, e.g. `2026-03-20 18:45 +08: sun 7 deg up,
+azimuth 269 deg (low sun)`. The time stays set across `goto`, but after moving
+to another country give its zone with `--timezone`: the reply warns when the
+zone is more than 2 h from the sun's time at the place.
+
+The Google tiles are photographs, so their own lighting and shadows don't
+change. What changes is the light on them and on everything the sim draws
+(actors, objects, drones and their shadows) and the sky. The picture dims as
+the sun gets low and goes black within about half an hour of sunset, so dawn
+and dusk can be tested for tracking; night needs lights the map doesn't have.
+
+How it works: Unreal's SunSky places the sun from the home point, a date and a
+clock time in its own zone of longitude / 15 h (UTC+6.92 at Seletar).
+`sun_time.py` converts the site's time to that zone. The SunSky's own
+daylight saving (US dates) is switched off on GIS scenes, otherwise the sun
+runs an hour late between March and November.
 
 ## Camera properties and optical zoom
 
