@@ -31,9 +31,9 @@ drones:
   Drone1:
     steps:
       - takeoff: 60
-      - goto: {lat: 1.412521, lon: 103.864413, alt: 60}   # 200 m short of the target
+      - goto: {lat: 1.413768, lon: 103.865449, alt: 60}   # 200 m short of the target
         gimbal: {pitch: -10, yaw: 0}
-      - look_at: {lat: 1.414028, lon: 103.865392, alt: 12}
+      - look_at: {lat: 1.415268, lon: 103.866441, alt: 12}
       - track: {target: TargetVehicle, tracker: x}
       - hold: 120          # circles here; arm STRIKE in this window
       - land: {lat: 1.413425, lon: 103.865000, heading: 33,

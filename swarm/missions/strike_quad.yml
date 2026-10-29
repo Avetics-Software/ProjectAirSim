@@ -1,10 +1,11 @@
 # Strike test, quadrotor (pitch-only camera profile).
 #
-# The quad holds at the Seletar spawn, 50 m up, nose on the runway heading,
-# with TargetVehicle 80 m ahead. `track` hands the camera to X and lets it
-# lock onto the target from ground truth (the same hand-over an operator's
-# click makes); X then owns the gimbal and the target-state estimator runs on
-# the drone's own motion.
+# The quad holds at a 90 m stand-off from TargetVehicle, which sits on the road
+# at the junction (textured ground, so the pixel tracker can hold it), 50 m up
+# and on the approach heading. `track` hands the camera to X and lets it lock
+# onto the target from ground truth (the same hand-over an operator's click
+# makes); X then owns the gimbal and the target-state estimator runs on the
+# drone's own motion.
 #
 #   ./run_cesium_sim.sh --qgc --drones 1 --model quad_px4 \
 #       --config config.yml --companion <this-laptop-ip>
@@ -28,12 +29,12 @@ drones:
   Drone1:
     steps:
       - takeoff: 50
-      # Straight up, then face the runway heading (033) so the target is ahead.
-      - goto: {lat: 1.413425, lon: 103.865000, alt: 50}
+      # 90 m short of the target, on the road's approach heading (033).
+      - goto: {lat: 1.414593, lon: 103.865995, alt: 50}
         heading: 33
       # Point the camera at the target for the hand-over; `track` then gives it
       # to X, which keeps it centred and starts estimating.
-      - look_at: {lat: 1.414028, lon: 103.865392, alt: 12}
+      - look_at: {lat: 1.415268, lon: 103.866441, alt: 12}
       - track: {target: TargetVehicle, tracker: x}
       - hold: 120          # arm STRIKE in this window
       - rtl: true
