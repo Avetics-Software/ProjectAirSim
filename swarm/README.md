@@ -68,7 +68,9 @@ ground station never fights QGC for control.
 ## Documentation
 
 - [Simulation guide](docs/simulation.md): running the sim, its options,
-  objects and moving actors, cameras, the spotter, companions, ports
+  objects and moving actors, cameras, the spotter, companions
+- [Ports](docs/ports.md): every port per drone and autopilot, and what a
+  companion computer (the Pi) needs to match
 - [Aircraft](docs/features/aircraft.md): the quadrotor and the X8 fixed-wing,
   `model:`, how to add one, and how a fixed-wing flies differently
 - [Ground station](gcs/README.md): running it against real drones, the fleet

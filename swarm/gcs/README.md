@@ -109,6 +109,7 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
 | `mission.py` | Mission files: checking, conversion to mission items, upload, start, run logs and comparison; `python -m gcs.mission FILE` checks a file without the sim |
 | `autopilot.py`, `airframe.py` | Where PX4 and ArduPilot differ on MAVLink, and what a drone's aircraft can do (hover or not) |
 | `safety.py`, `safety_panel.py` | Health alerts and responses; the safety drawer (F2) |
+| `sim_panel.py` | The sim settings drawer (F3): the camera (resolution, aperture, noise, distortion, vibration) and the time of day |
 | `companion.py`, `video.py` | X on a companion computer; RTSP video readers |
 | `minimap.py`, `road_routes.py` | The map and its OpenStreetMap roads |
 | `fleet.py`, `fleet.example.yml` | The fleet file: drones and settings sections |

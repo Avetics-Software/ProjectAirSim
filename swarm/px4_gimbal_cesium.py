@@ -78,6 +78,8 @@ from payload_mavlink import SimCamera, payload_connection
 from payload_video import RtspStreamer, image_to_bgr
 from px4_sitl import Px4Sitl
 from shared_frame import SharedFrameWriter
+from sun_time import (DEFAULT_TIMEZONE, describe_sun, parse_site_time, site_zone, sun_position,
+                      sunsky_time, zone_mismatch_h)
 from moving_actors import ACTORS_HELP, GROUND_TRUTH_KEEP, MovingActorManager
 from spawned_objects import CONSOLE_HELP, ObjectSpawner
 from experiment_recorder import ExperimentRecorder
@@ -250,6 +252,22 @@ def parse_args():
         "--scene",
         help="load this scene config from sim_config/ as-is instead of building "
         "one from --lat/--lon",
+    )
+    parser.add_argument(
+        "--time",
+        metavar="HH:MM|now",
+        help="time of day at the site, which places the sun (default: the map's "
+        "own sun); `sim time` changes it while running",
+    )
+    parser.add_argument(
+        "--date",
+        metavar="YYYY-MM-DD",
+        help="the date for --time (default: today at the site)",
+    )
+    parser.add_argument(
+        "--timezone",
+        default=DEFAULT_TIMEZONE,
+        help=f"the site's time zone, for --time and `sim time` (default {DEFAULT_TIMEZONE})",
     )
     return parser.parse_args()
 
@@ -520,8 +538,14 @@ class SimPayload(DroneCamera):
 
 GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a new place (restarts PX4)
   sim camera res 720p|1080p|4k|WxH      change every GimbalCam's image size (the stream restarts)
-  sim camera noise on|off|GAIN_DB       the camera's sensor noise on or off, or on at a gain (dB)
+  sim camera noise on|off|GAIN_DB [T]   the camera's sensor noise on or off, or on at a gain
+                                        (dB) and sensor temperature (C)
+  sim camera distortion on|off|K1 [K2 P1 P2 K3]  lens distortion (OpenCV coefficients)
+  sim camera vibration on|off|DEG [HZ]  the camera shaking, by an angle at a rate
   sim camera aperture F                 the lens aperture (f-number): depth of field
+  sim time [HH:MM|now] [YYYY-MM-DD]     the time of day at the site (--timezone), which
+                                        places the sun; without a time, show it
+                                        (F3 in the dashboard: sim camera and time as a panel)
   sim attitude [SECONDS] [N]            log drone N's attitude and its camera's (stabilisation)
   sim tracktest [N] [follow|lock]       fly hard while pointing the gimbal at a ground target,
                                         and measure how well it stays in frame
@@ -605,10 +629,13 @@ def mission_track(session, index, spec, run_id):
 
 
 def camera_command(session, args):
-    """sim camera res|noise|aperture ...: change every drone's GimbalCam while
-    the sim runs (the camera_properties.json values are what it starts with)."""
-    usage = "Usage: sim camera res 720p|1080p|4k|WxH | noise on|off|GAIN_DB | aperture F"
+    """sim camera res|noise|distortion|vibration|aperture ...: change every
+    drone's GimbalCam while the sim runs (the camera_properties.json values are
+    what it starts with). The dashboard's sim settings panel (F3) sends these too."""
+    usage = ("Usage: sim camera res 720p|1080p|4k|WxH | noise on|off|GAIN_DB [TEMP_C]"
+             " | distortion on|off|K1 [K2 P1 P2 K3] | vibration on|off|DEG [HZ] | aperture F")
     payloads = session.station.cameras
+    effects = session.camera.effects
     try:
         what, value = args[0].lower(), args[1].lower()
         if what == "res":
@@ -622,22 +649,59 @@ def camera_command(session, args):
         elif what == "noise":
             # The sensor noise camera_effects.py adds to the frames, not the
             # engine's noise (which the sim can only start with)
-            effects = session.camera.effects
             if value in ("on", "off"):
                 effects.set_noise(value == "on")
             else:
-                effects.set_noise(True, gain_db=float(value))
+                temperature = float(args[2]) if len(args) > 2 else None
+                effects.set_noise(True, gain_db=float(value), temperature_c=temperature)
             print("Sensor noise " + (f"{effects.sigma:.1f} levels ({effects.gain_db:g} dB, "
                                      f"{effects.temperature_c:g} C)" if effects.sigma else "off"))
+        elif what == "distortion":
+            if value in ("on", "off"):
+                effects.set_distortion(value == "on")
+            else:
+                effects.set_distortion(True, [float(a) for a in args[1:6]])
+            print("Lens distortion " + ("k1=%g k2=%g p1=%g p2=%g k3=%g" % effects.distortion_coeffs
+                                        if effects.distortion is not None else "off"))
+        elif what == "vibration":
+            if value in ("on", "off"):
+                effects.set_vibration(value == "on")
+            else:
+                hz = float(args[2]) if len(args) > 2 else None
+                effects.set_vibration(True, amplitude_deg=float(value), frequency_hz=hz)
+            print("Vibration " + (f"{effects.vibration_deg:g} deg at {effects.vibration_hz:g} Hz"
+                                  if effects.vibration_deg else "off"))
         elif what == "aperture":
+            f_number = float(value)
+            if f_number <= 0:
+                raise ValueError("the f-number must be above 0")
             for payload in payloads:
-                if not payload.drone.set_aperture(payload.camera.name, float(value)):
+                if not payload.drone.set_aperture(payload.camera.name, f_number):
                     raise ValueError("the sim refused the aperture")
-            print(f"Aperture f/{float(value):g}")
+            session.camera.aperture_f = f_number
+            print(f"Aperture f/{f_number:g}")
         else:
             print(usage)
     except (IndexError, ValueError) as err:
         print(f"{err}\n{usage}" if str(err) and not isinstance(err, IndexError) else usage)
+
+
+def time_command(session, args):
+    """sim time [HH:MM|now] [YYYY-MM-DD]: the time of day at the site, which
+    places the sun; without a time, say what it is."""
+    usage = "Usage: sim time [HH:MM|now] [YYYY-MM-DD]"
+    if not args:
+        print(f"Time of day: {session.site_time:%Y-%m-%d %H:%M %Z}" if session.site_time
+              else "Time of day: the map's own sun (set one with sim time HH:MM)")
+        return
+    if len(args) > 2:
+        print(usage)
+        return
+    try:
+        site_time = parse_site_time(args[0], session.zone, args[1] if len(args) > 1 else None)
+        print(session.set_time(site_time))
+    except (ValueError, RuntimeError) as err:
+        print(f"{err}\n{usage}")
 
 
 async def sim_command(session, line, parts):
@@ -666,6 +730,8 @@ async def sim_command(session, line, parts):
               else "Ground-truth capture is off (start with --ground-truth)")
     elif word == "sim" and len(parts) >= 2 and parts[1] == "camera":
         camera_command(session, parts[2:])
+    elif word == "sim" and len(parts) >= 2 and parts[1] == "time":
+        time_command(session, parts[2:])
     elif word == "sim" and len(parts) >= 2 and parts[1] == "tracktest":
         # sim tracktest [N] [follow|lock]
         args = parts[2:]
@@ -927,6 +993,12 @@ class Session:
         self._labelled_generation = 0  # the actors' reload whose meshes are labelled
         self.spotter = None
         self.loading = False
+        # The time of day at the site (aware datetime), or None for the map's
+        # own sun; set again after every scene load
+        self.zone = site_zone(args.timezone)
+        self.site_time = (parse_site_time(args.time, self.zone, args.date)
+                          if args.time else None)
+        self.sun_text = ""  # where the sun is at site_time, once set
         # The spotter window runs in its own process, which can't receive camera
         # topics, so its POV frames are passed on through shared memory
         self.pov_frames = (
@@ -993,6 +1065,8 @@ class Session:
                             projectairsim_log().warning(f"No ground under {drone.name} yet")
 
             self.world.resume()
+            if self.site_time:
+                self.set_time(self.site_time)
 
             # The drones should come to rest on the ground. Still falling well
             # below the home altitude means one went through tiles that hadn't
@@ -1043,6 +1117,33 @@ class Session:
                 )
         finally:
             self.loading = False
+
+    def set_time(self, site_time):
+        """Put the sun where it is at this site time (aware datetime). Returns
+        a line saying where the sun is."""
+        home = self.world.home_geo_point
+        lat, lon = home["latitude"], home["longitude"]
+        # The SunSky has its own time zone (longitude / 15) and no daylight saving
+        if not self.world.set_sun_position_from_date_time(sunsky_time(site_time, lon)):
+            raise RuntimeError("the sim has no SunSky to move")
+        self.site_time = site_time
+        elevation, azimuth = sun_position(lat, lon, site_time)
+        height = (f"{elevation:.0f} deg up" if elevation >= 0
+                  else f"{-elevation:.0f} deg below the horizon")
+        text = (f"{site_time:%Y-%m-%d %H:%M} {site_time.tzname()}: sun {height}, "
+                f"azimuth {azimuth:.0f} deg ({describe_sun(elevation)})")
+        mismatch = zone_mismatch_h(site_time, lon)
+        if abs(mismatch) > 2.0:
+            text += (f". {self.zone.key} is {mismatch:+.1f} h from the sun's time here: "
+                     "is it this place's time zone? (--timezone)")
+        projectairsim_log().info(f"Time of day {text}")
+        self.sun_text = text
+        return text
+
+    def settings(self):
+        """What the sim is set to, for the dashboard's sim settings panel (F3)."""
+        return {**self.camera.settings(), "time": self.site_time, "sun": self.sun_text,
+                "timezone": self.zone.key}
 
     async def _clear_stored_plans(self):
         """Start without a geofence or a mission. PX4 keeps both on disk across
@@ -1301,6 +1402,7 @@ async def main():
             extra_status=lambda: sim_status(session),
             config=config,
             sim_faults=SimFaults(connections, links, session.autopilots),
+            sim_settings=session.settings,
             before_mission=lambda: reset_actors_for_mission(session),
             on_mission_track=lambda i, spec, run_id: mission_track(session, i, spec, run_id),
             on_mission_run=lambda event, mission, run_id, indices: record_mission(

@@ -53,6 +53,7 @@ class TimeOfDay {
   const FName Day = TEXT("Day");
   const FName Month = TEXT("Month");
   const FName SolarTime = TEXT("SolarTime");
+  const FName DSTEnableName = TEXT("DSTEnable");
 
   SunSkyDefaults sunskydefaults;
   TimeNano tod_sim_clock_start_;  // sim start in local time
@@ -82,6 +83,8 @@ class TimeOfDay {
   bool SetIntPropertyValue(FName propertyName, int value);
 
   int GetIntPropertyValue(FName propertyName, int default_val = 0.0);
+
+  bool SetBoolPropertyValue(FName propertyName, bool value);
 
   bool set(bool is_enabled, const std::string& start_datetime,
            bool is_start_datetime_dst, float celestial_clock_speed,

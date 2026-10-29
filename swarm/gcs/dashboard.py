@@ -251,6 +251,10 @@ class CameraWindows:
         self._safety_button = button(row, "Safety (F2)", self.toggle_drawer)
         self._safety_button.pack(side=tk.RIGHT, padx=(2, 12))
         HoverTip(self._safety_button, "Alerts, drone health, responses, geofence (F2)")
+        # Shown by add_settings_drawer() (the sim's settings)
+        self._settings_button = button(row, "Sim (F3)", self.toggle_settings_drawer)
+        HoverTip(self._settings_button, "Sim settings: every GimbalCam's resolution and image "
+                                        "effects, the time of day (F3)")
         # Strike: the selected drone's companion (X) flies it at the tracked target
         self._strike_button = tk.Button(row, text="STRIKE", command=self._toggle_strike,
                                         fg="white", activeforeground="white", relief=tk.FLAT,
@@ -266,10 +270,16 @@ class CameraWindows:
         self.drawer = tk.Frame(self.root, bg=self.BG, width=self.DRAWER_WIDTH)
         self.drawer.pack_propagate(False)
         self.drawer_open = False
+        # The sim settings drawer (F3) docks in the same place; one is open at a time
+        self.settings_drawer = tk.Frame(self.root, bg=self.BG, width=self.DRAWER_WIDTH)
+        self.settings_drawer.pack_propagate(False)
+        self.settings_drawer_open = False
+        self.on_settings_drawer = None  # called when the settings drawer opens
         self.root.bind_all("<Control-h>", lambda e: self._hold_all())
         self.root.bind_all("<Control-r>", lambda e: self._rtl_all())
         self.root.bind_all("<F1>", lambda e: self._toggle_help())
         self.root.bind_all("<F2>", lambda e: self.toggle_drawer())
+        self.root.bind_all("<F3>", lambda e: self.on_settings_drawer and self.toggle_settings_drawer())
         self.root.bind_all("<F9>", lambda e: self.on_f9 and self.on_f9())
 
         # Row 2: flight buttons
@@ -429,12 +439,35 @@ class CameraWindows:
         """Open or close the safety drawer at the right of the cameras."""
         show = not self.drawer_open if show is None else show
         if show and not self.drawer_open:
+            self.toggle_settings_drawer(False)
             self.drawer.pack(side=tk.RIGHT, fill=tk.Y, before=self.label)
         elif not show and self.drawer_open:
             self.drawer.pack_forget()
             self.set_fence_drawing(False)  # map clicks set targets again
         self.drawer_open = show
         self._safety_button.configure(bg=self.ACCENT if show else self.FIELD)
+        self._seq += 1
+
+    def add_settings_drawer(self, on_open):
+        """Offer the sim settings drawer (F3): its button, and on_open() called
+        each time it opens, to show the current settings."""
+        self.on_settings_drawer = on_open
+        self._settings_button.pack(side=tk.RIGHT, padx=2, after=self._safety_button)
+
+    def toggle_settings_drawer(self, show=None):
+        """Open or close the sim settings drawer at the right of the cameras."""
+        if not self.on_settings_drawer:
+            return
+        show = not self.settings_drawer_open if show is None else show
+        if show and not self.settings_drawer_open:
+            self.toggle_drawer(False)
+            self.settings_drawer.pack(side=tk.RIGHT, fill=tk.Y, before=self.label)
+            self.settings_drawer_open = True
+            self.on_settings_drawer()
+        elif not show and self.settings_drawer_open:
+            self.settings_drawer.pack_forget()
+        self.settings_drawer_open = show
+        self._settings_button.configure(bg=self.ACCENT if show else self.FIELD)
         self._seq += 1
 
     def _toggle_help(self):
@@ -859,8 +892,9 @@ class CameraWindows:
         for line in self.status_lines:
             lines.append(line if isinstance(line, tuple) else (line, (235, 235, 235)))
         grey = (150, 150, 150)
-        lines += [("", grey), ("F1 shortcuts   F2 safety and alerts   Ctrl+H hold all   "
-                               "Ctrl+R return all", grey)]
+        lines += [("", grey), ("F1 shortcuts   F2 safety and alerts   "
+                               + ("F3 sim settings   " if self.on_settings_drawer else "")
+                               + "Ctrl+H hold all   Ctrl+R return all", grey)]
         for i, (line, colour) in enumerate(lines):
             if top + 22 * i > y + h - 6:
                 break
@@ -889,6 +923,8 @@ class CameraWindows:
                       ("Y", "yaw lock / follow" + ("  (lock on)" if self.yaw_lock else "")),
                       ("Wheel, + / -", "zoom the pane under the pointer"),
                       ("V, click small view", "swap GimbalCam / ChaseCam")]
+        if self.on_settings_drawer:
+            camera.append(("F3", "sim settings: camera, time of day"))
         groups = [
             ("Camera", camera),
             ("Map", [("Click", "set the selected drone's target"),
