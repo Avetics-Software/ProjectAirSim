@@ -2,7 +2,8 @@
 Image defects of a real payload camera, added to the sim's clean frames:
 lens distortion, platform vibration and sensor noise. They are set in
 camera_properties.json (lens.distortion_*, platform.vibration_*,
-sensor.noise_*) and applied wherever the frames leave the sim: the RTSP stream
+sensor.noise_*), changed while running by `sim camera ...` and the dashboard's
+camera panel (F3), and applied wherever the frames leave the sim: the RTSP stream
 and the dashboard, and the experiment and ground-truth recordings.
 
 Distortion and vibration move pixels, so a segmentation image is moved the same
@@ -37,16 +38,17 @@ class CameraEffects:
     def __init__(self, props, seed=0):
         """props: the camera_properties.json dict."""
         lens, platform, sensor = (props.get(k, {}) for k in ("lens", "platform", "sensor"))
-        self.distortion = None
-        if lens.get("distortion_enabled"):
-            # OpenCV's model: a point of the ideal image lands at the distorted one
-            self.distortion = np.array([float(lens.get(k, 0.0)) for k in
-                                        ("distortion_k1", "distortion_k2", "distortion_p1",
-                                         "distortion_p2", "distortion_k3")])
-        self.vibration_deg = self.vibration_hz = 0.0
-        if platform.get("vibration_enabled"):
-            self.vibration_deg = float(platform.get("vibration_amplitude_deg", 0.01))
-            self.vibration_hz = float(platform.get("vibration_frequency_hz", 30.0))
+        # The settings are kept while an effect is off, for turning it back on
+        # OpenCV's model: a point of the ideal image lands at the distorted one
+        self.distortion_coeffs = tuple(float(lens.get(k, 0.0)) for k in
+                                       ("distortion_k1", "distortion_k2", "distortion_p1",
+                                        "distortion_p2", "distortion_k3"))
+        self.distortion = None  # the coefficients in use, None when off
+        self.set_distortion(bool(lens.get("distortion_enabled")))
+        self.vibration_amplitude_deg = float(platform.get("vibration_amplitude_deg", 0.01))
+        self.vibration_hz = float(platform.get("vibration_frequency_hz", 30.0))
+        self.vibration_deg = 0.0  # the amplitude in use, 0 when off
+        self.set_vibration(bool(platform.get("vibration_enabled")))
         self.gain_db = float(sensor.get("noise_gain_db", 6.0))
         self.temperature_c = float(sensor.get("noise_temperature_c", 25.0))
         self.sigma = 0.0
@@ -82,6 +84,33 @@ class CameraEffects:
         self._pool = None
         self.sigma = noise_sigma_levels(self.gain_db, self.temperature_c) if enabled else 0.0
 
+    def set_distortion(self, enabled, coeffs=None):
+        """Turn the lens distortion on or off, optionally with new coefficients
+        (k1, k2, p1, p2, k3; fewer leave the rest at 0)."""
+        if coeffs is not None:
+            coeffs = [float(c) for c in coeffs][:5]
+            self.distortion_coeffs = tuple(coeffs + [0.0] * (5 - len(coeffs)))
+        self.distortion = np.array(self.distortion_coeffs) if enabled else None
+
+    def set_vibration(self, enabled, amplitude_deg=None, frequency_hz=None):
+        """Turn the vibration on or off, optionally at another amplitude or rate."""
+        if amplitude_deg is not None:
+            self.vibration_amplitude_deg = float(amplitude_deg)
+        if frequency_hz is not None:
+            self.vibration_hz = float(frequency_hz)
+        self.vibration_deg = self.vibration_amplitude_deg if enabled else 0.0
+
+    def settings(self):
+        """Every setting, on or off, for a control panel."""
+        return {
+            "distortion": self.distortion is not None, "distortion_coeffs": self.distortion_coeffs,
+            "vibration": self.vibration_deg > 0.0,
+            "vibration_amplitude_deg": self.vibration_amplitude_deg,
+            "vibration_hz": self.vibration_hz,
+            "noise": self.sigma > 0.0, "noise_gain_db": self.gain_db,
+            "noise_temperature_c": self.temperature_c, "noise_sigma": self.sigma,
+        }
+
     def vibration_px(self, t_sec, hfov_deg, width):
         """The (dx, dy) shift in pixels at sim time t_sec: the camera shaking
         by `vibration_deg`, at `vibration_hz` sideways and a little off that
@@ -94,11 +123,11 @@ class CameraEffects:
         return (amplitude * math.sin(w * t_sec + self._phase[0]),
                 amplitude * math.sin(1.31 * w * t_sec + self._phase[1]))
 
-    def _distortion_map(self, width, height, hfov_deg):
+    def _distortion_map(self, distortion, width, height, hfov_deg):
         """Where each pixel of the distorted image comes from in the ideal one.
         Worked out by undistorting a coarse grid, then interpolated up to a
         full-size map; the lens model only ever goes ideal -> distorted."""
-        key = (width, height, round(hfov_deg, 1))
+        key = (tuple(distortion), width, height, round(hfov_deg, 1))
         cached = self._maps.get(key)
         if cached is not None:
             return cached
@@ -109,7 +138,7 @@ class CameraEffects:
         us, vs = np.linspace(0, width - 1, gw), np.linspace(0, height - 1, gh)
         grid = np.stack(np.meshgrid(us, vs), -1).reshape(-1, 1, 2)
         ideal = cv2.undistortPoints(
-            grid, k, self.distortion,
+            grid, k, distortion,
             criteria=(cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 30, 1e-9),
         ).reshape(gh, gw, 2)
         coarse_x = (ideal[..., 0] * fx + cx).astype(np.float32)
@@ -127,8 +156,9 @@ class CameraEffects:
     def _warp(self, image, hfov_deg, shift, interpolation, border):
         h, w = image.shape[:2]
         dx, dy = shift
-        if self.distortion is not None:
-            map_x, map_y = self._distortion_map(w, h, hfov_deg)
+        distortion = self.distortion  # once: the panel can change it meanwhile
+        if distortion is not None:
+            map_x, map_y = self._distortion_map(distortion, w, h, hfov_deg)
             if dx or dy:
                 map_x, map_y = map_x - dx, map_y - dy
             return cv2.remap(image, map_x, map_y, interpolation,

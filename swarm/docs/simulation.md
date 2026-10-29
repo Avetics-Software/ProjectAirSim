@@ -475,14 +475,23 @@ the video looks like a real payload's. Each is off until enabled:
 
 ### Changing the camera while the sim runs
 
-`camera_properties.json` is what the camera starts with. In the terminal, for
-every drone's GimbalCam at once:
+`camera_properties.json` is what the camera starts with. While the sim runs,
+change every drone's GimbalCam at once from the **camera panel (F3**, or the
+Camera button in the dashboard) or with these commands, typed in the terminal
+or the dashboard's command box. The panel sends the same commands, so its
+replies show in the messages.
 
 | Command | What it does |
 |---|---|
 | `sim camera res 720p` (`1080p`, `4k`, `WxH`) | The render size of the scene and segmentation images; the RTSP stream restarts at the new size (players reconnect after a second or so). Recordings in progress stop writing frames, so start a new run. A later `goto` keeps the new size |
-| `sim camera noise on` / `off` / `GAIN_DB` | The sensor noise above, on or off, or on at a gain |
-| `sim camera aperture F` | The f-number, which changes the depth of field only (exposure stays automatic) |
+| `sim camera noise on` / `off` / `GAIN_DB [TEMP_C]` | The sensor noise above, on or off, or on at a gain and sensor temperature |
+| `sim camera distortion on` / `off` / `K1 [K2 P1 P2 K3]` | The lens distortion above, on or off, or on with new coefficients (missing ones are 0) |
+| `sim camera vibration on` / `off` / `DEG [HZ]` | The vibration above, on or off, or on at an amplitude and rate |
+| `sim camera aperture F` | The f-number, which changes the depth of field only (exposure stays automatic). The sim starts at f/2; `lens.aperture_f` in the file isn't applied |
+
+In the panel, ticking an effect turns it on or off with the settings it has;
+**Apply** sends the typed settings and turns it on. The tick boxes and the
+**Now** summary follow commands typed in the console too.
 
 Expect one odd frame at the switch (still the old size, or black). That makes a resolution or noise sweep one flight: change it, fly the mission
 again, and score each run with `mot_eval.py`.
@@ -754,15 +763,10 @@ there are and their companions; the rest of the file is for real drones.
 
 ## Ports
 
-| Port | Used by |
-|---|---|
-| UDP 14550 ← 18570 (+N) | PX4 ↔ QGroundControl (drone N+1 of a swarm) |
-| UDP 14030 ← 14280 (+N) | PX4 ↔ this script (gimbal, MAVLink camera, swarm commands) |
-| TCP 4560 (+N) | PX4 ↔ simulator |
-| UDP 15540, 15541 ← 14590, 14591 (+10N) | PX4 ↔ companion computer (with `--pi-ip`, or `companion:` in the config) |
-| UDP 5556, TCP 8554 on the companion | Dashboard → X commands, X's tracker video |
-| TCP 8554 | RTSP video |
-| TCP 8989 / 8990 | Simulator API |
+[Ports](ports.md) lists every port per drone, for PX4 and ArduPilot, and what
+a companion computer needs: X listens on UDP 15540 and 15541 for MAVLink, takes
+the camera from `rtsp://<laptop>:8554/gimbal[N]`, and the dashboard reaches it
+on UDP 5556. The simulator API is TCP 8989/8990, RTSP is TCP 8554.
 
 ## Logs and disk space
 

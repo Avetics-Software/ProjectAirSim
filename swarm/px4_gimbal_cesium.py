@@ -520,8 +520,12 @@ class SimPayload(DroneCamera):
 
 GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a new place (restarts PX4)
   sim camera res 720p|1080p|4k|WxH      change every GimbalCam's image size (the stream restarts)
-  sim camera noise on|off|GAIN_DB       the camera's sensor noise on or off, or on at a gain (dB)
+  sim camera noise on|off|GAIN_DB [T]   the camera's sensor noise on or off, or on at a gain
+                                        (dB) and sensor temperature (C)
+  sim camera distortion on|off|K1 [K2 P1 P2 K3]  lens distortion (OpenCV coefficients)
+  sim camera vibration on|off|DEG [HZ]  the camera shaking, by an angle at a rate
   sim camera aperture F                 the lens aperture (f-number): depth of field
+                                        (F3 in the dashboard: all of these as a panel)
   sim attitude [SECONDS] [N]            log drone N's attitude and its camera's (stabilisation)
   sim tracktest [N] [follow|lock]       fly hard while pointing the gimbal at a ground target,
                                         and measure how well it stays in frame
@@ -605,10 +609,13 @@ def mission_track(session, index, spec, run_id):
 
 
 def camera_command(session, args):
-    """sim camera res|noise|aperture ...: change every drone's GimbalCam while
-    the sim runs (the camera_properties.json values are what it starts with)."""
-    usage = "Usage: sim camera res 720p|1080p|4k|WxH | noise on|off|GAIN_DB | aperture F"
+    """sim camera res|noise|distortion|vibration|aperture ...: change every
+    drone's GimbalCam while the sim runs (the camera_properties.json values are
+    what it starts with). The dashboard's camera panel (F3) sends these too."""
+    usage = ("Usage: sim camera res 720p|1080p|4k|WxH | noise on|off|GAIN_DB [TEMP_C]"
+             " | distortion on|off|K1 [K2 P1 P2 K3] | vibration on|off|DEG [HZ] | aperture F")
     payloads = session.station.cameras
+    effects = session.camera.effects
     try:
         what, value = args[0].lower(), args[1].lower()
         if what == "res":
@@ -622,18 +629,37 @@ def camera_command(session, args):
         elif what == "noise":
             # The sensor noise camera_effects.py adds to the frames, not the
             # engine's noise (which the sim can only start with)
-            effects = session.camera.effects
             if value in ("on", "off"):
                 effects.set_noise(value == "on")
             else:
-                effects.set_noise(True, gain_db=float(value))
+                temperature = float(args[2]) if len(args) > 2 else None
+                effects.set_noise(True, gain_db=float(value), temperature_c=temperature)
             print("Sensor noise " + (f"{effects.sigma:.1f} levels ({effects.gain_db:g} dB, "
                                      f"{effects.temperature_c:g} C)" if effects.sigma else "off"))
+        elif what == "distortion":
+            if value in ("on", "off"):
+                effects.set_distortion(value == "on")
+            else:
+                effects.set_distortion(True, [float(a) for a in args[1:6]])
+            print("Lens distortion " + ("k1=%g k2=%g p1=%g p2=%g k3=%g" % effects.distortion_coeffs
+                                        if effects.distortion is not None else "off"))
+        elif what == "vibration":
+            if value in ("on", "off"):
+                effects.set_vibration(value == "on")
+            else:
+                hz = float(args[2]) if len(args) > 2 else None
+                effects.set_vibration(True, amplitude_deg=float(value), frequency_hz=hz)
+            print("Vibration " + (f"{effects.vibration_deg:g} deg at {effects.vibration_hz:g} Hz"
+                                  if effects.vibration_deg else "off"))
         elif what == "aperture":
+            f_number = float(value)
+            if f_number <= 0:
+                raise ValueError("the f-number must be above 0")
             for payload in payloads:
-                if not payload.drone.set_aperture(payload.camera.name, float(value)):
+                if not payload.drone.set_aperture(payload.camera.name, f_number):
                     raise ValueError("the sim refused the aperture")
-            print(f"Aperture f/{float(value):g}")
+            session.camera.aperture_f = f_number
+            print(f"Aperture f/{f_number:g}")
         else:
             print(usage)
     except (IndexError, ValueError) as err:
@@ -1301,6 +1327,7 @@ async def main():
             extra_status=lambda: sim_status(session),
             config=config,
             sim_faults=SimFaults(connections, links, session.autopilots),
+            sim_camera=camera,
             before_mission=lambda: reset_actors_for_mission(session),
             on_mission_track=lambda i, spec, run_id: mission_track(session, i, spec, run_id),
             on_mission_run=lambda event, mission, run_id, indices: record_mission(

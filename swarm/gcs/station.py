@@ -28,6 +28,7 @@ from .minimap import MiniMap, road_segments
 from .mission import MISSION_HELP, MissionControl
 from .fleet import Fleet
 from .safety import CRITICAL, WARNING, SafetyMonitor, fence_check
+from .camera_panel import CameraPanel
 from .safety_panel import SafetyPanel, alert_line
 from .swarm import SWARM_HELP, SwarmControl
 from .video import VideoStream
@@ -148,6 +149,8 @@ class GroundStation:
       (gcs.fleet.Fleet from the config file); defaults if None.
     sim_faults: the sim's fault injection (cut_link, is_cut, set_battery,
       reset), for the safety panel's Sim tab.
+    sim_camera: the sim's camera properties (`settings()`), for the camera
+      panel (F3), which sends `sim camera ...` commands.
     before_mission: callable (sync or async) run before each `mission start`,
       e.g. the sim resetting its moving actors so runs repeat.
     run_dir: where mission runs are logged [runs/ next to the gcs package].
@@ -161,7 +164,7 @@ class GroundStation:
     def __init__(self, links, make_camera, companions=None, home=None, config=None,
                  extra_commands=None, extra_help="", extra_objects=None, extra_status=None,
                  sim_faults=None, before_mission=None, run_dir=None, on_mission_track=None,
-                 on_mission_run=None):
+                 on_mission_run=None, sim_camera=None):
         self.links = links
         self.extra_commands = extra_commands
         self.extra_help = extra_help
@@ -203,6 +206,10 @@ class GroundStation:
         self.panel = SafetyPanel(self.windows, self, sim_faults)
         if sim_faults:
             self.windows.on_f9 = lambda: self.panel.open("Sim")
+        self.camera_panel = None
+        if sim_camera:
+            self.camera_panel = CameraPanel(self.windows, sim_camera)
+            self.windows.add_camera_drawer(self.camera_panel.load)
         self.home = None
         self._fixed_home = home  # (lat, lon) from the fleet file, or None
         self._tracker_frame_time = 0.0
@@ -402,6 +409,8 @@ class GroundStation:
         self.safety.evaluate()
         self.windows.alert_line = alert_line(self.safety)
         self.panel.refresh()
+        if self.camera_panel:
+            self.camera_panel.refresh()
 
     async def _run_safety(self, period=0.5):
         while True:

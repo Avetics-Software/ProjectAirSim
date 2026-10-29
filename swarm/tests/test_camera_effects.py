@@ -145,6 +145,42 @@ class NoiseTests(unittest.TestCase):
         self.assertTrue((flat == 128).all())
 
 
+class LiveSwitchingTests(unittest.TestCase):
+    """The camera panel (F3) and `sim camera` turn effects on and off while
+    frames are being made."""
+
+    def test_distortion_on_off_and_new_coefficients(self):
+        img = dot_at(560, 40)
+        effects = CameraEffects({})
+        effects.set_distortion(True, [-0.3])
+        self.assertEqual(effects.distortion_coeffs, (-0.3, 0.0, 0.0, 0.0, 0.0))
+        barrel = brightest(effects.apply(img, HFOV))
+        self.assertGreater(math.dist(barrel, (560, 40)), 5)
+        effects.set_distortion(True, [-0.1])  # a new map, not the cached one
+        milder = brightest(effects.apply(img, HFOV))
+        self.assertLess(math.dist(milder, (560, 40)), math.dist(barrel, (560, 40)))
+        effects.set_distortion(False)
+        self.assertIs(effects.apply(img, HFOV), img)
+        self.assertEqual(effects.distortion_coeffs[0], -0.1)  # kept for turning it back on
+
+    def test_vibration_keeps_its_settings_while_off(self):
+        effects = CameraEffects(VibrationTests.PROPS)
+        effects.set_vibration(False)
+        self.assertEqual(effects.vibration_px(0.01, HFOV, W), (0.0, 0.0))
+        effects.set_vibration(True)
+        self.assertEqual(effects.vibration_deg, 0.1)
+        effects.set_vibration(True, amplitude_deg=0.5, frequency_hz=3.0)
+        self.assertEqual((effects.vibration_deg, effects.vibration_hz), (0.5, 3.0))
+
+    def test_settings_report_everything(self):
+        effects = CameraEffects({"sensor": {"noise_enabled": True, "noise_gain_db": 12.0}})
+        s = effects.settings()
+        self.assertTrue(s["noise"])
+        self.assertFalse(s["distortion"] or s["vibration"])
+        self.assertEqual(s["noise_gain_db"], 12.0)
+        self.assertEqual(CameraProperties().settings()["resolution"], (1280, 720))
+
+
 class PropertiesTests(unittest.TestCase):
     def test_resolution_names_and_sizes(self):
         self.assertEqual(parse_resolution("1080p"), (1920, 1080))

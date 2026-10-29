@@ -62,6 +62,9 @@ class CameraProperties:
             self.focal_max_mm = self.focal_min_mm * float(zoom.get("optical_zoom_max", 10.0))
         self.focus_distance_m = lens.get("focus_distance_m")
         self.chromatic_aberration = props.get("ue_overrides", {}).get("chromatic_aberration")
+        # The sim's own starting f-number (core_sim's CameraSettings); lens.aperture_f
+        # is not applied at load, only by `sim camera aperture`
+        self.aperture_f = 2.0
         # Lens distortion, vibration and noise are added to the frames afterwards
         self.effects = CameraEffects(props)
 
@@ -101,6 +104,11 @@ class CameraProperties:
                     "rand-density": overrides.get("ue_noise_rand_density", 2.0),
                 }
             ]
+
+    def settings(self):
+        """What the camera is set to now, for the dashboard's camera panel."""
+        return {"resolution": self.resolution, "aperture_f": self.aperture_f,
+                **self.effects.settings()}
 
     def describe(self):
         return (

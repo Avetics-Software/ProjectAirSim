@@ -28,6 +28,7 @@ and extend: new search patterns, detection layers, ReID, safety checks.
 | `swarm.py` | Swarm commands, height layers, crossing check, separation monitor |
 | `safety.py` | `SafetyMonitor`: health rules, alerts, responses (low battery, lost link); the fence check |
 | `safety_panel.py` | The safety drawer (F2): alerts, health, responses, geofence, sim faults |
+| `camera_panel.py` | The camera drawer (F3, sim only): every GimbalCam's resolution, aperture, noise, distortion and vibration, as `sim camera` commands |
 | `search_planner.py` | Splitting an area into balanced lawnmower blocks; route crossings |
 | `mavlink_link.py` | `MavConnection` (one link, shared by the drones on it) and `VehicleLink` (one drone: telemetry, commands, missions, gimbal, zoom) |
 | `autopilot.py` | Where PX4 and ArduPilot differ on MAVLink (modes, parameters, mission numbering, failsafe and fence parameters): `VehicleLink.ap` |
