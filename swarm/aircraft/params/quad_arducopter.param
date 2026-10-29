@@ -1,0 +1,37 @@
+# The swarm quad's ArduCopter parameters, after ArduPilot's stock SITL copter
+# (aircraft/models.yml lists the order; later files win). Names are ArduPilot 4.7's.
+# Start from the tuning ArduPilot ships for Project AirSim's quad (airsim-quadX.parm),
+# and tune from there once it flies.
+
+FRAME_CLASS      1       # quad
+FRAME_TYPE       1       # X
+
+# Motors on outputs 1-4, as models.yml's actuator-order (aircraft.py --audit checks)
+SERVO1_FUNCTION  33      # motor 1
+SERVO2_FUNCTION  34
+SERVO3_FUNCTION  35
+SERVO4_FUNCTION  36
+
+# The sim steps at 333 Hz at most (its 3 ms clock), less when busy rendering (200-330
+# Hz seen), and ArduCopter refuses to arm when its main loop runs under 90% of
+# SCHED_LOOP_RATE, or its gyro samples come in under 1.8 times it (PreArm: Main loop
+# slow, Gyro rate). 100 passes both with room to spare. Its filters below stay at defaults.
+SCHED_LOOP_RATE  100
+
+# From airsim-quadX.parm
+ATC_RAT_PIT_D    0.003
+ATC_RAT_PIT_I    0.25
+ATC_RAT_PIT_P    0.25
+ATC_RAT_RLL_D    0.003
+ATC_RAT_RLL_I    0.25
+ATC_RAT_RLL_P    0.25
+DISARM_DELAY     0
+FS_CRASH_CHECK   0
+MOT_THST_HOVER   0.461
+MOT_THST_EXPO    0.0
+WP_ACC           4.0
+WP_ACC_Z         2.0
+WP_SPD_UP        4.0
+WP_SPD_DN        3.0
+WP_SPD           20.0
+RTL_ALT_M        25

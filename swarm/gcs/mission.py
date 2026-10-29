@@ -313,6 +313,7 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
     speed_type = 1 if hovers else 0  # ground speed; a fixed-wing's airspeed
     accept_m = 3.0 if hovers else 0.0  # a fixed-wing's own (WP_RADIUS)
     claims_gimbal = dialect(airframe.autopilot).mission_gimbal_claim
+    waypoint_heading = dialect(airframe.autopilot).waypoint_sets_heading
     items, route, route_seq, track_steps = [], [], [], []
     heights = []
     camera_steps = []
@@ -338,6 +339,15 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
     if dm.speed:
         items.append((F_MISSION, M.MAV_CMD_DO_CHANGE_SPEED, (speed_type, dm.speed, -1, 0), 0, 0, 0))
     nan = math.nan
+
+    turned_to = [math.nan]  # the heading last ordered with a CONDITION_YAW item
+
+    def face(heading):
+        """Before a waypoint: the item that turns the nose, where a waypoint's own
+        heading isn't obeyed (ArduCopter), if it isn't facing that already."""
+        if not waypoint_heading and heading == heading and heading != turned_to[0]:
+            items.append((F_MISSION, M.MAV_CMD_CONDITION_YAW, (heading % 360.0, 0, 0, 0), 0, 0, 0))
+            turned_to[0] = heading
 
     def circle(seconds, lat, lon, alt):
         """A fixed-wing's hold: circle the point for `seconds` (radius: its own)."""
@@ -391,6 +401,7 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
             if not hovers and waypoint_hold:
                 items.append(circle(waypoint_hold, lat, lon, alt))
             elif hovers:
+                face(heading)
                 items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (waypoint_hold, accept_m, 0, heading),
                               lat, lon, alt))
             else:
@@ -405,6 +416,7 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
             items.append(circle(waypoint_hold, here[0], here[1], alt))
         elif hovers and (("heading" in step and step["heading"] != "travel") or "hold" in step):
             # Turn (and/or hold) where it is
+            face(heading)
             items.append((F_REL, M.MAV_CMD_NAV_WAYPOINT, (waypoint_hold, accept_m, 0, heading),
                           here[0], here[1], alt))
         if "track" in step:

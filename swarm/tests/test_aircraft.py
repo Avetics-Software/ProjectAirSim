@@ -12,6 +12,7 @@ from gcs.mavlink_link import M, VehicleLink
 from gcs.mission import DroneMission, build_items
 
 FIXEDWING = airframe_of("x8_arduplane")
+COPTER = airframe_of("quad_arducopter")
 
 
 def by_id(items, key):
@@ -249,6 +250,83 @@ class FixedWingLinkTests(unittest.TestCase):
             SimpleNamespace(command_int_send=lambda *a: sent.append(a)))
         link.fly_to(1.01, 103.0, 50, heading_deg=90)
         self.assertTrue(math.isnan(sent[0][9]))  # param4: ArduPlane's loiter direction
+
+
+class ArduCopterTests(unittest.TestCase):
+    def test_registry_gives_the_copter_dialect(self):
+        self.assertEqual(COPTER.autopilot, "ardupilot-copter")
+        self.assertTrue(COPTER.hovers)
+        robot = Aircraft("quad_arducopter").robot(0)
+        settings = robot["controller"]["arduplane-settings"]
+        self.assertEqual([a["id"] for a in settings["actuator-order"]],
+                         ["Prop_FR_actuator", "Prop_RL_actuator", "Prop_FL_actuator",
+                          "Prop_RR_actuator"])  # ArduCopter's quad X motors 1-4
+        self.assertEqual(robot["physics-type"], "fast-physics")
+
+    def test_modes(self):
+        ac = dialect("ardupilot-copter")
+        self.assertEqual(ac.mode(3), ("MISSION", "AUTO"))
+        self.assertEqual(ac.mode(5), ("HOLD", "LOITER"))
+        self.assertEqual(ac.mode(4), ("GUIDED", "GUIDED"))
+        self.assertEqual(ac.mode(9), ("LAND", "LAND"))
+        for mode in ("HOLD", "MISSION", "GUIDED", "RTL", "LAND"):
+            self.assertEqual(ac.mode(ac.set_mode_params(mode)[0])[0], mode)
+
+    def commands(self, link):
+        sent = []
+        link.command = lambda command, *params: sent.append((command, params)) or \
+            M.MAV_RESULT_ACCEPTED
+        return sent
+
+    def test_takes_off_in_guided_to_a_height_above_home(self):
+        link = fake_link(COPTER)
+        sent = self.commands(link)
+        link.takeoff(20)
+        self.assertEqual([c for c, _ in sent], [M.MAV_CMD_DO_SET_MODE,
+                                                M.MAV_CMD_COMPONENT_ARM_DISARM,
+                                                M.MAV_CMD_NAV_TAKEOFF])
+        self.assertEqual(sent[0][1][1], 4)  # GUIDED
+        self.assertEqual(sent[2][1][6], 20)  # above home, not above sea level
+
+    def test_px4_takes_off_to_a_height_above_sea_level(self):
+        link = fake_link()
+        sent = self.commands(link)
+        link.takeoff(20)
+        self.assertEqual(sent[-1][1][6], 40.0 - 30.0 + 20)
+
+    def test_turns_with_condition_yaw_and_holds_where_it_is(self):
+        link = fake_link(COPTER)
+        sent = self.commands(link)
+        reposition = []
+        link.conn.send_as = lambda compid, send, bypass_outage=False: send(
+            SimpleNamespace(command_int_send=lambda *a: reposition.append(a)))
+        link.fly_to(1.01, 103.0, 50, heading_deg=90)
+        self.assertTrue(math.isnan(reposition[0][9]))  # ArduCopter ignores its yaw
+        self.assertEqual(sent, [(M.MAV_CMD_CONDITION_YAW, (90.0, 0, 0, 0))])
+        link.hold()  # not LOITER, which sinks without a throttle stick
+        self.assertEqual(reposition[-1][3], M.MAV_CMD_DO_REPOSITION)
+        self.assertEqual(len(sent), 1)
+
+    def test_asks_for_the_telemetry_it_reads(self):
+        link = fake_link(COPTER)
+        asked = []
+        link.conn.send_as = lambda compid, send, bypass_outage=False: send(
+            SimpleNamespace(command_long_send=lambda *a: asked.append(a[4])))
+        link._request_health_streams()
+        self.assertTrue({33, 245, 42} <= set(asked))  # position, landed state, mission item
+
+    def test_mission_turns_the_nose_with_condition_yaw(self):
+        steps = [{"takeoff": 20}, {"goto": {"north": 50, "east": 0}, "heading": 90},
+                 {"goto": {"north": 50, "east": 50}}, {"goto": {"north": 0, "east": 50},
+                                                       "heading": 270}]
+
+        def yaws(airframe):
+            dm = DroneMission("Drone1", steps)
+            items = build_items(dm, (1, 103), (1, 103), 0, False, 1, airframe=airframe)
+            return [i[2][0] for i in items if i[1] == M.MAV_CMD_CONDITION_YAW]
+
+        self.assertEqual(yaws(COPTER), [90.0, 270.0])  # once per change of heading
+        self.assertEqual(yaws(Airframe()), [])  # PX4: the waypoints' param4
 
 
 if __name__ == "__main__":

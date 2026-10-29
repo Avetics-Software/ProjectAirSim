@@ -1,0 +1,37 @@
+# ArduCopter parameters every swarm copter gets, after its own tuning file
+# (aircraft/models.yml lists the order; later files win). Links, failsafes and
+# the gimbal camera's mount. No gains: those belong to the aircraft's file.
+# Names are ArduPilot 4.7's.
+
+# --- Gimbal camera (aircraft/payload_gimbal.jsonc) ---------------------------
+# As arduplane_swarm.parm: a self-stabilising gimbal on PWM, on SERVO5..7.
+# ArduPilot is the gimbal manager, so the ground station steers it as it steers PX4's.
+MNT1_TYPE        7       # BrushlessPWM
+MNT1_DEFLT_MODE  3       # RC targeting (holds neutral with no RC)
+# Travel (deg). Must equal the payload's gimbal-settings and models.yml's
+# gimbal-roll-deg, which decode the PWM: aircraft.py --audit checks them.
+MNT1_ROLL_MIN   -30
+MNT1_ROLL_MAX    30
+MNT1_PITCH_MIN  -90
+MNT1_PITCH_MAX   25
+MNT1_YAW_MIN    -160
+MNT1_YAW_MAX     160
+SERVO5_FUNCTION  8       # mount roll
+SERVO6_FUNCTION  7       # mount tilt (pitch)
+SERVO7_FUNCTION  6       # mount pan (yaw)
+SERVO5_MIN       1000
+SERVO5_MAX       2000
+SERVO5_TRIM      1500
+SERVO6_MIN       1000
+SERVO6_MAX       2000
+SERVO6_TRIM      1500
+SERVO7_MIN       1000
+SERVO7_MAX       2000
+SERVO7_TRIM      1500
+
+# --- Ground station link loss -----------------------------------------------
+# Return home when the ground station's heartbeats stop for FS_GCS_TIMEOUT s, as
+# the PX4 quads do (NAV_DLL_ACT 2 in px4_params.parm). The ground station is
+# MAV_GCS_SYSID; the sim sets it per drone (its payload link).
+FS_GCS_ENABLE    1       # 1 RTL
+FS_GCS_TIMEOUT   10

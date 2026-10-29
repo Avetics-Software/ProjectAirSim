@@ -160,6 +160,7 @@ class VehicleLink:
         self.heading = None  # degrees from north
         self.position_time = 0.0  # time.monotonic() of the last position
         self.position_count = 0  # positions received, to measure the rate
+        self._streams_requested = 0.0  # time.monotonic() of the last request for them
         self.landed = True
         self.status_text = ""
         self.status_severity = M.MAV_SEVERITY_INFO
@@ -216,10 +217,12 @@ class VehicleLink:
         return time.monotonic() - self.last_message_time if self.last_message_time else None
 
     def _request_health_streams(self):
+        self._streams_requested = time.monotonic()
         # Health at 1 Hz; where the gimbal points at 5 Hz (the dashboard and
         # mission run logs show it)
         rates = [(m, 1_000_000) for m in HEALTH_MESSAGES] + [
-            (GIMBAL_ATTITUDE_MSG, 200_000), (GIMBAL_MANAGER_STATUS_MSG, 500_000)]
+            (GIMBAL_ATTITUDE_MSG, 200_000), (GIMBAL_MANAGER_STATUS_MSG, 500_000),
+            *self.ap.stream_messages]
         for msg_id, interval_us in rates:
             self._send(lambda mav, m=msg_id, us=interval_us: mav.command_long_send(
                 self.sysid, PX4_COMPID, M.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
@@ -373,13 +376,19 @@ class VehicleLink:
             if result != M.MAV_RESULT_ACCEPTED or self.armed:
                 return result
             return self.arm()
+        if self.ap.takeoff_mode:
+            # ArduCopter takes off only in GUIDED
+            result = self.set_mode(self.ap.takeoff_mode)
+            if result != M.MAV_RESULT_ACCEPTED:
+                return result
         if not self.armed:
             result = self.arm()
             if result != M.MAV_RESULT_ACCEPTED:
                 return result
         lat, lon, amsl, rel = self.position
+        takeoff_alt = alt_m if self.ap.takeoff_alt_relative else amsl - rel + alt_m
         return self.command(M.MAV_CMD_NAV_TAKEOFF, -1, 0, 0, math.nan, math.nan, math.nan,
-                            amsl - rel + alt_m)
+                            takeoff_alt)
 
     def fly_to(self, lat, lon, alt_m, speed_mps=-1.0, heading_deg=None):
         """Fly to lat/lon at alt_m above home and hover there (PX4 Hold), facing
@@ -391,7 +400,8 @@ class VehicleLink:
         _, _, amsl, rel = self.position
         if speed_mps > 0:
             self.command(M.MAV_CMD_DO_CHANGE_SPEED, 1 if self.airframe.hovers else 0, speed_mps, -1)
-        if heading_deg is None or not self.airframe.hovers:
+        face = heading_deg is not None and self.airframe.hovers
+        if not face or not self.ap.reposition_sets_heading:
             yaw = math.nan  # ArduPlane reads a non-zero param 4 as "circle anticlockwise"
         else:
             yaw = math.radians(wrap_180(heading_deg))  # PX4 reads it in radians
@@ -402,7 +412,15 @@ class VehicleLink:
                 int(lat * 1e7), int(lon * 1e7), amsl - rel + alt_m,
             ),
         )
+        if face and not self.ap.reposition_sets_heading:
+            # ArduCopter ignores the repositioning's heading: turn it with its own command
+            self.face(heading_deg)
         return M.MAV_RESULT_ACCEPTED
+
+    def face(self, heading_deg):
+        """Turn to face heading_deg (degrees from north), at the autopilot's own
+        yaw rate: MAV_CMD_CONDITION_YAW, absolute."""
+        return self.command(M.MAV_CMD_CONDITION_YAW, heading_deg % 360.0, 0, 0, 0)
 
     def turn_to(self, heading_deg):
         """Turn in place to face heading_deg (degrees from north). None for an
@@ -413,7 +431,11 @@ class VehicleLink:
         return self.fly_to(lat, lon, rel, heading_deg=heading_deg)
 
     def hold(self):
-        """Hold where it is: hover (PX4 Hold), or circle (ArduPlane LOITER)."""
+        """Hold where it is: hover (PX4 Hold, or ArduCopter flying to where it
+        is), or circle (ArduPlane LOITER)."""
+        if self.ap.hold_by_repositioning and self.airframe.hovers and self.position:
+            lat, lon, _, rel = self.position
+            return self.fly_to(lat, lon, rel)
         return self.set_mode("HOLD")
 
     def land(self):
@@ -554,6 +576,11 @@ class VehicleLink:
         if msg_type == "HEARTBEAT":
             if not self.last_message_time or now - self.last_message_time > 5.0:
                 # A new or restarted PX4, or a link back after an outage
+                self._request_health_streams()
+            elif (self.ap.stream_messages and now - self._streams_requested > 5.0
+                  and now - self.position_time > 3.0):
+                # An autopilot that streams only on request can drop the request
+                # while it starts up: ask again until the position arrives
                 self._request_health_streams()
             self._px4_seen.set()
             self.armed = bool(msg.base_mode & M.MAV_MODE_FLAG_SAFETY_ARMED)

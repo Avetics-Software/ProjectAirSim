@@ -65,6 +65,23 @@ autopilots:
     gimbal-channels: {roll: 5, pitch: 6, yaw: 7}
     gimbal-roll-deg: [-30, 30]  # the payload's roll travel (it only lists pitch and yaw)
 
+  # ArduCopter on the same JSON link as ArduPlane: arduplane-api is the sim's
+  # interface to ArduPilot's JSON SITL for any vehicle (servo outputs drive the
+  # airframe's actuators), whatever the airframe or physics. Only the dialect
+  # (modes, takeoff, failsafes) and the SITL binary are the copter's.
+  ardupilot_copter:
+    family: ardupilot
+    dialect: ardupilot-copter
+    controller: {id: ArduCopter_Controller, type: arduplane-api}
+    settings-key: arduplane-settings
+    settings:
+      local-host-ip: 0.0.0.0
+    ports: {local-host-udp-port: 9002}
+    port-stride: 10
+    instance-offset: 5
+    gimbal-channels: {roll: 5, pitch: 6, yaw: 7}
+    gimbal-roll-deg: [-30, 30]
+
 models:
   quad_px4:
     label: Quadrotor, PX4
@@ -93,3 +110,18 @@ models:
         - ${SWARM}/aircraft/params/arduplane_swarm.parm
     capabilities: fixedwing
     companion-profile: rknn-sim-fw-ardupilot
+
+  quad_arducopter:
+    label: Quadrotor, ArduCopter
+    airframe: quadrotor
+    autopilot: ardupilot_copter
+    sitl:
+      binary: ${ARDUPILOT_DIR}/build/sitl/bin/arducopter
+      # One --defaults list, later files win: ArduPilot's stock SITL copter,
+      # the quad's tuning, the swarm's links and failsafes
+      params:
+        - ${ARDUPILOT_DIR}/Tools/autotest/default_params/copter.parm
+        - ${SWARM}/aircraft/params/quad_arducopter.param
+        - ${SWARM}/aircraft/params/arducopter_swarm.parm
+    capabilities: multirotor
+    companion-profile: rknn-sim-quad-ardupilot   # X (A5X_RPI_Release) on the drone's Radxa

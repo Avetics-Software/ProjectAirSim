@@ -217,6 +217,20 @@
           "id": "Prop_RR_actuator"
         }
       ]
+    },
+    "ardupilot": {
+      // ArduCopter's quad X motor order is PX4's: 1 front right, 2 rear left,
+      // 3 front left, 4 rear right. A motor's output is its thrust, 0 to 1.
+      "settings": {
+        "frame-timeout-ms": 1000,
+        "send-airspeed": false
+      },
+      "actuator-order": [
+        { "id": "Prop_FR_actuator" },
+        { "id": "Prop_RL_actuator" },
+        { "id": "Prop_FL_actuator" },
+        { "id": "Prop_RR_actuator" }
+      ]
     }
   },
   // Where the gimbal camera (aircraft/payload_gimbal.jsonc) is mounted

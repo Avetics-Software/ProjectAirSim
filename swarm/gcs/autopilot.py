@@ -45,6 +45,29 @@ class Px4:
     # its gimbal items only while the autopilot holds the gimbal
     mission_gimbal_claim = True
 
+    # Telemetry the autopilot sends only when asked: (MAVLink message id, interval
+    # in microseconds). PX4's and ArduPlane's default streams carry what the
+    # ground station reads; ArduCopter streams nothing until asked
+    stream_messages = ()
+
+    # A multirotor's takeoff: the mode to be in first (None: any), and whether
+    # MAV_CMD_NAV_TAKEOFF's altitude is above home (PX4: above sea level)
+    takeoff_mode = None
+    takeoff_alt_relative = False
+    # DO_REPOSITION carries the heading to face (PX4), or the autopilot has to
+    # be told with MAV_CMD_CONDITION_YAW
+    reposition_sets_heading = True
+    # A mission waypoint's param4 is the heading to face there (PX4), or the
+    # mission needs a CONDITION_YAW item to turn the nose (ArduCopter)
+    waypoint_sets_heading = True
+    # The mode a multirotor is put in to be armed, unless it is in it already (None:
+    # PX4 arms in any but a manual mode). ArduCopter stays in LAND or RTL after
+    # landing, which it won't arm in
+    arm_mode = None
+    # A multirotor holds by flying to where it is, rather than by a hold mode
+    # (ArduCopter's LOITER takes its climb rate from a throttle stick)
+    hold_by_repositioning = False
+
     # Link-loss failsafe: the parameters, and what their values do
     link_loss_action_param = "NAV_DLL_ACT"
     link_loss_timeout_param = "COM_DL_LOSS_T"
@@ -85,7 +108,7 @@ class Px4:
 
 
 class ArduPilot(Px4):
-    """ArduPlane (the modes are ArduPlane's; ArduCopter's would differ)."""
+    """ArduPlane (the modes are ArduPlane's; ArduCopter's are below)."""
     name = "ardupilot"
     label = "ArduPilot"
 
@@ -138,7 +161,47 @@ class ArduPilot(Px4):
         return int(value) if param_type in INT_PARAM_TYPES else value
 
 
-DIALECTS = {d.name: d() for d in (Px4, ArduPilot)}
+class ArduCopter(ArduPilot):
+    """ArduCopter: the ArduPilot dialect with a multirotor's modes. Where it
+    differs from ArduPlane (and PX4): it takes off in GUIDED, to an altitude
+    above home; it faces a heading only when told (CONDITION_YAW); and a
+    multirotor hovers, so HOLD is LOITER."""
+    name = "ardupilot-copter"
+    label = "ArduCopter"
+
+    MODES = {0: "STABILIZE", 1: "ACRO", 2: "ALT_HOLD", 3: "AUTO", 4: "GUIDED", 5: "LOITER",
+             6: "RTL", 7: "CIRCLE", 9: "LAND", 11: "DRIFT", 13: "SPORT", 14: "FLIP",
+             15: "AUTOTUNE", 16: "POSHOLD", 17: "BRAKE", 18: "THROW", 19: "AVOID_ADSB",
+             20: "GUIDED_NOGPS", 21: "SMART_RTL", 22: "FLOWHOLD", 23: "FOLLOW", 24: "ZIGZAG",
+             25: "SYSTEMID", 26: "AUTOROTATE", 27: "AUTO_RTL"}
+    COMMON_NAMES = {"STABILIZE": "STABILIZED", "ACRO": "ACRO", "ALT_HOLD": "ALTCTL",
+                    "AUTO": "MISSION", "GUIDED": "GUIDED", "GUIDED_NOGPS": "GUIDED",
+                    "LOITER": "HOLD", "BRAKE": "HOLD", "POSHOLD": "POSCTL", "RTL": "RTL",
+                    "SMART_RTL": "RTL", "AUTO_RTL": "RTL", "LAND": "LAND"}
+    # HOLD (LOITER) is here for a drone on the ground; see hold_by_repositioning
+    SET_MODES = {"HOLD": 5, "MISSION": 3, "GUIDED": 4, "RTL": 6, "LAND": 9}
+
+    # GLOBAL_POSITION_INT, EXTENDED_SYS_STATE (landed), MISSION_CURRENT
+    stream_messages = ((33, 200_000), (245, 500_000), (42, 500_000))
+
+    takeoff_mode = "GUIDED"
+    takeoff_alt_relative = True
+    reposition_sets_heading = False
+    waypoint_sets_heading = False
+    hold_by_repositioning = True
+    arm_mode = "GUIDED"
+
+    # FS_GCS_ENABLE: what the copter does when the ground station goes quiet
+    link_loss_action_param = "FS_GCS_ENABLE"
+    link_loss_timeout_param = "FS_GCS_TIMEOUT"
+    LINK_LOSS_ACTIONS = {0: "carry on", 1: "return home", 2: "carry on in a mission, else return",
+                         3: "return home (smart)", 4: "land (smart return first)", 5: "land",
+                         6: "fly its landing sequence"}
+    # FENCE_ACTION: report only, return or land, land, smart return, brake or land
+    FENCE_ACTIONS = {"warn": 0, "hold": 4, "rtl": 1, "land": 2}
+
+
+DIALECTS = {d.name: d() for d in (Px4, ArduPilot, ArduCopter)}
 
 
 def dialect(name):

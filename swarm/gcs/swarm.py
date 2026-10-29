@@ -290,9 +290,17 @@ class SwarmControl:
             if not link.armed and link.airframe.hovers:
                 # PX4 won't arm in a manual mode without a radio; it can boot
                 # into one when its position estimate isn't ready yet
-                if link.mode in MANUAL_MODES + ("?",):
+                if link.ap.arm_mode:
+                    if link.mode != link.ap.arm_mode:
+                        await self._call(link.set_mode, link.ap.arm_mode)
+                elif link.mode in MANUAL_MODES + ("?",):
                     await self._call(link.hold)
-                await self._call(link.arm)
+                armed = await self._call(link.arm)
+                if link.ap.arm_mode and armed != M.MAV_RESULT_ACCEPTED:
+                    # ArduCopter takes a mission start while disarmed (it switches to
+                    # AUTO and waits): don't send it until the arming is accepted
+                    await asyncio.sleep(1.0)
+                    continue
             result = await self._call(action, *args)
             if result == M.MAV_RESULT_ACCEPTED and not link.armed and not link.airframe.hovers:
                 result = await self._call(link.arm)

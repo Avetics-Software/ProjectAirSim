@@ -32,7 +32,7 @@ DEFAULT_MODEL = "quad_px4"
 @dataclass(frozen=True)
 class Airframe:
     model: str = DEFAULT_MODEL
-    autopilot: str = "px4"  # MAVLink dialect: px4 | ardupilot
+    autopilot: str = "px4"  # MAVLink dialect: px4 | ardupilot | ardupilot-copter
     hovers: bool = True
     loiter_radius_m: float = 0.0
     turn_radius_m: float = 0.0
@@ -79,7 +79,8 @@ def airframe_of(model, models=None):
     entry = models["models"].get(model)
     if entry is None:
         raise ValueError(f"unknown model {model!r} (known: {', '.join(models['models'])})")
-    family = models["autopilots"][entry["autopilot"]]["family"]
+    link = models["autopilots"][entry["autopilot"]]
+    family = link.get("dialect", link["family"])  # the MAVLink dialect (gcs/autopilot.py)
     caps = entry.get("capabilities", "multirotor")
     if isinstance(caps, str):
         caps = {"kind": caps}
