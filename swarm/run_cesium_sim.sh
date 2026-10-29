@@ -47,8 +47,8 @@
 #   CESIUM_ION_TOKEN  Cesium ion token [read from ~/.cesium_ion_token]
 #   SIM_MAP           Unreal level [/Game/GISMap]; use /Game/BlocksMap with --scene
 #   SIM_PROJECT       Unreal project to run [unreal/Blocks/Blocks.uproject in this
-#                     checkout]; from a git worktree, which has no Unreal build, the
-#                     main checkout's
+#                     checkout, or the main checkout's when this one has no Unreal
+#                     build, as in a git worktree]
 #   LOG_DIR           where the sim and PX4 logs go [/tmp/projectairsim-run]
 #   PX4_KEEP_LOGS     PX4 flight logs (.ulg) to keep; older ones are deleted at
 #                     each PX4 start [5]
@@ -69,6 +69,17 @@ main() {
     MEDIAMTX="${MEDIAMTX:-$HOME/opt/mediamtx/mediamtx}"
     SIM_MAP="${SIM_MAP:-/Game/GISMap}"
     LOG_DIR="${LOG_DIR:-/tmp/projectairsim-run}"
+    SIM_PROJECT="${SIM_PROJECT:-$REPO_ROOT/unreal/Blocks/Blocks.uproject}"
+    if [ ! -d "$(dirname "$SIM_PROJECT")/Binaries/Linux" ]; then
+        # A git worktree has the scripts but no Unreal build: use the main
+        # checkout's (the first worktree git lists)
+        MAIN_ROOT="$(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
+            | sed -n '1s/^worktree //p')"
+        if [ -n "$MAIN_ROOT" ] && [ -d "$MAIN_ROOT/unreal/Blocks/Binaries/Linux" ]; then
+            SIM_PROJECT="$MAIN_ROOT/unreal/Blocks/Blocks.uproject"
+            echo "No Unreal build in this checkout; using $SIM_PROJECT"
+        fi
+    fi
 
     # --- Launcher options --------------------------------------------------------
     PX4_PARAM_FILES=()
@@ -218,7 +229,7 @@ print(count, ",".join(companions.get(i, "-") for i in range(count)))
     # --- Simulator ---------------------------------------------------------------
     echo "Starting the simulator ($SIM_MAP); log: $LOG_DIR/sim.log"
     "$UE_ROOT/Engine/Binaries/Linux/UnrealEditor" \
-        "${SIM_PROJECT:-$REPO_ROOT/unreal/Blocks/Blocks.uproject}" "$SIM_MAP" \
+        "$SIM_PROJECT" "$SIM_MAP" \
         -game -windowed -ResX=1280 -ResY=720 -log > "$LOG_DIR/sim.log" 2>&1 &
     SIM_PID=$!
 
