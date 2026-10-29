@@ -91,4 +91,4 @@ def airframe_of(model, models=None):
     unknown = set(caps) - {f.name for f in fields(Airframe)}
     if unknown:
         raise ValueError(f"model {model}: unknown capabilities {', '.join(sorted(unknown))}")
-    return replace(Airframe(model=model, autopilot=family), **KINDS[kind], **caps)
+    return replace(Airframe(model=model, autopilot=family), **{**KINDS[kind], **caps})

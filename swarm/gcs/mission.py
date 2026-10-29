@@ -871,7 +871,11 @@ class MissionControl:
                      f"({link.mode} at item {link.mission_seq + 1} of {len(dm.items)})")
         finally:
             self.swarm.mission_ends.pop(i, None)
-            self._set_tracking(i, None)
+            # A mission that leaves MISSION because the companion took the
+            # aircraft (X switches to POSITION for its pre-strike yaw or the
+            # strike) must not cancel the track X is now flying. The camera
+            # stays with X; an explicit `track: off` step still takes it back.
+            self._set_tracking(i, None, release_only=True)
             self.flying.discard(i)
             if self.swarm.tasks.get(i) is asyncio.current_task():
                 self.swarm._clear_plan(i)
@@ -879,16 +883,23 @@ class MissionControl:
             if companion:
                 companion.set_mission_active(link.mode == "MISSION")
 
-    def _set_tracking(self, i, spec):
-        """The mission handed drone i's camera to a tracker (spec), or took it back."""
+    def _set_tracking(self, i, spec, release_only=False):
+        """The mission handed drone i's camera to a tracker (spec), or took it back.
+
+        `release_only` is the mission ending or leaving, not a `track: off`
+        step: the camera is X's now, so only the mission's own bookkeeping is
+        cleared. Cancelling here is what stopped X's strike the moment it
+        switched out of AUTO.
+        """
         if spec == self.tracking.get(i):
             return
         if spec is None:
             self.tracking.pop(i, None)
-            if self.companions.get(i):
+            companion = self.companions.get(i)
+            if companion and not release_only:
                 # X stops tracking; it would carry on if the mission left
                 # MISSION mode next (e.g. for RTL), where it doesn't stand down
-                self.companions[i].cancel()
+                companion.cancel()
         else:
             self.tracking[i] = spec
         name = self.links[i].name

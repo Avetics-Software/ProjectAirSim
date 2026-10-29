@@ -27,6 +27,7 @@ a number (`2`), a list (`1,3`) or `all`.
 | `status` | Each drone's mode, arming, height, position, position rate and current task |
 | `select N` | Show and steer drone N in the dashboard (or keys 1-9) |
 | `gimbal PITCH YAW [N]`, `zoom PERCENT [N]` | Point or zoom a drone's camera (default: the selected one) |
+| `strike on\|off [N]` | Arm or release STRIKE on a drone's companion, as the dashboard's STRIKE button (default: the selected one) |
 | `alerts`, `ack`, `fence ...`, `safety ...` | Alerts, the geofence and safety settings; see [safety](safety.md) |
 | `help` | Every command |
 

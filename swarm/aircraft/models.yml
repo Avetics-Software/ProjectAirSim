@@ -108,7 +108,7 @@ models:
         - ${ARDUPILOT_DIR}/Tools/autotest/models/plane.parm
         - ${SWARM}/aircraft/params/x8_arduplane.param
         - ${SWARM}/aircraft/params/arduplane_swarm.parm
-    capabilities: fixedwing
+    capabilities: {kind: fixedwing, loiter_radius_m: 150}   # WP_LOITER_RAD in its .param
     companion-profile: rknn-sim-fw-ardupilot
 
   quad_arducopter:

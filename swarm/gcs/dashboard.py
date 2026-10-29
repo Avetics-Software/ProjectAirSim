@@ -89,6 +89,8 @@ class CameraWindows:
     W/A/S/D and the zoom keys and wheel then go to the companion, which owns
     the gimbal. X ignores them while it tracks, so W/A/S/D, G and C drop the
     track first.
+    STRIKE (top right) arms X's strike on the selected drone; pressed again
+    it releases it.
 
     It is a Tk window: OpenCV's Qt windows zoom the whole image on the mouse
     wheel, which can't be turned off.
@@ -249,6 +251,17 @@ class CameraWindows:
         self._safety_button = button(row, "Safety (F2)", self.toggle_drawer)
         self._safety_button.pack(side=tk.RIGHT, padx=(2, 12))
         HoverTip(self._safety_button, "Alerts, drone health, responses, geofence (F2)")
+        # Strike: the selected drone's companion (X) flies it at the tracked target
+        self._strike_button = tk.Button(row, text="STRIKE", command=self._toggle_strike,
+                                        fg="white", activeforeground="white", relief=tk.FLAT,
+                                        padx=12, pady=3, highlightthickness=0,
+                                        disabledforeground="#777777",
+                                        font=("DejaVu Sans", 10, "bold"))
+        self._strike_button.pack(side=tk.RIGHT, padx=(2, 12))
+        HoverTip(self._strike_button, "Arm or release X's strike on the selected drone "
+                                      "(needs a companion)")
+        self._strike_shown = ""  # none of None/False/True, so the first show draws
+        self._show_strike()
         # The drawer docks at the right of the camera canvas when open
         self.drawer = tk.Frame(self.root, bg=self.BG, width=self.DRAWER_WIDTH)
         self.drawer.pack_propagate(False)
@@ -378,6 +391,39 @@ class CameraWindows:
             self.log("RTL ALL")
             self.on_command("all rtl")
         return "break"
+
+    def _toggle_strike(self):
+        c = self.companion
+        if not c:
+            return
+        # The companion logs arming and releasing, which shows in the messages
+        if c.striking:
+            c.strike(False)
+        elif c.mission_active:
+            self.log(f"{self.drone_name(self.selected)} is flying a mission that holds the "
+                     "camera: not striking")
+        else:
+            c.strike(True)
+        self._show_strike()
+
+    def _show_strike(self):
+        """The strike button for the selected drone: off, armed, or no companion."""
+        if not hasattr(self, "_strike_button"):
+            return
+        c = self.companion
+        state = None if not c else c.striking
+        if state == self._strike_shown:
+            return
+        self._strike_shown = state
+        if state is None:
+            self._strike_button.configure(text="STRIKE", state=tk.DISABLED, bg=self.FIELD,
+                                          activebackground=self.FIELD)
+        elif state:
+            self._strike_button.configure(text="STRIKE ON", state=tk.NORMAL, bg="#e03030",
+                                          activebackground="#ff5050")
+        else:
+            self._strike_button.configure(text="STRIKE OFF", state=tk.NORMAL, bg=self.DANGER,
+                                          activebackground="#d04040")
 
     def toggle_drawer(self, show=None):
         """Open or close the safety drawer at the right of the cameras."""
@@ -552,6 +598,7 @@ class CameraWindows:
         self.companion = companion
         if hasattr(self, "_view_var"):
             self._view_var.set(self.side_cam if companion else self.main_cam)
+        self._show_strike()
         with self._lock:
             self._frames.pop("Tracker", None)
         self._seq += 1
@@ -752,6 +799,7 @@ class CameraWindows:
     def _cam_title(self, cam):
         if cam == "Tracker":
             state = ("mission controls camera" if self.companion and self.companion.mission_active
+                     else "STRIKE" if self.companion and self.companion.striking
                      else "tracking" if self.companion and self.companion.tracking
                      else "click or drag to track")
             return f"{self.title} Tracker (companion {self.companion.ip if self.companion else ''})  {state}"
@@ -881,6 +929,7 @@ class CameraWindows:
     def update(self):
         """Draw the dashboard and handle input; call every few ms."""
         self._flush_log()
+        self._show_strike()  # a mission start can release it from another thread
         now = time.monotonic()
         changed = self._seq != self._drawn_seq or now - self._last_draw > self.IDLE_REDRAW_S
         if not changed or now - self._last_draw < 1.0 / self.MAX_FPS:

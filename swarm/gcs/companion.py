@@ -15,6 +15,8 @@ detects and tracks targets, and steers the gimbal itself. This side does what X'
     for a dragged box (X has no DRAG), CANCEL to drop it
   - PITCH:/YAW: jog, ZOOM:IN/OUT/STOP and GIMBAL:CENTER, since the companion
     owns the gimbal while it runs
+  - STRIKE:START / STRIKE:STOP to arm and release X's strike, in which X flies
+    the drone at the tracked target (if its profile enables drone control)
   - HEARTBEAT every 0.2 s, so the companion knows a ground station is up
 """
 
@@ -29,11 +31,16 @@ COMMAND_PORT = 5556  # X's GCS_INPUT_PORT: tracking, control and heartbeat
 TRACKER_PORT = 8554  # the companion's MediaMTX
 HEARTBEAT_PERIOD_S = 0.2
 ZOOM_PULSE_S = 0.4  # one wheel notch zooms this long, then ZOOM:STOP (controls: setting)
+# X's STRIKE_COMMAND. Commands go to one companion's IP, so the plain keyword
+# never arms another drone's X.
+STRIKE_COMMAND = "STRIKE"
 
 
 class CompanionLink:
-    def __init__(self, ip, name="companion", port=COMMAND_PORT, zoom_pulse_s=ZOOM_PULSE_S):
+    def __init__(self, ip, name="companion", port=COMMAND_PORT, zoom_pulse_s=ZOOM_PULSE_S,
+                 strike_command=STRIKE_COMMAND):
         self.ip = ip
+        self.strike_command = strike_command
         self.zoom_pulse_s = zoom_pulse_s
         self.name = name
         self.addr = (ip, port)
@@ -43,6 +50,7 @@ class CompanionLink:
         self.tracking = False  # a target has been sent and not cancelled
         self.mission_active = False  # block operator gimbal commands during a mission
         self.track_point = None  # (x, y) in tracker pixels
+        self.striking = False  # strike armed and not released
         self._stop = threading.Event()
         self._zoom_timer = None
         threading.Thread(target=self._heartbeat_loop, daemon=True).start()
@@ -64,13 +72,21 @@ class CompanionLink:
     def click(self, x, y):
         if self.mission_active:
             return
-        self.send(f"CLICK:{int(x)},{int(y)}")
         self.tracking, self.track_point = True, (int(x), int(y))
+        # One UDP datagram is not reliable (the 15:19 auto-lock lost its CLICK
+        # and X never initialised the tracker). Repeats are idempotent in X:
+        # the same coordinates are deduplicated after the first init.
+        for _ in range(3):
+            self.send(f"CLICK:{int(x)},{int(y)}")
+            time.sleep(0.05)
 
     def drag(self, x1, y1, x2, y2):
         # X tracks a square: set its size from the box, then click the centre.
         # The size sticks for later clicks, as with X's own GCS box slider.
-        self.send(f"BOX:{int(max(abs(x2 - x1), abs(y2 - y1)))}")
+        box = int(max(abs(x2 - x1), abs(y2 - y1)))
+        for _ in range(2):
+            self.send(f"BOX:{box}")
+            time.sleep(0.03)
         self.click((x1 + x2) / 2, (y1 + y2) / 2)
 
     def cancel(self):
@@ -102,8 +118,23 @@ class CompanionLink:
     def center_gimbal(self):
         self.send("GIMBAL:CENTER")
 
+    def strike(self, enabled):
+        """Arm (True) or release (False) X's strike; False if refused.
+
+        Arming is refused while a mission holds the camera; releasing always
+        goes out, even if this side thinks it isn't armed.
+        """
+        if enabled and self.mission_active:
+            log.info(f"{self.name}: not striking while a mission controls the camera")
+            return False
+        self.send(f"{self.strike_command}:{'START' if enabled else 'STOP'}")
+        self.striking = bool(enabled)
+        log.info(f"{self.name}: strike {'ARMED' if enabled else 'released'}")
+        return True
+
     def set_mission_active(self, active):
-        """Stop a selected track and held jog before handing the camera to PX4.
+        """Release a strike, stop a selected track and held jog before handing the
+        camera to PX4.
 
         X itself must use MAVLINK_STAND_DOWN_IN_MISSION so autonomous tracking
         and re-claims stop even if the ground station disconnects.
@@ -111,6 +142,8 @@ class CompanionLink:
         if active == self.mission_active:
             return
         if active:
+            if self.striking:
+                self.strike(False)
             self.cancel()
             self.jog("PITCH", "STOP")
             self.jog("YAW", "STOP")
@@ -136,6 +169,8 @@ class CompanionLink:
         return self.video.ok
 
     def close(self):
+        if self.striking:
+            self.strike(False)
         self._stop.set()
         self.video.close()
         self.sock.close()

@@ -39,9 +39,16 @@ the track drawn on it. GimbalCam or ChaseCam goes in the small pane beside it
 | W/A/S/D (hold) | Jog the gimbal; stops on release. Cancels a track first |
 | G or C | Centre the gimbal. Cancels a track first |
 | Wheel or +/- over the camera | Zoom in or out |
+| **STRIKE** button (top right) | `STRIKE:START`; pressed again, `STRIKE:STOP`. Greyed out on a drone without a companion |
 
-The status panel shows whether each companion's video is arriving and
-whether it is tracking. The GimbalCam title shows the gimbal's real angle,
+What X does with STRIKE depends on its profile: with `RUN_DRONE_CONTROL_THREAD`
+off (the `rknn-sim-*` default) it only records it. The ground station refuses
+to arm while a [mission](missions.md) holds the camera, and releases an armed
+strike when a mission takes the camera or the ground station closes. The
+console's `strike on|off [N]` does the same as the button.
+
+The status panel shows whether each companion's video is arriving,
+whether it is tracking and whether STRIKE is armed. The GimbalCam title shows the gimbal's real angle,
 reported by PX4, since X is the one moving it.
 
 ## Who controls the camera

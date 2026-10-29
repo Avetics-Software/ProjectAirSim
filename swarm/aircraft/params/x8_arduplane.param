@@ -28,3 +28,8 @@ TKOFF_THR_MAX 70
 AIRSPEED_CRUISE 18
 AIRSPEED_MIN 13
 AIRSPEED_MAX 28
+
+# Loiter radius (m): wide enough that a held point's circle keeps a target near
+# its centre in the camera's view (stock SITL plane: 80). models.yml's
+# loiter_radius_m must match: the swarm plans with it.
+WP_LOITER_RAD 150

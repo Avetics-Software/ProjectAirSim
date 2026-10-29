@@ -74,8 +74,8 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
   `chase_video` (if any) in the ChaseCam pane. Without a companion, W/A/S/D
   steer the gimbal through PX4's gimbal manager and the zoom keys send
   `MAV_CMD_SET_CAMERA_ZOOM` to the drone's MAVLink camera (component 100).
-- **Companions:** with `companion:`, the Tracker view, click-to-track and the
-  gimbal keys go to X on that drone, as in the sim.
+- **Companions:** with `companion:`, the Tracker view, click-to-track, the
+  gimbal keys and the STRIKE button go to X on that drone, as in the sim.
 
 ## Before flying it for real
 

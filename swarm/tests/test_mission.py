@@ -325,6 +325,7 @@ class CompanionMissionTests(unittest.TestCase):
         companion.mission_active = False
         companion.tracking = True
         companion.track_point = (10, 20)
+        companion.striking = False
         companion.sock = Mock()
         companion.addr = ("127.0.0.1", 5556)
         companion.name = "test"
@@ -341,6 +342,27 @@ class CompanionMissionTests(unittest.TestCase):
         companion.set_mission_active(False)
         companion.click(1, 2)
         self.assertTrue(companion.tracking)
+
+    def test_mission_releases_strike_and_refuses_arming(self):
+        companion = CompanionLink.__new__(CompanionLink)
+        companion.mission_active = False
+        companion.tracking = False
+        companion.track_point = None
+        companion.striking = False
+        companion.strike_command = "STRIKE"
+        companion.sock = Mock()
+        companion.addr = ("127.0.0.1", 5556)
+        companion.name = "test"
+        self.assertTrue(companion.strike(True))
+        companion.set_mission_active(True)
+        sent = [call.args[0] for call in companion.sock.sendto.call_args_list]
+        self.assertEqual(sent[:2], [b"STRIKE:START", b"STRIKE:STOP"])
+        self.assertFalse(companion.striking)
+        companion.sock.reset_mock()
+        self.assertFalse(companion.strike(True))
+        companion.sock.sendto.assert_not_called()
+        self.assertTrue(companion.strike(False))  # releasing always goes out
+        companion.sock.sendto.assert_called_once_with(b"STRIKE:STOP", companion.addr)
 
 
 if __name__ == "__main__":

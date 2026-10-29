@@ -41,6 +41,8 @@ STATION_HELP = """  select N                              show and steer drone N
   gimbal lock on|off [N]                yaw lock: hold the camera's compass heading while
                                         the drone turns (or Y); off: follow the drone
   zoom PERCENT [N]                      set the zoom (0 = widest, 100 = longest focal length)
+  strike on|off [N]                     arm / release X's strike on drone N (needs its
+                                        companion) [the selected drone]
 Safety (F2 opens the safety panel; Ctrl+H holds every drone):
   alerts                                list active alerts
   ack [all]                             acknowledge the most urgent alert, or all
@@ -272,7 +274,12 @@ class GroundStation:
 
     def tick(self, dt):
         for i, companion in self.companions.items():
-            companion.set_mission_active(self.mission_has_camera(i))
+            # An armed strike owns the aircraft: the mission ending (X switches
+            # to POSITION/FBWA) must not hand the camera back, cancel the track
+            # or release the strike. Without this the companion's mission
+            # hand-over releases a strike the moment it starts.
+            companion.set_mission_active(self.mission_has_camera(i)
+                                         and not companion.striking)
         for camera in self.cameras:
             camera.tick(dt)
         self.windows.zoom_text = self.current.zoom_text()
@@ -371,6 +378,7 @@ class GroundStation:
                 f" {name(i)} companion {companion.ip}: "
                 f"{'video ok' if companion.video_ok else 'no video yet'}"
                 f"{', tracking' if companion.tracking else ''}"
+                f"{', STRIKE ARMED' if companion.striking else ''}"
             )
         minimap.set_fence(self.windows.fence)
         extra = list(self.extra_status()) if self.extra_status else []
@@ -562,6 +570,23 @@ class GroundStation:
                 return
             if not self.x_controls(self.cameras.index(camera), "zoom"):
                 camera.set_zoom(percent)
+        elif word == "strike" and len(parts) in (2, 3):
+            try:
+                on = {"on": True, "off": False}[parts[1].lower()]
+                index = int(parts[2]) - 1 if len(parts) == 3 else self.selected
+                if index < 0:
+                    raise IndexError
+                name = self.links[index].name
+            except (KeyError, ValueError, IndexError):
+                print("Usage: strike on|off [DRONE]")
+                return
+            companion = self.companions.get(index)
+            if not companion:
+                print(f"{name} has no companion computer to strike with")
+            elif companion.strike(on):
+                print(f"{name} strike {'ARMED' if on else 'released'}")
+            else:
+                print(f"{name} is flying a mission that holds the camera: not striking")
         elif await self._safety_command(word, parts):
             pass
         elif await self.missions.run_command(parts):
