@@ -329,6 +329,30 @@ class ArduCopterTests(unittest.TestCase):
         self.assertEqual(yaws(Airframe()), [])  # PX4: the waypoints' param4
 
 
+class GiveWayTests(unittest.TestCase):
+    def test_a_drone_that_gave_way_carries_on_doing_what_it_was(self):
+        import asyncio
+        from gcs.swarm import SwarmControl
+        called = []
+        link = SimpleNamespace(**{name: name for name in
+                                  ("resume_mission", "return_home", "land", "hold")},
+                               fly_to="fly_to", name="Drone1")
+
+        async def call(func, *args):
+            called.append(func)
+
+        fake = SimpleNamespace(links=[link], _call=call)
+        for mode, destination, wanted in (("MISSION", None, "resume_mission"),
+                                          ("RTL", (1.0, 103.0), "return_home"),
+                                          ("LAND", None, "land"),
+                                          ("GUIDED", (1.0, 103.0), "fly_to"),
+                                          ("HOLD", None, "hold")):
+            called.clear()
+            asyncio.run(SwarmControl._resume(fake, 0, {"mode": mode, "destination": destination,
+                                                "alt": 30.0, "heading": None}))
+            self.assertEqual(called, [wanted], mode)
+
+
 if __name__ == "__main__":
     unittest.main()
 

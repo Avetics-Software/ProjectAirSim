@@ -574,6 +574,10 @@ class SwarmControl:
         log.info(f"{self.links[j].name}: clear again, resuming")
         if state["mode"] == "MISSION":
             await self._call(link.resume_mission)
+        elif state["mode"] == "RTL":
+            await self._call(link.return_home)
+        elif state["mode"] == "LAND":
+            await self._call(link.land)
         elif state["destination"]:
             # A heading asked for is applied by the goto itself, on arrival
             await self._call(link.fly_to, *state["destination"], state["alt"])

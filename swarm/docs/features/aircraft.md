@@ -8,6 +8,7 @@ simulate and how the ground station should fly it:
 |---|---|---|
 | `quad_px4` (the default) | Quadrotor with a gimbal camera | PX4 |
 | `x8_arduplane` | Skywalker X8 flying wing (JSBSim) with the same gimbal camera | ArduPlane |
+| `quad_arducopter` | The same quadrotor and gimbal camera as `quad_px4` | ArduCopter |
 
 ```yaml
 drones:
@@ -47,7 +48,7 @@ config.yml  drone: {model: x8_arduplane}
       ├── sim:  aircraft.py ── robot config (airframe + link + gimbal camera)
       │                    └── SITL: px4_sitl.Px4Sitl | ardupilot_sitl.ArduPilotSitl
       │
-      └── gcs:  VehicleLink ── .ap        gcs/autopilot.py  (PX4 | ArduPilot on MAVLink)
+      └── gcs:  VehicleLink ── .ap        gcs/autopilot.py  (PX4 | ArduPlane | ArduCopter)
                            └── .airframe  gcs/airframe.py   (what it can be asked to do)
 ```
 
@@ -63,7 +64,8 @@ config.yml  drone: {model: x8_arduplane}
   ArduPilot's `--home`, so they agree with the scene.
 - **Tuning lives only in a model's parameter files.** The X8's is
   `aircraft/params/x8_arduplane.param`; `aircraft/params/arduplane_swarm.parm`
-  adds only the swarm's links, failsafes and gimbal mount.
+  adds only the swarm's links, failsafes and gimbal mount. The ArduCopter
+  quad's are `quad_arducopter.param` and `arducopter_swarm.parm`.
 - **Everything the swarm flies is in `swarm/`.** `aircraft.py --audit` fails on
   a model or airframe that reads a file from outside it (other than the
   autopilots' own checkouts).
@@ -86,6 +88,40 @@ nothing else would catch them disagreeing:
 
 `tests/test_aircraft.py` also runs every generated robot config through the
 client's schema. The sim's C++ loaders accept configs that the client rejects.
+
+## ArduCopter
+
+`quad_arducopter` is the PX4 quad's airframe flown by ArduCopter. No sim code
+is new: `arduplane-api` is the sim's link to ArduPilot's JSON SITL for any
+vehicle (its servo outputs drive the airframe's actuators, and its mount
+outputs the gimbal), so the copter uses it with fast physics and the quad's
+four rotors as outputs 1-4, in ArduCopter's quad X order (PX4's order too).
+The `ardupilot_copter` autopilot entry differs from ArduPlane's only in its
+`dialect: ardupilot-copter`, the ground station's side
+([`gcs/autopilot.py`](../../gcs/autopilot.py) `ArduCopter`):
+
+| | PX4 | ArduCopter |
+|---|---|---|
+| Takeoff | arm, `NAV_TAKEOFF` to a height above sea level | GUIDED, arm, `NAV_TAKEOFF` to a height above home |
+| Arming | any mode but a manual one | GUIDED first: after landing it stays in LAND or RTL, which it won't arm in |
+| Hold | Hold mode | flies to where it is (GUIDED). LOITER takes its climb rate from a throttle stick, and with none it sinks |
+| Heading on a goto | `DO_REPOSITION`'s yaw | `MAV_CMD_CONDITION_YAW` after it (the repositioning's yaw is ignored) |
+| Heading in a mission | the waypoint's param4 | a `CONDITION_YAW` item before the waypoint, when the heading changes |
+| Telemetry | streams by default | streams nothing until asked: the link requests position, landed state and mission progress, and asks again until the position arrives |
+| Link loss | `NAV_DLL_ACT` | `FS_GCS_ENABLE` / `FS_GCS_TIMEOUT` (return home after 10 s) |
+| Fence action | `GF_ACTION` | `FENCE_ACTION` (`hold` is brake) |
+
+`SCHED_LOOP_RATE` is 100. ArduCopter refuses to arm when its main loop runs
+under 90% of that rate, or its gyro samples arrive at under 1.8 times it; the
+sim steps at 333 Hz at most, and at 200-340 Hz while it renders the Cesium
+world, so 200 or more fails one check or the other.
+
+Checked in the Cesium world: takeoff, goto with a heading, heading, hold,
+land and disarm, a mission (headings, gimbal pitch, look-at and heading lock,
+return home and landing), the geofence, lost link, low battery, and a mixed
+PX4 + ArduCopter swarm returning home with one giving way. Its companion
+profile `rknn-sim-quad-ardupilot` is listed in X's README but has no config
+folder yet.
 
 ## What the ground station does with a fixed-wing
 
@@ -220,7 +256,7 @@ detecting another. A `scale` on the link's `unreal_mesh` geometry
 Start without tuning. Get the aircraft flying on the autopilot's stock
 parameters first, then add its own parameter file.
 
-A new autopilot family, for example ArduCopter quads, also needs:
+A new autopilot family also needs (ArduCopter, above, is one):
 - an `autopilots` entry
 - a dialect in `gcs/autopilot.py`, at least its mode table, since ArduCopter's
   modes differ from ArduPlane's

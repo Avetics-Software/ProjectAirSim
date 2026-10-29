@@ -14,7 +14,8 @@ gcs_sysid: 245                  # our MAVLink system id; not 255 (QGC's)
 
 # --- The drones, in order: Drone1, Drone2, ... ---
 # Every drone: model, its aircraft from aircraft/models.yml (default quad_px4:
-#   a PX4 quadrotor; x8_arduplane: the Skywalker X8 on ArduPlane). The ground
+#   a PX4 quadrotor; quad_arducopter: the same quad on ArduCopter;
+#   x8_arduplane: the Skywalker X8 on ArduPlane). The ground
 #   station flies each as its autopilot and airframe need.
 # Real drones: name, sysid (its autopilot's MAVLink system id), video (its
 #   gimbal camera's stream) and companion (its Radxa running X; the camera is
