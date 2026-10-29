@@ -11,6 +11,7 @@ behaves like the real optical zoom.
 import json
 import math
 
+from camera_effects import CameraEffects
 from projectairsim.utils import projectairsim_log
 
 RESOLUTIONS = {
@@ -24,6 +25,20 @@ RESOLUTIONS = {
 }
 
 
+def parse_resolution(text):
+    """(width, height) from a name in RESOLUTIONS ("1080p") or "WxH"."""
+    res = str(text).lower()
+    if res in RESOLUTIONS:
+        return RESOLUTIONS[res]
+    if "x" in res:
+        try:
+            w, h = res.split("x")
+            return int(w), int(h)
+        except ValueError:
+            pass
+    raise ValueError(f"unknown resolution '{text}'")
+
+
 class CameraProperties:
     def __init__(self, path=None):
         props = {}
@@ -33,14 +48,7 @@ class CameraProperties:
         self.props = props
         self.name = props.get("camera_id", "GimbalCam")
 
-        res = str(props.get("resolution", "720p")).lower()
-        if res in RESOLUTIONS:
-            self.resolution = RESOLUTIONS[res]
-        elif "x" in res:
-            w, h = res.split("x")
-            self.resolution = (int(w), int(h))
-        else:
-            raise ValueError(f"unknown resolution '{res}'")
+        self.resolution = parse_resolution(props.get("resolution", "720p"))
 
         sensor = props.get("sensor", {})
         lens = props.get("lens", {})
@@ -54,6 +62,8 @@ class CameraProperties:
             self.focal_max_mm = self.focal_min_mm * float(zoom.get("optical_zoom_max", 10.0))
         self.focus_distance_m = lens.get("focus_distance_m")
         self.chromatic_aberration = props.get("ue_overrides", {}).get("chromatic_aberration")
+        # Lens distortion, vibration and noise are added to the frames afterwards
+        self.effects = CameraEffects(props)
 
     @property
     def max_zoom(self):
@@ -92,23 +102,11 @@ class CameraProperties:
                 }
             ]
 
-        unsupported = []
-        lens = self.props.get("lens", {})
-        if lens.get("distortion_enabled"):
-            unsupported.append("lens distortion")
-        if self.props.get("platform", {}).get("vibration_enabled"):
-            unsupported.append("platform vibration")
-        if self.props.get("sensor", {}).get("noise_enabled"):
-            unsupported.append("sensor noise (use ue_noise_* instead)")
-        if unsupported:
-            projectairsim_log().warning(
-                "camera_properties: not simulated yet: " + ", ".join(unsupported)
-            )
-
     def describe(self):
         return (
             f"{self.name}: {self.resolution[0]}x{self.resolution[1]}, "
             f"{self.focal_min_mm:g}-{self.focal_max_mm:g} mm "
             f"({self.max_zoom:.1f}x optical), HFOV {self.hfov_deg():.1f}-"
             f"{self.hfov_deg(self.focal_max_mm):.1f} deg"
+            + (f"; image defects: {self.effects.describe()}" if self.effects.active else "")
         )

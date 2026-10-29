@@ -97,7 +97,7 @@ ground station never fights QGC for control.
 | `run_real.sh` | Preflight checks, then the ground station for real drones |
 | `aircraft/`, `aircraft.py` | The aircraft a drone can be (`model:`): airframes, autopilot links, models, and the generator of each drone's robot config ([aircraft](docs/features/aircraft.md)) |
 | `px4_sitl.py`, `ardupilot_sitl.py` | Start and stop each drone's PX4 or ArduPilot SITL |
-| `payload_mavlink.py`, `payload_video.py`, `camera_properties.*` | The simulated gimbal camera: MAVLink camera, RTSP video, lens and zoom |
+| `payload_mavlink.py`, `payload_video.py`, `camera_properties.*`, `camera_effects.py` | The simulated gimbal camera: MAVLink camera, RTSP video, lens and zoom, and its distortion, vibration and noise |
 | `spawned_objects.py`, `moving_actors.py`, `actor_editor.*`, `mission_planner.js`, `config_*.yml` | Objects, and people and vehicles moving along roads, to search for; the map editor for them and for planning a mission |
 | `spotter_control.py`, `shared_frame.py` | The spotter: a person walked around the world, with a first-person view |
 | `missions/` | Mission files (`mission load NAME`): `template.yml` and `template_fixedwing.yml` to copy, the X8's `x8_circuit.yml` and `x8_track.yml`, and `scenarios/`: the moving traffic some missions bring |

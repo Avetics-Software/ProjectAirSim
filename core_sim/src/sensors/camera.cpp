@@ -96,6 +96,8 @@ class Camera::Impl : public SensorImpl {
 
   bool SetAperture(float aperture);
 
+  bool SetResolution(int width, int height);
+
   bool IsPoseUpdatePending() const;
 
   bool IsSettingsUpdatePending() const;
@@ -849,6 +851,24 @@ bool Camera::Impl::SetAperture(float aperture) {
   return true;
 }
 
+bool Camera::Impl::SetResolution(int width, int height) {
+  // Larger than any render target the renderer would accept, or empty
+  constexpr int kMaxSidePixels = 16384;
+  if (width <= 0 || height <= 0 || width > kMaxSidePixels ||
+      height > kMaxSidePixels) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(update_lock_);
+  // Every image type of the camera changes together: a segmentation image of
+  // another size than its scene image would no longer line up with it
+  for (auto& capture : camera_settings.capture_settings) {
+    capture.width = width;
+    capture.height = height;
+  }
+  settings_update_pending = true;
+  return true;
+}
+
 bool Camera::Impl::IsPoseUpdatePending() const { return pose_update_pending; }
 
 bool Camera::Impl::IsSettingsUpdatePending() const {
@@ -1196,15 +1216,20 @@ void Camera::Impl::RegisterServiceMethods() {
   service_manager_.RegisterMethod(set_DOF_transition_region,
                                   set_DOF_transition_region_handler);
 
-  // TODO: We need to expose extra settings like ISO/shutter speed
-  // allongside with aperture. Once we do that and enable manual exposure,
-  // we can uncomment these and add the corresponding client API method.
-  // auto set_aperture_method_name = topic_path_ + "/" + "SetAperture";
-  // auto set_aperture =
-  //    ServiceMethod(set_aperture_method_name, {"aperture"});
-  // auto set_aperture_handler = set_aperture.CreateMethodHandler(
-  //    &Camera::Impl::SetAperture, *this);
-  // service_manager_.RegisterMethod(set_aperture, set_aperture_handler);
+  // Aperture changes the depth of field only: ISO and shutter speed are not
+  // exposed, and exposure stays automatic
+  auto set_aperture_method_name = topic_path_ + "/" + "SetAperture";
+  auto set_aperture = ServiceMethod(set_aperture_method_name, {"aperture"});
+  auto set_aperture_handler =
+      set_aperture.CreateMethodHandler(&Camera::Impl::SetAperture, *this);
+  service_manager_.RegisterMethod(set_aperture, set_aperture_handler);
+
+  auto set_resolution_method_name = topic_path_ + "/" + "SetResolution";
+  auto set_resolution =
+      ServiceMethod(set_resolution_method_name, {"width", "height"});
+  auto set_resolution_handler = set_resolution.CreateMethodHandler(
+      &Camera::Impl::SetResolution, *this);
+  service_manager_.RegisterMethod(set_resolution, set_resolution_handler);
 }
 
 void Camera::Impl::OnEndUpdate() {

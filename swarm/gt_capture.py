@@ -132,10 +132,13 @@ class GroundTruthRecorder:
     drones with `attach()`; keep its segmentation IDs current with `refresh()`
     from the asyncio thread, which is the one that talks to the sim."""
 
-    def __init__(self, world, out_dir, rate_hz=2.0, keep_empty=0.1):
+    def __init__(self, world, out_dir, rate_hz=2.0, keep_empty=0.1, effects=None):
         """rate_hz: frames saved per second per drone. keep_empty: fraction of
-        frames with nobody in view to keep anyway (hard negatives)."""
+        frames with nobody in view to keep anyway (hard negatives). effects: a
+        camera_effects.CameraEffects to put the camera's defects on the images
+        saved, and on the segmentation the boxes come from."""
         self.world = world
+        self.effects = effects if effects is not None and effects.active else None
         self.period_ns = int(1e9 / rate_hz) if rate_hz > 0 else 0
         self.keep_empty = keep_empty
         self.ids = {}  # actor name -> segmentation ID
@@ -295,6 +298,9 @@ class GroundTruthRecorder:
     def _write(self, drone, scene_index, stamp, scene, seg, names_by_id, kinds):
         h, w = scene["height"], scene["width"]
         seg_img = np.frombuffer(seg["data"], np.uint8).reshape(seg["height"], seg["width"], -1)[:, :, :3]
+        hfov = self.hfov.get(drone)
+        if self.effects and hfov:
+            seg_img = self.effects.apply_to_segmentation(seg_img, hfov, stamp / 1e9)
         boxes = boxes_from_segmentation(seg_img, names_by_id)
         if seg_img.shape[:2] != (h, w):  # a mismatched config: scale into the scene image
             sx, sy = w / seg_img.shape[1], h / seg_img.shape[0]
@@ -308,6 +314,8 @@ class GroundTruthRecorder:
 
         stem = f"{drone}_s{max(scene_index, 0)}_{stamp}"
         frame = np.frombuffer(scene["data"], np.uint8).reshape(h, w, -1)[:, :, :3]
+        if self.effects and hfov:
+            frame = self.effects.apply(frame, hfov, stamp / 1e9)
         cv2.imwrite(os.path.join(self.dir, "images", stem + ".jpg"), frame,
                     [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
         sim_time = f"{stamp / 1e9:.3f}"

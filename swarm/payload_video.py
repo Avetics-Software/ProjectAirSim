@@ -90,6 +90,19 @@ class RtspStreamer:
             next_t += period
             time.sleep(max(0.0, next_t - time.monotonic()))
 
+    def restart(self, resolution):
+        """Stream at another size: the encoder starts again, so players
+        reconnect and see a gap of a second or so."""
+        self.close()
+        self.width, self.height = resolution
+        with self._lock:
+            self._frame = None
+        self._stop = threading.Event()
+        self._proc = self._start_ffmpeg()
+        self._thread = threading.Thread(target=self._write_loop, daemon=True)
+        self._thread.start()
+        projectairsim_log().info(f"GimbalCam RTSP stream: {self.width}x{self.height}")
+
     def close(self):
         self._stop.set()
         self._thread.join(timeout=2)

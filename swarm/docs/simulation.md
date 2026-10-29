@@ -446,8 +446,57 @@ plus a `zoom` block:
 The field of view is `2·atan(sensor_width / 2·focal_length)`, so zooming from
 5.2 to 52 mm narrows a ZR10 from 61.5° to 6.8°, like the real 10x lens. Also
 applied: `focus_distance_m` (depth of field), `ue_overrides.chromatic_aberration`
-and the `ue_noise_*` image noise. Lens distortion, aperture and platform
-vibration aren't simulated yet; the script warns if they're enabled.
+and the `ue_noise_*` image noise.
+
+### Lens distortion, vibration and sensor noise
+
+Three more defects are added to the frames in Python (`camera_effects.py`), so
+the video looks like a real payload's. Each is off until enabled:
+
+```jsonc
+"lens":     { "distortion_enabled": true, "distortion_k1": -0.12, "distortion_k2": 0.02,
+              "distortion_p1": 0.0, "distortion_p2": 0.0, "distortion_k3": 0.0 },
+"platform": { "vibration_enabled": true, "vibration_amplitude_deg": 0.02,
+              "vibration_frequency_hz": 30.0 },
+"sensor":   { "noise_enabled": true, "noise_gain_db": 6.0, "noise_temperature_c": 25.0 }
+```
+
+- **Distortion** uses OpenCV's model, so coefficients from a real calibration go
+  straight in (negative `k1` is barrel). The same coefficients apply at every zoom.
+  Corners the distortion leaves empty are black.
+- **Vibration** shakes the picture by `vibration_amplitude_deg` at
+  `vibration_frequency_hz` sideways, and at a slightly different rate up and
+  down. It is worked out in sim time, so a replay shakes the same way. The angle
+  is converted to pixels with the current field of view, so zooming in shakes the
+  picture more.
+- **Noise** is signal-independent: a standard deviation of
+  `10^(gain/20) · 2^((T-25)/8)` levels (8-bit), which is 2 at 6 dB and 25 °C. It
+  is an indicative model, not a calibrated one.
+
+### Changing the camera while the sim runs
+
+`camera_properties.json` is what the camera starts with. In the terminal, for
+every drone's GimbalCam at once:
+
+| Command | What it does |
+|---|---|
+| `sim camera res 720p` (`1080p`, `4k`, `WxH`) | The render size of the scene and segmentation images; the RTSP stream restarts at the new size (players reconnect after a second or so). Recordings in progress stop writing frames, so start a new run. A later `goto` keeps the new size |
+| `sim camera noise on` / `off` / `GAIN_DB` | The sensor noise above, on or off, or on at a gain |
+| `sim camera aperture F` | The f-number, which changes the depth of field only (exposure stays automatic) |
+
+Expect one odd frame at the switch (still the old size, or black). That makes a resolution or noise sweep one flight: change it, fly the mission
+again, and score each run with `mot_eval.py`.
+
+From a script, the client has `drone.set_resolution(camera, w, h)` and
+`drone.set_aperture(camera, f)` (the service methods `SetResolution` and
+`SetAperture` in `core_sim`). The engine's own image noise (`ue_noise_*`) can only
+be set when the scene loads: turning it on later left about a third of the frames
+black, so it isn't offered.
+
+The defects are on the RTSP stream and the dashboard, and in the `--ground-truth` and
+mission-run recordings. The segmentation those boxes come from is moved the same
+way, so the boxes stay on the objects. Noise doesn't touch it. All three cost
+about 5 ms per 1080p frame.
 
 ## Camera and gimbal
 

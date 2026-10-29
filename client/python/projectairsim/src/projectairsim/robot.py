@@ -671,6 +671,46 @@ class Robot(object):
         field_of_view_set = self.client.request(set_field_of_view_req)
         return field_of_view_set
 
+    def set_aperture(self, camera_id: str, aperture: float) -> bool:
+        """Sets the aperture of a vehicle camera. It changes the depth of field;
+        exposure stays automatic.
+
+        Args:
+            camera_id (str): the name of the camera
+            aperture (float): the f-number, e.g. 1.8
+
+        Returns:
+            bool: true if the aperture was set
+        """
+        req_camera_path = f"{self.sensors_topic}/{camera_id}"
+        set_aperture_req = {
+            "method": f"{req_camera_path}/SetAperture",
+            "params": {"aperture": aperture},
+            "version": 1.0,
+        }
+        return self.client.request(set_aperture_req)
+
+    def set_resolution(self, camera_id: str, width: int, height: int) -> bool:
+        """Sets the image size of a vehicle camera while the sim runs, for all
+        its image types (scene, segmentation, ...) together. Anything reading
+        the images has to cope with the new size.
+
+        Args:
+            camera_id (str): the name of the camera
+            width (int): pixels
+            height (int): pixels
+
+        Returns:
+            bool: true if the size was accepted (positive, at most 16384)
+        """
+        req_camera_path = f"{self.sensors_topic}/{camera_id}"
+        set_resolution_req = {
+            "method": f"{req_camera_path}/SetResolution",
+            "params": {"width": width, "height": height},
+            "version": 1.0,
+        }
+        return self.client.request(set_resolution_req)
+
     def set_control_signals(self, control_signal_map: Dict) -> bool:
         """set_control_signals for Manual Controller type
 

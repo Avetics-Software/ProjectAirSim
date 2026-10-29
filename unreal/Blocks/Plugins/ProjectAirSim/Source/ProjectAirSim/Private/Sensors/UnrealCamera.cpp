@@ -350,6 +350,18 @@ void UUnrealCamera::UpdateCameraSettings() {
   auto CameraSettings = SimCamera.GetCameraSettings();
   CameraComponent->CurrentAperture = CameraSettings.aperture;
   // TODO: in the future we can update filmback and other lens settings here too
+
+  // The image size can change while running (SetResolution)
+  for (int ImageType = 0; ImageType < ImageTypeCount(); ++ImageType) {
+    const auto& CaptureSetting = CameraSettings.capture_settings.at(ImageType);
+    UTextureRenderTarget2D* Target = RenderTargets[ImageType];
+    if (Target != nullptr && CaptureSetting.width > 0 &&
+        CaptureSetting.height > 0 &&
+        (Target->SizeX != CaptureSetting.width ||
+         Target->SizeY != CaptureSetting.height)) {
+      Target->ResizeTarget(CaptureSetting.width, CaptureSetting.height);
+    }
+  }
   CopyCameraSettingsToAllSceneCaptures(CameraSettings);
   CalculateProjectionMatrix();
 

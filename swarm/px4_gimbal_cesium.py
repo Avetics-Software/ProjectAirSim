@@ -60,12 +60,12 @@ import commentjson
 import cv2
 
 from projectairsim import ProjectAirSimClient, Drone, World
-from projectairsim.types import Pose, Quaternion, Vector3
+from projectairsim.types import ImageType, Pose, Quaternion, Vector3
 from projectairsim.utils import load_scene_config_as_dict, projectairsim_log, quaternion_to_rpy
 
 from aircraft import Aircraft, list_models
 from ardupilot_sitl import ArduPilotSitl
-from camera_properties import CameraProperties
+from camera_properties import CameraProperties, parse_resolution
 from gcs.airframe import airframe_of
 from gcs.fleet import Fleet, load_fleet, sim_drones, sim_models
 from gcs.log import log as gcs_log
@@ -419,11 +419,26 @@ class SimPayload(DroneCamera):
         for tap in self.frame_taps:
             tap(image_msg)
         bgr = image_to_bgr(image_msg)
+        if self.camera.effects.active:
+            bgr = self.camera.effects.apply(bgr, self.hfov_deg(), image_msg["time_stamp"] / 1e9)
         self.last_gimbal_frame = bgr
         if self.selected:
             self.windows.receive("GimbalCam", bgr)
         if self.rtsp:
             self.rtsp.push(bgr)
+
+    def set_resolution(self, resolution):
+        """Change the GimbalCam's image size while the sim runs: its render
+        targets (the scene and segmentation images together), then the stream."""
+        width, height = resolution
+        if not self.drone.set_resolution(self.camera.name, width, height):
+            raise ValueError(f"the sim refused {width}x{height}")
+        if self.rtsp:
+            self.rtsp.restart(resolution)
+
+    def hfov_deg(self):
+        """The GimbalCam's horizontal field of view at the zoom last set."""
+        return self.camera.hfov_deg(self.camera.focal_length(self.zoom_percent))
 
     def set_zoom(self, percent):
         self.zoom_percent, self.zoom_rate = max(0.0, min(100.0, percent)), 0.0
@@ -504,6 +519,9 @@ class SimPayload(DroneCamera):
 
 
 GOTO_HELP = """  goto LAT LON [HEADING]                move the drone(s) to a new place (restarts PX4)
+  sim camera res 720p|1080p|4k|WxH      change every GimbalCam's image size (the stream restarts)
+  sim camera noise on|off|GAIN_DB       the camera's sensor noise on or off, or on at a gain (dB)
+  sim camera aperture F                 the lens aperture (f-number): depth of field
   sim attitude [SECONDS] [N]            log drone N's attitude and its camera's (stabilisation)
   sim tracktest [N] [follow|lock]       fly hard while pointing the gimbal at a ground target,
                                         and measure how well it stays in frame
@@ -586,6 +604,42 @@ def mission_track(session, index, spec, run_id):
     session.mission_tracks[index] = track
 
 
+def camera_command(session, args):
+    """sim camera res|noise|aperture ...: change every drone's GimbalCam while
+    the sim runs (the camera_properties.json values are what it starts with)."""
+    usage = "Usage: sim camera res 720p|1080p|4k|WxH | noise on|off|GAIN_DB | aperture F"
+    payloads = session.station.cameras
+    try:
+        what, value = args[0].lower(), args[1].lower()
+        if what == "res":
+            resolution = parse_resolution(value)
+            for payload in payloads:
+                payload.set_resolution(resolution)
+            # Later scene loads (goto) start at this size too
+            session.camera.resolution = resolution
+            print(f"GimbalCam {resolution[0]}x{resolution[1]}. Recordings in progress stop "
+                  "writing frames: start a new run for a new size")
+        elif what == "noise":
+            # The sensor noise camera_effects.py adds to the frames, not the
+            # engine's noise (which the sim can only start with)
+            effects = session.camera.effects
+            if value in ("on", "off"):
+                effects.set_noise(value == "on")
+            else:
+                effects.set_noise(True, gain_db=float(value))
+            print("Sensor noise " + (f"{effects.sigma:.1f} levels ({effects.gain_db:g} dB, "
+                                     f"{effects.temperature_c:g} C)" if effects.sigma else "off"))
+        elif what == "aperture":
+            for payload in payloads:
+                if not payload.drone.set_aperture(payload.camera.name, float(value)):
+                    raise ValueError("the sim refused the aperture")
+            print(f"Aperture f/{float(value):g}")
+        else:
+            print(usage)
+    except (IndexError, ValueError) as err:
+        print(f"{err}\n{usage}" if str(err) and not isinstance(err, IndexError) else usage)
+
+
 async def sim_command(session, line, parts):
     """The sim's own console commands, after the ground station's; anything
     else goes to the object spawner, which reports what it doesn't know."""
@@ -610,6 +664,8 @@ async def sim_command(session, line, parts):
     elif word == "gt":
         print(session.ground_truth.status() if session.ground_truth
               else "Ground-truth capture is off (start with --ground-truth)")
+    elif word == "sim" and len(parts) >= 2 and parts[1] == "camera":
+        camera_command(session, parts[2:])
     elif word == "sim" and len(parts) >= 2 and parts[1] == "tracktest":
         # sim tracktest [N] [follow|lock]
         args = parts[2:]
@@ -961,7 +1017,8 @@ class Session:
             self.spawner.spawn_from_config()
             if args.ground_truth and self.ground_truth is None:
                 self.ground_truth = GroundTruthRecorder(
-                    self.world, args.ground_truth, rate_hz=args.gt_rate
+                    self.world, args.ground_truth, rate_hz=args.gt_rate,
+                    effects=self.camera.effects,
                 )
             if args.actors:
                 # With --ground-truth, the actor log goes beside the labelled

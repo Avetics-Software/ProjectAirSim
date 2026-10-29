@@ -152,6 +152,11 @@ class DroneRecording:
         if (w, h) != self.size:
             return  # the camera changed size mid-run; keep the video consistent
         frame = np.frombuffer(scene["data"], np.uint8).reshape(h, w, -1)[:, :, :3]
+        # The video the tracker is scored on has the camera's defects on, and the
+        # boxes are taken from a segmentation image moved the same way
+        effects = self.payload.camera.effects
+        if effects.active:
+            frame = effects.apply(frame, state["hfov"], stamp / 1e9)
         self._proc.stdin.write(np.ascontiguousarray(frame).tobytes())
         index = self.frames
         self.frames += 1
@@ -159,6 +164,8 @@ class DroneRecording:
         boxes = []
         if seg is not None:
             seg_img = np.frombuffer(seg["data"], np.uint8).reshape(seg["height"], seg["width"], -1)[:, :, :3]
+            if effects.active:
+                seg_img = effects.apply_to_segmentation(seg_img, state["hfov"], stamp / 1e9)
             boxes = boxes_from_segmentation(seg_img, names_by_id)
             if seg_img.shape[:2] != (h, w):
                 sx, sy = w / seg_img.shape[1], h / seg_img.shape[0]
