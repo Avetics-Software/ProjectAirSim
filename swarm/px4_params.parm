@@ -18,8 +18,8 @@ MPC_JERK_AUTO     8      # auto modes                         (default 4,  max 8
 # Vertical speed (m/s)
 MPC_Z_VEL_MAX_UP  5      # climb limit                        (default 3,  max 8)
 MPC_Z_V_AUTO_UP   5      # climb in auto modes                (default 3,  max 8)
-MPC_Z_VEL_MAX_DN  3      # descent limit                      (default 1.5, max 4)
-MPC_Z_V_AUTO_DN   3      # descent in auto modes              (default 1.5, max 4)
+MPC_Z_VEL_MAX_DN  4      # descent limit                      (default 1.5, max 4)
+MPC_Z_V_AUTO_DN   4      # descent in auto modes              (default 1.5, max 4)
 MPC_TKO_SPEED     3      # takeoff climb                      (default 1.5, max 5)
 
 # Maximum tilt in flight (deg); higher allows more speed      (default 45, max 89)
@@ -43,3 +43,13 @@ COM_DL_LOSS_T     10     # s without the ground station         (default 10)
 # the drone keeps the mission's headings. 0 (PX4's default) turns the drone
 # to face the point instead. Set it on real drones too.
 MIS_MNT_YAW_CTL   1      # ROI: 1 = gimbal yaw, 0 = vehicle yaw (default 0)
+
+# Yaw rate loop, for the sim's quadrotor. Its yaw authority is weak (fitted
+# from flight logs: yaw acceleration = 6 rad/s^2 per unit torque command, no
+# real delay), so PX4's defaults (0.2 / 0.1) leave the rate loop slower (about
+# 1.2 rad/s) than the heading loop it serves (MC_YAW_P 2.8): every heading
+# change overshot 10-18 deg and rang at 0.3 Hz for about 15 s. Four times the
+# gain puts the rate loop well outside the heading loop. Sim only: a real
+# drone's yaw authority differs, keep its own tuning.
+MC_YAWRATE_P      0.8    # (default 0.2)
+MC_YAWRATE_I      0.4    # (default 0.1; kept at half of P)
