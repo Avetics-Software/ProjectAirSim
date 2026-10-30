@@ -104,6 +104,30 @@ class DroneCamera:
     def nudge_zoom(self, delta_percent):
         self.set_zoom(self.link.zoom_percent + delta_percent)
 
+    # The lens's optical zoom (longest / widest focal length), for zoom
+    # factors ("2x"); unknown for a real camera, which then takes percentages
+    max_zoom = None
+
+    def zoom_to(self, spec):
+        """Zoom to a mission step's {"factor": F} or {"percent": P}; returns the
+        percentage set. Assumes the focal length moves linearly with the zoom
+        percentage, as the sim's lens does."""
+        if "percent" in spec:
+            percent = spec["percent"]
+        elif not self.max_zoom or self.max_zoom <= 1:
+            raise ValueError(f"the camera's zoom range is unknown: give the zoom as a "
+                             f"percentage, not {spec['factor']:g}x")
+        else:
+            percent = (spec["factor"] - 1.0) / (self.max_zoom - 1.0) * 100.0
+            if percent > 100.0:
+                log.warning(f"{self.link.name}: {spec['factor']:g}x is beyond the lens's "
+                            f"{self.max_zoom:g}x; zooming to {self.max_zoom:g}x")
+        percent = max(0.0, min(100.0, percent))
+        self.set_zoom(percent)
+        log.info(f"{self.link.name}: zoom {percent:.1f}%" + (
+            f" ({spec['factor']:g}x)" if "factor" in spec else ""))
+        return percent
+
     def zoom_text(self):
         return f"zoom {self.link.zoom_percent:.0f}%"
 
@@ -203,7 +227,8 @@ class GroundStation:
             links, self.swarm, lambda: self.home, run_dir or os.path.join(base, "runs"),
             search_dirs=[os.path.join(base, "missions")], before_start=before_mission,
             default_alt=config.swarm.default_alt_m, companions=self.companions,
-            on_track=on_mission_track, on_run=on_mission_run)
+            on_track=on_mission_track, on_run=on_mission_run,
+            on_zoom=lambda i, spec: self.cameras[i].zoom_to(spec))
         self.fence_status = ""  # last geofence upload, for the panel
         self.panel = SafetyPanel(self.windows, self, sim_faults)
         if sim_faults:

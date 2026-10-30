@@ -1,6 +1,7 @@
-# ReID data collection: two drones 100 m apart at 150 m, cameras straight
-# down, watch four differently coloured cars (scenarios/reid_vehicles.yml)
-# lap crossing circuits on the runway for 5 minutes, then return home.
+# ReID data collection: two drones 60 m apart at 150 m, cameras straight down
+# and zoomed to 2x, watch four differently coloured cars
+# (scenarios/reid_vehicles.yml) lap crossing circuits on the runway for 5
+# minutes, then return home.
 #
 # The companions run ByteTrack only (no onboard ReID) and log every frame's
 # detections and tracks (X's MOT_LOG_DIR); the sim records each drone's
@@ -13,17 +14,21 @@
 #   then, once it says World ready:   mission start
 #   (or without --mission: mission load reid_consistency, mission upload, mission start)
 #
-# Geometry: the drones sit over the runway's centreline (heading 033), 50 m
+# Geometry: the drones sit over the runway's centreline (heading 033), 30 m
 # either side of the circuit's centre (Drone1 the north-east point, Drone2
 # the south-west one, so their climbs from the spawn line don't cross),
 # facing across the runway (123) so each image's long side runs along it.
-# Each camera covers about 178 x 100 m
-# (ZR10 at 1x, 61.5 x 37 deg, from 150 m), about 9 cm per pixel (a car is
-# about 48 px long), and the two views overlap over the middle 78 m.
+# At 2x (ZR10 10.4 mm, 33 x 19 deg) from 150 m each camera covers about
+# 89 x 50 m at about 4.6 cm per pixel (a car is about 97 px long); together
+# they cover 149 m along the runway and overlap over the middle 29 m. The
+# circuits stay within 65 m of the centre along the runway and 15 m across,
+# so every car is always in at least one view.
 #
 # Timeline from `mission start`: the cars set off at once; the drones climb
 # to 40 m, fly about 450 m up the runway while climbing to 150 m (about a
-# minute), point straight down and hold for 300 s, then return home.
+# minute), point straight down, zoom to 2x and hold for 300 s, then zoom back
+# out and return home. The zoom is the ground station's (PX4 missions can't
+# zoom), so it needs the station's link to each drone.
 #
 # Needs the geofence ceiling above 150 m (config.yml safety: fence_max_alt_m).
 mission: reid_consistency
@@ -36,16 +41,20 @@ drones:
   Drone1:
     steps:
       - takeoff: 40
-      - goto: {lat: 1.417023, lon: 103.867705, alt: 150}
+      - goto: {lat: 1.416873, lon: 103.867607, alt: 150}
         heading: 123
       - gimbal: {pitch: -90}
+        zoom: 2x
         hold: 300
       - rtl: true
+        zoom: 1x
   Drone2:
     steps:
       - takeoff: 40
-      - goto: {lat: 1.416271, lon: 103.867214, alt: 150}
+      - goto: {lat: 1.416422, lon: 103.867312, alt: 150}
         heading: 123
       - gimbal: {pitch: -90}
+        zoom: 2x
         hold: 300
       - rtl: true
+        zoom: 1x

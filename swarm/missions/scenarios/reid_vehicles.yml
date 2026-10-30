@@ -1,14 +1,14 @@
 # ReID scenario: four cars of different colours lapping crossing circuits on
 # Seletar's runway 03/21 (43 m wide, heading 033), 450 m up it from the spawn,
-# so that the drones of missions/reid_consistency.yml (100 m apart at 150 m,
-# cameras straight down) see several cars at once, crossing and overtaking,
-# and the same car in both cameras where their views overlap.
+# so that the drones of missions/reid_consistency.yml (60 m apart at 150 m,
+# cameras straight down at 2x) see several cars at once, crossing and
+# overtaking, and the same car in both cameras where their views overlap.
 #
 # Positions are along/across the runway's OpenStreetMap centreline from the
-# circuit's centre (1.416647, 103.867459): along -100..100 m (south-west to
-# north-east), across -17..17 m (north-west to south-east edge). Each camera
-# sees about 178 m along the runway by 100 m across; the two views overlap
-# over the middle 78 m.
+# circuit's centre (1.416647, 103.867459): along -65..65 m (south-west to
+# north-east), across -15..15 m (north-west to south-east). At 2x each camera
+# sees about 89 m along the runway by 50 m across; together they cover
+# -74..74 m and overlap over the middle 29 m, so every car stays in view.
 #
 # Straight legs (follow_roads: false) on the runway pavement. Cars don't avoid
 # each other: at crossings they pass through each other, which in the image
@@ -18,19 +18,19 @@ defaults:
   vehicle: {asset: SKM_SportsCar, length: 4.5, align_to_ground: true, follow_roads: false}
 
 actors:
-# Red: the big circuit round the whole box (along -100..100, across -12..12), 10 m/s
+# Red: the big circuit round the whole area (along -65..65, across -12..12), 10 m/s
 - name: RedCar
   kind: vehicle
   color: red
   speed: 10
   mode: loop
   waypoints:
-  - [1.415954, 103.866877]
-  - [1.417458, 103.867861]
-  - [1.41734, 103.868042]
-  - [1.415836, 103.867058]
+  - [1.416217, 103.86705]
+  - [1.417195, 103.867689]
+  - [1.417077, 103.867869]
+  - [1.416099, 103.86723]
 
-# Blue: a bow-tie across the box; crosses itself in the middle (where both
+# Blue: a bow-tie across the area; crosses itself in the middle (where both
 # cameras see it) and the red circuit near each end, 8 m/s
 - name: BlueCar
   kind: vehicle
@@ -38,25 +38,25 @@ actors:
   speed: 8
   mode: loop
   waypoints:
-  - [1.416044, 103.866904]
-  - [1.41725, 103.868015]
-  - [1.417397, 103.867789]
-  - [1.415897, 103.86713]
+  - [1.416285, 103.867061]
+  - [1.417009, 103.867858]
+  - [1.417157, 103.867632]
+  - [1.416137, 103.867287]
 
-# Green: a small loop in the south-west half (along -75..-15), cutting across
-# the red and blue paths, 6 m/s
+# Green: a small loop in the south-west half (along -50..-10, its north-east
+# side in the shared view), cutting across the red and blue paths, 6 m/s
 - name: GreenCar
   kind: vehicle
   color: green
   speed: 6
   mode: loop
   waypoints:
-  - [1.416167, 103.866963]
-  - [1.416, 103.867218]
-  - [1.416451, 103.867514]
-  - [1.416618, 103.867258]
+  - [1.416345, 103.867101]
+  - [1.416197, 103.867326]
+  - [1.416498, 103.867523]
+  - [1.416646, 103.867297]
 
-# Yellow: a small loop in the north-east half (along 15..75), the other way
+# Yellow: a small loop in the north-east half (along 10..50), the other way
 # round from green, 7 m/s
 - name: YellowCar
   kind: vehicle
@@ -64,7 +64,7 @@ actors:
   speed: 7
   mode: loop
   waypoints:
-  - [1.416843, 103.867405]
-  - [1.417295, 103.867701]
-  - [1.417127, 103.867956]
-  - [1.416676, 103.867661]
+  - [1.416796, 103.867396]
+  - [1.417097, 103.867593]
+  - [1.416949, 103.867818]
+  - [1.416649, 103.867621]

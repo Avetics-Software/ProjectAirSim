@@ -404,6 +404,7 @@ class SimPayload(DroneCamera):
         self.sim_camera = sim_camera  # SimCamera
         self.rtsp = rtsp
         self.camera = camera  # CameraProperties
+        self.max_zoom = camera.max_zoom  # for mission zoom factors ("2x")
         self.zoom_speed = float(
             camera.props.get("zoom", {}).get("zoom_speed_percent_per_s", 30.0)
         )

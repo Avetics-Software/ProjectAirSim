@@ -196,6 +196,7 @@ drones:
 | `goto` | `{north, east, alt}` in metres, or `{lat, lon, alt}`. Height is above each aircraft's home; omitted height keeps the previous step's height |
 | `heading` | Aircraft heading in degrees clockwise from north, kept for later steps until another `heading`; `travel` lets PX4 face the way it flies. Without `goto`, turn at the previous waypoint |
 | `gimbal` | Pitch in degrees, negative down; `yaw` relative to the nose, or `heading` as a compass bearing with yaw lock. Omitted yaw/heading uses nose-relative zero |
+| `zoom` | Optical zoom on arrival: a factor (`2x`: twice the lens's widest focal length; in the sim the ZR10's 10x range makes `2x` 11.1 %) or a percentage of the zoom range (`25`). The ground station sends it (`MAV_CMD_SET_CAMERA_ZOOM`) when the drone moves on from the step's waypoint, as PX4 missions can't zoom, so it needs the station's link. A real drone's camera takes percentages only (its lens range is unknown to the station) |
 | `hold` | Seconds at the waypoint; when combined with a camera step, change the camera first, then hold |
 | `look_at` | Point the camera at a place (ROI), in either coordinate format, optional `alt` (default ground at home height); re-aimed at each later waypoint; `none` clears it and centres the camera |
 | `wait` | Seconds of delay, including after a camera-only step |
@@ -205,7 +206,7 @@ drones:
 
 Camera steps on a `goto` apply on arrival. Put a camera step **before** the
 `goto` to set it for that flight leg. Gimbal travel/slew limits still apply.
-Zoom steps and QGC `.plan` import are not supported in this version.
+QGC `.plan` import is not supported in this version.
 
 How PX4 runs the camera steps (the station allows for these; ArduPilot's
 differences are below):
@@ -263,7 +264,7 @@ when it hears it.
 
 The station cancels the selected track and held jogs before start and blocks
 new manual gimbal/tracking input while the mission holds the camera. Video and heartbeat
-continue. Zoom remains manual. After a hovering mission completes, the station
+continue. Zoom is manual, apart from the mission's own `zoom` steps. After a hovering mission completes, the station
 requests HOLD so X can reclaim the gimbal. For land/RTL it follows until
 landing or interruption. `mission stop`, emergency commands or another flight
 command replace the mission task. A link loss does not release camera control.

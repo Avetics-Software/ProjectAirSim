@@ -19,6 +19,7 @@ PX4's own timing, the same way every run, and keeps flying if the link drops.
           - goto: {north: 100, east: 0, alt: 30}
             heading: 90               # degrees from north, while flying there and after
             gimbal: {pitch: -30, yaw: 0}      # applied on arrival; yaw from the nose
+            zoom: 2x                  # optical zoom on arrival (or a percentage, 0-100)
             hold: 5                   # seconds at the waypoint
           - gimbal: {pitch: -45, heading: 270}  # yaw as a compass heading (yaw lock)
           - goto: {lat: 1.4150, lon: 103.8660, alt: 40}
@@ -34,7 +35,9 @@ Mission items: NAV_TAKEOFF, NAV_WAYPOINT (param1 hold, param4 heading),
 DO_CHANGE_SPEED, DO_GIMBAL_MANAGER_PITCHYAW (flags: yaw lock for a compass
 heading), DO_SET_ROI_LOCATION / DO_SET_ROI_NONE, NAV_DELAY,
 IMAGE_START_CAPTURE, NAV_LAND, NAV_RETURN_TO_LAUNCH. PX4 doesn't accept
-camera zoom in a mission, so there is no zoom step.
+camera zoom in a mission, so a `zoom` step is the ground station's: it zooms
+the camera (MAV_CMD_SET_CAMERA_ZOOM) when the drone reaches it, the way it
+hands over the camera for `track` (so it needs the station's link).
 
 A fixed-wing (gcs/airframe.py) flies the same steps where it can: it climbs
 out along the runway for takeoff, circles for a hold (NAV_LOITER_TIME) and has
@@ -69,7 +72,7 @@ from .mavlink_link import FIXEDWING_TAKEOFF_PITCH, M
 EARTH_M_PER_DEG = 111_320.0
 F_REL, F_MISSION = M.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT, M.MAV_FRAME_MISSION
 STEP_KEYS = {"takeoff", "goto", "heading", "gimbal", "hold", "look_at", "wait", "photo",
-             "land", "rtl", "speed", "track"}
+             "land", "rtl", "speed", "track", "zoom"}
 TRACKERS = ("auto", "x", "truth")
 
 
@@ -127,6 +130,8 @@ def _validate_step(step, label):
         if "gimbal" in step or "look_at" in step:
             raise ValueError(f"{label}: track hands the camera to the tracker; it can't share "
                              "a step with gimbal or look_at")
+    if "zoom" in step:
+        zoom_spec(step["zoom"], label)
     if isinstance(step.get("land"), dict):
         spec = dict(step["land"])
         if "heading" not in spec:
@@ -143,6 +148,28 @@ def _validate_step(step, label):
                              + (", or a runway {north/east or lat/lon, heading}" if key == "land" else ""))
     if sum(bool(step.get(k)) for k in ("takeoff", "goto", "land", "rtl")) > 1:
         raise ValueError(f"{label}: use one flight action per step")
+
+
+def zoom_spec(value, label="zoom"):
+    """A `zoom` step's value: {"factor": F} for "2x" (twice the lens's widest
+    focal length) or {"percent": P} for a number (0 = widest, 100 = longest,
+    as the console's `zoom`)."""
+    error = f"{label}: zoom needs a factor like 2x (at least 1x) or a percentage 0-100"
+    if isinstance(value, str) and value.strip().lower().endswith("x"):
+        try:
+            factor = float(value.strip()[:-1])
+        except ValueError:
+            raise ValueError(error)
+        if factor < 1:
+            raise ValueError(error)
+        return {"factor": factor}
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 100:
+        raise ValueError(error)
+    return {"percent": float(value)}
+
+
+def _zoom_text(spec):
+    return f"{spec['factor']:g}x" if "factor" in spec else f"{spec['percent']:g}%"
 
 
 def track_spec(value, label="track"):
@@ -176,6 +203,7 @@ class DroneMission:
     max_alt: float = 0.0
     camera_steps: list = field(default_factory=list)
     track_steps: list = field(default_factory=list)  # [(item seq, track spec or None)]
+    zoom_steps: list = field(default_factory=list)  # [(item seq, zoom spec)], the station's
 
 
 @dataclass
@@ -314,7 +342,7 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
     accept_m = 3.0 if hovers else 0.0  # a fixed-wing's own (WP_RADIUS)
     claims_gimbal = dialect(airframe.autopilot).mission_gimbal_claim
     waypoint_heading = dialect(airframe.autopilot).waypoint_sets_heading
-    items, route, route_seq, track_steps = [], [], [], []
+    items, route, route_seq, track_steps, zoom_steps = [], [], [], [], []
     heights = []
     camera_steps = []
     roi = None  # the look_at in force, re-issued at each waypoint
@@ -446,6 +474,11 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
                 items.extend(claim_items)
                 track_steps.append((len(items) - (1 if claims_gimbal else 0), None))
             tracking = bool(spec)
+        if "zoom" in step:
+            # On arrival, with the camera steps: when PX4 moves past this
+            # step's waypoint (to its first camera item, or the next step)
+            zoom_steps.append((len(items), zoom_spec(step["zoom"])))
+            camera_steps.append((*here, "ZOOM " + str(step["zoom"])))
         if "gimbal" in step:
             roi = None
             items.extend(gimbal_items(step["gimbal"]))
@@ -501,6 +534,7 @@ def build_items(dm, origin, here, start_alt, airborne, sysid, default_alt=30.0,
     dm.max_alt = max(heights, default=alt)
     dm.camera_steps = camera_steps
     dm.track_steps = track_steps
+    dm.zoom_steps = zoom_steps
     return items
 
 
@@ -641,7 +675,7 @@ class MissionControl:
     scores it."""
 
     def __init__(self, links, swarm, home, run_dir, search_dirs=(), before_start=None,
-                 default_alt=30.0, companions=None, on_track=None, on_run=None):
+                 default_alt=30.0, companions=None, on_track=None, on_run=None, on_zoom=None):
         self.links = links
         self.swarm = swarm
         self.home = home
@@ -656,6 +690,7 @@ class MissionControl:
         self.run_log = None
         self.run_id = None  # of the run in progress (or the last one)
         self.on_track = on_track
+        self.on_zoom = on_zoom  # on_zoom(i, zoom spec): zoom drone i's camera
         self.on_run = on_run  # on_run(event "start"/"end", mission, run_id, indices)
         self.tracking = {}  # drone index -> the track spec in force
         self._log_task = None
@@ -835,6 +870,7 @@ class MissionControl:
             complete = False
             observed_active = False
             pending_tracks = list(dm.track_steps)
+            pending_zooms = list(dm.zoom_steps)
             # (giving way to another drone pauses it; the swarm resumes it)
             while link.mode == "MISSION" or i in self.swarm.giving_way \
                     or (landing and link.mode in ("RTL", "LAND")):
@@ -848,6 +884,8 @@ class MissionControl:
                 # Track steps PX4 has run (the current item is past them)
                 while pending_tracks and link.mission_seq >= pending_tracks[0][0]:
                     self._set_tracking(i, pending_tracks.pop(0)[1])
+                while pending_zooms and link.mission_seq >= pending_zooms[0][0]:
+                    self._zoom(i, pending_zooms.pop(0)[1])
                 if not link.armed or (complete and not landing):
                     break
                 k = max((n for n, seq in enumerate(dm.route_seq) if seq <= link.mission_seq),
@@ -857,6 +895,10 @@ class MissionControl:
                     self.swarm.destinations[i] = dm.route[k]
                 await asyncio.sleep(0.5)
             done = complete or not link.armed
+            if complete:
+                # A zoom on the last step: there is no later item to pass
+                for _, spec in pending_zooms:
+                    self._zoom(i, spec)
             if complete and not landing and link.mode == "MISSION":
                 # X stands down based on the flight mode, so explicitly leave
                 # MISSION after the last action instead of hovering in it.
@@ -882,6 +924,16 @@ class MissionControl:
             companion = self.companions.get(i)
             if companion:
                 companion.set_mission_active(link.mode == "MISSION")
+
+    def _zoom(self, i, spec):
+        name = self.links[i].name
+        if not self.on_zoom:
+            log.warning(f"{name}: the mission's zoom step needs the ground station's camera")
+            return
+        try:
+            self.on_zoom(i, spec)
+        except Exception as err:
+            log.warning(f"{name}: zoom failed: {err}")
 
     def _set_tracking(self, i, spec, release_only=False):
         """The mission handed drone i's camera to a tracker (spec), or took it back.
@@ -1080,8 +1132,16 @@ def main(argv=None):
                   f"{len(dm.items)} items, {len(dm.route)} waypoints, {length / 1000:.2f} km"
                   + (f", about {length / speed / 60:.1f} min at {speed:g} m/s" if speed and length
                      else "") + f", highest {dm.max_alt:g} m")
+            zooms = {}
+            for seq, spec in dm.zoom_steps:
+                zooms.setdefault(seq, []).append(spec)
             for n, item in enumerate(dm.items, start=1):
+                for spec in zooms.pop(n - 1, []):
+                    print("      zoom " + _zoom_text(spec) + " (the ground station, on reaching here)")
                 print(f"  {n:2d}  {_item_text(item)}")
+            for specs in zooms.values():  # on the last step: once the mission is complete
+                for spec in specs:
+                    print("      zoom " + _zoom_text(spec) + " (the ground station, at the end)")
     except ValueError as err:
         print(f"error: {err}", file=sys.stderr)
         return 1
