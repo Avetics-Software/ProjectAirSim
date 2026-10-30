@@ -1,0 +1,44 @@
+# Strike test, quadrotor: 200 m stand-off, 30 m up.
+#
+# strike_quad.yml (90 m, 50 m) with the hold point moved: 200 m short of
+# TargetVehicle on the road's approach heading (033), 30 m above home. The
+# camera looks down about 5 deg at a slant range of about 201 m.
+# One of a grid (stand-off 60/120/200 m x height 30/60/120 m), all with
+# the same target and scenario, so runs differ only in the geometry.
+#
+#   ./run_cesium_sim.sh --qgc --drones 1 --model quad_px4 \
+#       --config config.yml --companion <this-laptop-ip>
+#   mission load strike_quad_d200_h30
+#   mission upload
+#   mission start
+#   (with X's rknn-sim-quad-px4 profile running on the companion)
+#
+# Arm STRIKE during the hold, as in strike_quad.yml.
+mission: strike_quad_d200_h30
+origin: home
+speed: 6
+actors: scenarios/strike_targets.yml
+# Uploaded by `mission upload`, before the mission. Home, the stand-offs (all
+# on the approach line between home and the target) and the target are
+# inside, with about 100 m to spare around the target for X's survey move and
+# the strike run. The ceiling is the config's; keep it above the hold height
+# plus fence_margin_m (10 m).
+fence:
+  corners:                  # metres north/east of home
+    - {north: -100, east: -100}
+    - {north: 320, east: -100}
+    - {north: 320, east: 280}
+    - {north: -100, east: 280}
+  ceiling: 170
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 30
+      # 200 m short of the target, on the road's approach heading (033).
+      - goto: {lat: 1.413761, lon: 103.865462, alt: 30}
+        heading: 33
+      - look_at: {lat: 1.415268, lon: 103.866441, alt: 12}
+      - track: {target: TargetVehicle, tracker: x}
+      - hold: 120          # arm STRIKE in this window
+      - rtl: true
