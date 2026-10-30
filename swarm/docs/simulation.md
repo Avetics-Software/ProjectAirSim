@@ -207,7 +207,20 @@ for a while first; `start_at_m` / `stop_short_m` start it part-way along its
 path and stop it short of the end, so several cars sharing one route wait and
 stop in formation (a convoy) instead of stacked at its start. A
 [mission](features/missions.md) can bring its own actors file (`actors:`),
-respawned at each `mission start`. The map data is downloaded once into `osm_cache/` and needs
+respawned at each `mission start`.
+
+`color:` repaints a vehicle: a name (`red`, `blue`, `green`, `yellow`,
+`orange`, `white`, `black`, `silver`, `purple`, `cyan`) or `[r, g, b]` from 0
+to 1. On `SKM_SportsCar` it tints the body (material parameter
+`MetalPartsTint`, slot `Body`; set `color_parameter` and `color_slots` for
+another asset). Distinctly coloured cars are what
+[`missions/reid_consistency.yml`](../missions/reid_consistency.yml) uses to
+collect ReID data. If no material takes the colour, the sim log lists the
+parameters the asset does have. The client call behind it is
+`world.set_object_color(name, rgb, parameter, slot_filter)`, which works on
+static and skeletal meshes.
+
+The map data is downloaded once into `osm_cache/` and needs
 internet the first time. Preview routes without the sim:
 `python road_routes.py --kind vehicle --random 1500 --count 5 --geojson routes.geojson`,
 then drop the file onto https://geojson.io.

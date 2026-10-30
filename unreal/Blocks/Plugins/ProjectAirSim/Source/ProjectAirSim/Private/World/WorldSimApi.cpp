@@ -230,6 +230,13 @@ void WorldSimApi::RegisterServiceMethods() {
       set_light_color.CreateMethodHandler(&WorldSimApi::setLightColor, *this);
   sim_scene_->RegisterServiceMethod(set_light_color, set_light_color_handler);
 
+  auto set_object_color = projectairsim::ServiceMethod(
+      "SetObjectColor",
+      {"object_name", "color_rgb", "parameter_name", "slot_filter"});
+  auto set_object_color_handler =
+      set_object_color.CreateMethodHandler(&WorldSimApi::setObjectColor, *this);
+  sim_scene_->RegisterServiceMethod(set_object_color, set_object_color_handler);
+
   auto set_light_radius = projectairsim::ServiceMethod(
       "SetLightObjectRadius", {"object_name", "new_radius"});
   auto set_light_radius_handler =
@@ -1629,6 +1636,80 @@ bool WorldSimApi::setLightColor(const std::string& object_name,
       },
       true);
   return result;
+}
+
+std::vector<std::string> WorldSimApi::setObjectColor(
+    const std::string& object_name, const std::vector<float>& color_rgb,
+    const std::string& parameter_name, const std::string& slot_filter) {
+  std::vector<std::string> changed;
+  if (color_rgb.size() != 3) {
+    UnrealLogger::Log(projectairsim::LogLevel::kError,
+                      TEXT("[WorldSimApi::setObjectColor] Invalid color_rgb."));
+    return changed;
+  }
+  const FLinearColor color{color_rgb[0], color_rgb[1], color_rgb[2], 1.0f};
+  const FName parameter(UTF8_TO_TCHAR(parameter_name.c_str()));
+  const FString filter(UTF8_TO_TCHAR(slot_filter.c_str()));
+
+  UnrealHelpers::RunCommandOnGameThread(
+      [this, &object_name, &color, &parameter, &filter, &changed]() {
+        AActor* actor = UnrealHelpers::FindActor<AActor>(
+            unreal_world_, FString(object_name.c_str()));
+        if (!actor) {
+          UnrealLogger::Log(projectairsim::LogLevel::kError,
+                            TEXT("[WorldSimApi::setObjectColor] Cannot find "
+                                 "specified object."));
+          return;
+        }
+        // Skeletal meshes (the moving vehicles) as well as static ones
+        TArray<UMeshComponent*> meshes;
+        actor->GetComponents<UMeshComponent>(meshes);
+        TArray<FString> available;  // for the log when nothing matches
+        for (UMeshComponent* mesh : meshes) {
+          const TArray<FName> slot_names = mesh->GetMaterialSlotNames();
+          for (int32 i = 0; i < mesh->GetNumMaterials(); ++i) {
+            UMaterialInterface* material = mesh->GetMaterial(i);
+            if (!material) continue;
+            const FString slot = slot_names.IsValidIndex(i)
+                                     ? slot_names[i].ToString()
+                                     : FString();
+            if (!filter.IsEmpty() && !slot.Contains(filter) &&
+                !material->GetName().Contains(filter)) {
+              continue;
+            }
+            TArray<FMaterialParameterInfo> infos;
+            TArray<FGuid> ids;
+            material->GetAllVectorParameterInfo(infos, ids);
+            bool has_parameter = false;
+            for (const FMaterialParameterInfo& info : infos) {
+              available.AddUnique(info.Name.ToString());
+              has_parameter |= info.Name == parameter;
+            }
+            if (!has_parameter) continue;
+            UMaterialInstanceDynamic* dynamic =
+                Cast<UMaterialInstanceDynamic>(material);
+            if (!dynamic) {
+              dynamic = mesh->CreateDynamicMaterialInstance(i, material);
+            }
+            if (!dynamic) continue;
+            dynamic->SetVectorParameterValue(parameter, color);
+            changed.push_back(TCHAR_TO_UTF8(*FString::Printf(
+                TEXT("%s/%s"), *mesh->GetName(),
+                *(slot.IsEmpty() ? material->GetName() : slot))));
+          }
+        }
+        if (changed.empty()) {
+          UnrealLogger::Log(
+              projectairsim::LogLevel::kWarning,
+              TEXT("[WorldSimApi::setObjectColor] No material slot of "
+                   "'%s' has the parameter '%s' (filter '%s'). Vector "
+                   "parameters there: %s"),
+              UTF8_TO_TCHAR(object_name.c_str()), *parameter.ToString(),
+              *filter, *FString::Join(available, TEXT(", ")));
+        }
+      },
+      true);
+  return changed;
 }
 
 bool WorldSimApi::setLightRadius(const std::string& object_name,

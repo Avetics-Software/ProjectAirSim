@@ -1,0 +1,70 @@
+# ReID scenario: four cars of different colours lapping crossing circuits on
+# Seletar's runway 03/21 (43 m wide, heading 033), 450 m up it from the spawn,
+# so that the drones of missions/reid_consistency.yml (100 m apart at 150 m,
+# cameras straight down) see several cars at once, crossing and overtaking,
+# and the same car in both cameras where their views overlap.
+#
+# Positions are along/across the runway's OpenStreetMap centreline from the
+# circuit's centre (1.416647, 103.867459): along -100..100 m (south-west to
+# north-east), across -17..17 m (north-west to south-east edge). Each camera
+# sees about 178 m along the runway by 100 m across; the two views overlap
+# over the middle 78 m.
+#
+# Straight legs (follow_roads: false) on the runway pavement. Cars don't avoid
+# each other: at crossings they pass through each other, which in the image
+# is an occlusion. `mission start` respawns them at their first waypoint, so
+# every run starts the same.
+defaults:
+  vehicle: {asset: SKM_SportsCar, length: 4.5, align_to_ground: true, follow_roads: false}
+
+actors:
+# Red: the big circuit round the whole box (along -100..100, across -12..12), 10 m/s
+- name: RedCar
+  kind: vehicle
+  color: red
+  speed: 10
+  mode: loop
+  waypoints:
+  - [1.415954, 103.866877]
+  - [1.417458, 103.867861]
+  - [1.41734, 103.868042]
+  - [1.415836, 103.867058]
+
+# Blue: a bow-tie across the box; crosses itself in the middle (where both
+# cameras see it) and the red circuit near each end, 8 m/s
+- name: BlueCar
+  kind: vehicle
+  color: blue
+  speed: 8
+  mode: loop
+  waypoints:
+  - [1.416044, 103.866904]
+  - [1.41725, 103.868015]
+  - [1.417397, 103.867789]
+  - [1.415897, 103.86713]
+
+# Green: a small loop in the south-west half (along -75..-15), cutting across
+# the red and blue paths, 6 m/s
+- name: GreenCar
+  kind: vehicle
+  color: green
+  speed: 6
+  mode: loop
+  waypoints:
+  - [1.416167, 103.866963]
+  - [1.416, 103.867218]
+  - [1.416451, 103.867514]
+  - [1.416618, 103.867258]
+
+# Yellow: a small loop in the north-east half (along 15..75), the other way
+# round from green, 7 m/s
+- name: YellowCar
+  kind: vehicle
+  color: yellow
+  speed: 7
+  mode: loop
+  waypoints:
+  - [1.416843, 103.867405]
+  - [1.417295, 103.867701]
+  - [1.417127, 103.867956]
+  - [1.416676, 103.867661]

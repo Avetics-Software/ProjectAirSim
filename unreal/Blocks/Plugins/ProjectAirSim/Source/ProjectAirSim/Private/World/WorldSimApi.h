@@ -188,6 +188,16 @@ class WorldSimApi {
   bool setLightColor(const std::string& object_name,
                      const std::vector<float>& color_rgb);
 
+  // Set a vector parameter (e.g. "BaseColor") on the materials of every mesh
+  // of an actor, static or skeletal, through dynamic material instances.
+  // slot_filter limits it to the material slots whose slot or material name
+  // contains it (e.g. "Body"); empty means every slot. Returns the slots
+  // changed.
+  std::vector<std::string> setObjectColor(const std::string& object_name,
+                                          const std::vector<float>& color_rgb,
+                                          const std::string& parameter_name,
+                                          const std::string& slot_filter);
+
   bool setLightRadius(const std::string& object_name, float new_radius);
 
   bool setSunLightIntensity(float intensity);

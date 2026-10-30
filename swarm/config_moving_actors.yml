@@ -37,6 +37,10 @@
 #   file:       your own .glb/.gltf model instead of asset (static, no animation)
 #   yaw_offset: degrees between the mesh's forward and the direction of travel
 #   align_to_ground: tilt with the slope (vehicles)
+#   color:      repaint it: red, blue, green, yellow, orange, white, black,
+#               silver, purple, cyan, or [r, g, b] from 0 to 1 (vehicles: the
+#               body's MetalPartsTint; color_parameter / color_slots for
+#               another asset's material)
 #   walk_animation, idle_animation, animation_speed: for skeletal meshes; the
 #               walk animation plays at speed / animation_speed
 # Anything left out comes from `defaults` for the actor's kind.

@@ -63,7 +63,7 @@ safety:
   gps_min_sats: 8
   gps_max_eph_m: 2.5
   fence_margin_m: 10            # warn this close to the geofence
-  fence_max_alt_m: 120          # geofence ceiling, above home
+  fence_max_alt_m: 170          # geofence ceiling, above home (the ReID mission flies at 150)
   fence_action: rtl             # what PX4 does at the fence: warn | hold | rtl | land
   lost_margin_m: 15             # others keep this far from a lost drone's last position
 

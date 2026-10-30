@@ -40,7 +40,19 @@ KIND_DEFAULTS = {
         "length": 4.5,
         "speed": 10.0,
         "align_to_ground": True,
+        # `color:` repaints this material parameter on the slots named so.
+        # SKM_SportsCar's body slot (BodyMaterial) takes its paint from a
+        # texture; MetalPartsTint tints it (it has no BaseColor parameter)
+        "color_parameter": "MetalPartsTint",
+        "color_slots": "Body",
     },
+}
+# `color:` by name, as linear RGB 0-1; or give [r, g, b]
+COLORS = {
+    "red": [0.8, 0.02, 0.02], "blue": [0.02, 0.1, 0.8], "green": [0.03, 0.5, 0.05],
+    "yellow": [0.9, 0.75, 0.02], "orange": [0.9, 0.3, 0.02], "white": [0.9, 0.9, 0.9],
+    "black": [0.02, 0.02, 0.02], "silver": [0.45, 0.45, 0.47], "purple": [0.35, 0.05, 0.6],
+    "cyan": [0.02, 0.6, 0.7],
 }
 EARTH_M_PER_DEG = 111_320.0
 GROUND_TRUTH_PERIOD_S = 0.2
@@ -51,6 +63,19 @@ ACTORS_HELP = """  actors [list]                         moving people and vehic
   actors pause | resume                 stop or restart all of them
   actors reload                         delete them, then respawn from the config file
   actors delete NAME                    remove one"""
+
+
+def parse_color(value):
+    """[r, g, b] (linear, 0-1) from a name in COLORS or a list of three."""
+    if isinstance(value, str):
+        if value.lower() not in COLORS:
+            raise ValueError(f"unknown color '{value}' (one of {', '.join(COLORS)}, "
+                             "or [r, g, b] from 0 to 1)")
+        return list(COLORS[value.lower()])
+    rgb = [float(c) for c in value]
+    if len(rgb) != 3 or not all(0.0 <= c <= 1.0 for c in rgb):
+        raise ValueError(f"color {value} must be [r, g, b], each from 0 to 1")
+    return rgb
 
 
 def follows_roads(opts):
@@ -247,6 +272,8 @@ class MovingActorManager:
             length=opts.get("length"),
             scale=opts.get("scale"),
         )
+        if opts.get("color") is not None:
+            self._paint(name, opts)
         speed = float(opts["speed"])
         self.world.set_object_path(
             name,
@@ -261,12 +288,26 @@ class MovingActorManager:
             start_delay=float(opts.get("start_delay", 0.0)),
         )
         length = sum(math.dist(a[:2], b[:2]) for a, b in zip(ned_path, ned_path[1:]))
+        color = opts.get("color")
         self.actors[name] = {
             "kind": kind,
             "yaw_offset": yaw_offset,
-            "desc": f"{kind}, {speed:g} m/s, {mode}, {len(ned_path)} points / {length:.0f} m",
+            "desc": f"{kind}, {speed:g} m/s, {mode}, {len(ned_path)} points / {length:.0f} m"
+                    + (f", {color}" if color is not None else ""),
         }
         return name
+
+    def _paint(self, name, opts):
+        """Repaint a spawned actor (`color:`); a failure leaves its own colours."""
+        rgb = parse_color(opts["color"])
+        parameter = opts.get("color_parameter", "MetalPartsTint")
+        slots = self.world.set_object_color(name, rgb, parameter,
+                                            opts.get("color_slots", ""))
+        if not slots:
+            projectairsim_log().warning(
+                f"{name}: no material took color {opts['color']} (parameter "
+                f"{parameter!r}, slots "
+                f"{opts.get('color_slots', '')!r}); the sim log lists the parameters it has")
 
     def _network(self, kind):
         if kind not in self.networks:

@@ -1159,7 +1159,21 @@ class Session:
             failed = [f"{link.name} ({err})" for link, err in zip(links, results) if err]
             if failed:
                 projectairsim_log().warning(f"Couldn't clear the {what} on {', '.join(failed)}")
-        projectairsim_log().info("Geofence and missions cleared on every drone")
+        # Its parameters too: a fence ceiling from an earlier session's `fence
+        # upload` would refuse waypoints above it ("Geofence violation for
+        # waypoint"). The config's ceiling is the one in force.
+        ceiling = float(self.station.safety.settings.fence_max_alt_m)
+        results = await asyncio.gather(
+            *(asyncio.to_thread(link.set_param, link.ap.fence_ceiling_param, ceiling)
+              for link in links), return_exceptions=True
+        )
+        failed = [link.name for link, value in zip(links, results)
+                  if isinstance(value, Exception) or value is None]
+        if failed:
+            projectairsim_log().warning(f"Couldn't set the fence ceiling ({ceiling:g} m) on "
+                                        f"{', '.join(failed)}")
+        projectairsim_log().info(f"Geofence and missions cleared on every drone; ceiling "
+                                 f"{ceiling:g} m")
         self.station.missions.invalidate()
         self.station.safety.fence = []
         self.station.windows.set_fence([])

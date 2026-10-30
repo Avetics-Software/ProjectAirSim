@@ -72,7 +72,10 @@ once, as PX4 will refuse to fly there. Each PX4 gets the fence as an inclusion
 polygon (MAVLink fence protocol), with the ceiling (`GF_MAX_VER_DIST`) and its
 action (`GF_ACTION`: warn, hold, rtl or land). **PX4 enforces it itself**, so
 it holds without the ground station's link: PX4 refuses `goto`s and missions
-that leave it and acts on a breach. The ground station also checks every drone
+that leave it and acts on a breach. PX4 keeps the ceiling on disk, so in the
+sim it is reset to `config.yml`'s `fence_max_alt_m` (170 m) at every start;
+otherwise a lower ceiling from an earlier session's upload refuses higher
+waypoints ("Geofence violation for waypoint"). The ground station also checks every drone
 against it and alerts near and outside it. Uploading an empty fence (*Clear*,
 then *Upload*, or `fence clear`) removes it. PX4 keeps an uploaded fence on
 disk across restarts, so the sim clears every drone's fence each time it loads
