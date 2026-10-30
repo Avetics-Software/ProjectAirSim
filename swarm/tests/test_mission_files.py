@@ -82,6 +82,24 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("heading", err)
 
+    def test_a_waypoint_outside_the_mission_fence_is_a_mistake(self):
+        bad = Path(__file__).parent / "_bad_mission3.yml"
+        fence = ("fence:\n  corners: [{north: -50, east: -50}, {north: 50, east: -50},\n"
+                 "            {north: 50, east: 50}, {north: -50, east: 50}]\n")
+        bad.write_text(fence + "origin: home\ndrones:\n  Drone1:\n    steps:\n"
+                       "      - goto: {north: 80, alt: 30}\n")
+        try:
+            code, _, err = self.run_main(str(bad), "--drones", "1")
+            self.assertEqual(code, 1)
+            self.assertIn("outside the fence", err)
+            bad.write_text(fence + "  ceiling: 20\norigin: home\ndrones:\n  Drone1:\n"
+                           "    steps:\n      - goto: {north: 10, alt: 30}\n")
+            code, _, err = self.run_main(str(bad), "--drones", "1")
+            self.assertEqual(code, 1)
+            self.assertIn("above the fence ceiling", err)
+        finally:
+            bad.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

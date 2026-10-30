@@ -228,7 +228,8 @@ class GroundStation:
             search_dirs=[os.path.join(base, "missions")], before_start=before_mission,
             default_alt=config.swarm.default_alt_m, companions=self.companions,
             on_track=on_mission_track, on_run=on_mission_run,
-            on_zoom=lambda i, spec: self.cameras[i].zoom_to(spec))
+            on_zoom=lambda i, spec: self.cameras[i].zoom_to(spec),
+            on_fence=self._mission_fence)
         self.fence_status = ""  # last geofence upload, for the panel
         self.panel = SafetyPanel(self.windows, self, sim_faults)
         if sim_faults:
@@ -480,36 +481,48 @@ class GroundStation:
         if 0 < len(corners) < 3:
             log.warning("A geofence needs at least 3 corners")
             return
+        asyncio.get_running_loop().create_task(self.send_fence(corners))
+
+    async def send_fence(self, corners, ceiling=None):
+        """upload_fence, awaited; ceiling (m above home) replaces the safety
+        settings' fence_max_alt_m. Returns the names of the drones that took it."""
         s = self.safety.settings
+        if ceiling is not None and ceiling != s.fence_max_alt_m:
+            log.info(f"Fence ceiling {s.fence_max_alt_m:g} m -> {ceiling:g} m")
+            s.fence_max_alt_m = float(ceiling)
         self.safety.fence = corners
         self.windows.set_fence(corners)
         self.fence_status = "uploading..."
+        done = []
+        for link in self.links:
+            if link.position is None or link.link_age is None or link.link_age > 3.0:
+                log.warning(f"{link.name}: no link; geofence not uploaded")
+                continue
+            try:
+                await asyncio.to_thread(link.upload_fence, corners)
+                ap = link.ap
+                if corners:
+                    await asyncio.to_thread(link.set_param, ap.fence_action_param,
+                                            ap.FENCE_ACTIONS[s.fence_action])
+                    await asyncio.to_thread(link.set_param, ap.fence_ceiling_param,
+                                            float(s.fence_max_alt_m))
+                for name, value in (ap.FENCE_ON if corners else ap.FENCE_OFF).items():
+                    await asyncio.to_thread(link.set_param, name, value)
+                done.append(link.name)
+            except Exception as err:
+                log.warning(f"{link.name}: geofence upload failed: {err}")
+        what = "removed from" if not corners else "uploaded to"
+        self.fence_status = (f"{what} {', '.join(done)} at {time.strftime('%H:%M:%S')}"
+                             if done else "upload failed")
+        log.info(f"Geofence {what} {len(done)} of {len(self.links)} drones")
+        return done
 
-        async def upload():
-            done = []
-            for link in self.links:
-                if link.position is None or link.link_age is None or link.link_age > 3.0:
-                    log.warning(f"{link.name}: no link; geofence not uploaded")
-                    continue
-                try:
-                    await asyncio.to_thread(link.upload_fence, corners)
-                    ap = link.ap
-                    if corners:
-                        await asyncio.to_thread(link.set_param, ap.fence_action_param,
-                                                ap.FENCE_ACTIONS[s.fence_action])
-                        await asyncio.to_thread(link.set_param, ap.fence_ceiling_param,
-                                                float(s.fence_max_alt_m))
-                    for name, value in (ap.FENCE_ON if corners else ap.FENCE_OFF).items():
-                        await asyncio.to_thread(link.set_param, name, value)
-                    done.append(link.name)
-                except Exception as err:
-                    log.warning(f"{link.name}: geofence upload failed: {err}")
-            what = "removed from" if not corners else "uploaded to"
-            self.fence_status = (f"{what} {', '.join(done)} at {time.strftime('%H:%M:%S')}"
-                                 if done else "upload failed")
-            log.info(f"Geofence {what} {len(done)} of {len(self.links)} drones")
-
-        asyncio.get_running_loop().create_task(upload())
+    async def _mission_fence(self, corners, ceiling):
+        """A mission's fence: every drone must take it before the mission goes up."""
+        done = await self.send_fence(corners, ceiling)
+        missing = [link.name for link in self.links if link.name not in done]
+        if missing:
+            raise RuntimeError(f"the mission's geofence didn't reach {', '.join(missing)}")
 
     async def _safety_command(self, word, parts):
         """alerts, ack, fence, safety: True if it was one."""

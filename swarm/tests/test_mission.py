@@ -16,7 +16,8 @@ from gcs.airframe import Airframe
 from gcs.autopilot import dialect
 from gcs.companion import CompanionLink
 from gcs.mavlink_link import M, VehicleLink
-from gcs.mission import DroneMission, MissionControl, build_items, compare_runs, load_mission
+from gcs.mission import (DroneMission, MissionControl, build_items, compare_runs,
+                         fence_corners, load_mission)
 from gcs.safety import SafetyMonitor
 from gcs.swarm import SwarmControl
 
@@ -45,6 +46,22 @@ class MissionFileTests(unittest.TestCase):
                      {"mission": "../escape", "drones": {"Drone1": {"steps": [{"rtl": True}]}}}):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 self.load(data)
+
+    def test_fence_corners_and_ceiling(self):
+        steps = {"Drone1": {"steps": [{"rtl": True}]}}
+        corners = [{"north": -10, "east": -10}, {"north": 10, "east": -10},
+                   {"lat": 1.0001, "lon": 103.0001}]
+        mission = self.load({"drones": steps, "fence": {"corners": corners, "ceiling": 150}})
+        self.assertEqual(mission.fence["ceiling"], 150)
+        lat, lon = fence_corners(mission.fence, (1, 103))[0]
+        self.assertAlmostEqual((lat - 1) * 111_320, -10, places=3)
+        self.assertLess(lon, 103)
+        self.assertIsNone(self.load({"drones": steps, "fence": {"corners": corners}})
+                          .fence["ceiling"])
+        for fence in ([], {"corners": corners[:2]}, {"corners": corners, "ceiling": 0},
+                      {"corners": corners, "floor": 5}, {"corners": corners + [{"alt": 3}]}):
+            with self.subTest(fence=fence), self.assertRaises(ValueError):
+                self.load({"drones": steps, "fence": fence})
 
     def test_terminal_actions_and_duplicate_drones(self):
         with self.assertRaisesRegex(ValueError, "after land"):
@@ -303,6 +320,34 @@ class MissionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         found = {}
         monitor._check_routes(found)
         self.assertIn("above the fence ceiling", found["route:0"][2])
+
+    async def test_a_mission_fence_goes_up_before_the_mission(self):
+        order = []
+        self.link.upload_items.side_effect = lambda items: order.append("mission")
+
+        async def on_fence(corners, ceiling):
+            order.append(("fence", corners, ceiling))
+        self.control.on_fence = on_fence
+        self.control.mission.fence = {"corners": [{"north": 0, "east": 0}, {"north": 50},
+                                                  {"east": 50}], "ceiling": 120}
+        await self.control.upload([0])
+        self.assertEqual(order[1], "mission")
+        self.assertEqual(order[0][0], "fence")
+        self.assertEqual(order[0][1][0], (1, 103))
+        self.assertEqual(order[0][2], 120)
+
+    async def test_a_fence_that_fails_stops_the_mission_upload(self):
+        async def on_fence(corners, ceiling):
+            raise RuntimeError("the mission's geofence didn't reach Drone1")
+        self.control.on_fence = on_fence
+        self.control.mission.fence = {"corners": [{"north": 0}, {"north": 50}, {"east": 50}],
+                                      "ceiling": None}
+        self.link.upload_items.reset_mock()
+        self.control.uploaded.clear()
+        with self.assertRaisesRegex(RuntimeError, "geofence"):
+            await self.control.upload([0])
+        self.link.upload_items.assert_not_called()
+        self.assertNotIn(0, self.control.uploaded)
 
     async def test_repeated_runs_reset_progress_and_restore_plans(self):
         for _ in range(2):

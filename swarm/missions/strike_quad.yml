@@ -24,6 +24,18 @@ mission: strike_quad
 origin: home
 speed: 6
 actors: scenarios/strike_targets.yml
+# Uploaded by `mission upload`, before the mission. Home, the stand-offs (all
+# on the approach line between home and the target) and the target are
+# inside, with about 100 m to spare around the target for X's survey move and
+# the strike run. The ceiling is the config's; keep it above the hold height
+# plus fence_margin_m (10 m).
+fence:
+  corners:                  # metres north/east of home
+    - {north: -100, east: -100}
+    - {north: 320, east: -100}
+    - {north: 320, east: 280}
+    - {north: -100, east: 280}
+  ceiling: 170
 
 drones:
   Drone1:

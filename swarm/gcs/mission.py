@@ -30,6 +30,12 @@ PX4's own timing, the same way every run, and keeps flying if the link drops.
           - track: {target: Vehicle1} # hand the camera to the tracker (X, or the sim's
                                       #   truth tracker) while it flies on; track: off
           - rtl: true                 # or land: true; else it holds at the last step
+    fence:                            # optional: the geofence for this mission
+      corners:                        #   3 or more, lat/lon or north/east of home
+        - {north: -100, east: -100}
+        - {north: 300, east: -100}
+        - {north: 300, east: 300}
+      ceiling: 170                    #   metres above home [safety: fence_max_alt_m]
 
 Mission items: NAV_TAKEOFF, NAV_WAYPOINT (param1 hold, param4 heading),
 DO_CHANGE_SPEED, DO_GIMBAL_MANAGER_PITCHYAW (flags: yaw lock for a compass
@@ -47,6 +53,11 @@ and the direction it lands in, and the mission flies an approach to it,
 `approach_m` (400) back at `approach_alt` (30 m), as ArduPlane's landing
 sequence: DO_LAND_START, the approach waypoint, NAV_LAND. RTL then lands
 through the same sequence (RTL_AUTOLAND).
+
+A `fence` is uploaded to every drone by `mission upload`, before the
+mission (PX4 refuses waypoints outside the fence it holds), with the safety
+settings' fence action; its ceiling replaces fence_max_alt_m. It stays in
+force after the mission, as an uploaded `fence` does (fence clear removes it).
 
 Runs: each `mission start` gets a run id; every drone's position, heading,
 gimbal angle and mission step are logged at 5 Hz to runs/<mission>_<run>.csv,
@@ -214,6 +225,7 @@ class Mission:
     path: str = ""
     record: list = field(default_factory=list)  # drone indices whose runs are recorded (sim)
     actors: str = None  # the sim's moving actors for this mission (a config file), or None
+    fence: dict = None  # {"corners": [place specs], "ceiling": metres or None}, or None
 
 
 def load_mission(path, drone_names):
@@ -229,7 +241,8 @@ def parse_mission(data, drone_names, path=""):
     file is relative to."""
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a mission mapping")
-    unknown = set(data) - {"mission", "origin", "speed", "drones", "record", "actors"}
+    unknown = set(data) - {"mission", "origin", "speed", "drones", "record", "actors",
+                       "fence"}
     if unknown:
         raise ValueError(f"{path}: unknown key(s) {', '.join(sorted(unknown))}")
     origin = str(data.get("origin", "start")).lower()
@@ -301,7 +314,31 @@ def parse_mission(data, drone_names, path=""):
         actors = os.path.join(os.path.dirname(os.path.abspath(path)), str(actors))
         if not os.path.isfile(actors):
             raise ValueError(f"{path}: no actors file {actors}")
-    return Mission(name, origin, drones, path, record, actors)
+    return Mission(name, origin, drones, path, record, actors,
+                   _parse_fence(data.get("fence"), path))
+
+
+def _parse_fence(spec, path):
+    """A mission's `fence:` checked: {"corners": [...], "ceiling": m or None}."""
+    if spec is None:
+        return None
+    if not isinstance(spec, dict) or "corners" not in spec or set(spec) - {"corners", "ceiling"}:
+        raise ValueError(f"{path}: fence needs corners and optional ceiling")
+    corners = spec["corners"]
+    if not isinstance(corners, list) or len(corners) < 3:
+        raise ValueError(f"{path}: fence needs at least 3 corners")
+    for n, corner in enumerate(corners, start=1):
+        if not isinstance(corner, dict) or set(corner) - {"lat", "lon", "north", "east"}:
+            raise ValueError(f"{path}: fence corner {n}: expected lat/lon or north/east")
+        _validate_place(corner, f"{path}: fence corner {n}")
+    ceiling = spec.get("ceiling")
+    return {"corners": corners,
+            "ceiling": None if ceiling is None else _number(ceiling, "fence ceiling", 1)}
+
+
+def fence_corners(fence, home):
+    """A mission fence's corners as [(lat, lon)]; north/east are from home."""
+    return [_place(corner, home, 0)[:2] for corner in fence["corners"]]
 
 
 def _place(spec, origin, alt_default):
@@ -675,7 +712,8 @@ class MissionControl:
     scores it."""
 
     def __init__(self, links, swarm, home, run_dir, search_dirs=(), before_start=None,
-                 default_alt=30.0, companions=None, on_track=None, on_run=None, on_zoom=None):
+                 default_alt=30.0, companions=None, on_track=None, on_run=None, on_zoom=None,
+                 on_fence=None):
         self.links = links
         self.swarm = swarm
         self.home = home
@@ -692,6 +730,7 @@ class MissionControl:
         self.on_track = on_track
         self.on_zoom = on_zoom  # on_zoom(i, zoom spec): zoom drone i's camera
         self.on_run = on_run  # on_run(event "start"/"end", mission, run_id, indices)
+        self.on_fence = on_fence  # await on_fence(corners, ceiling): send the mission's fence
         self.tracking = {}  # drone index -> the track spec in force
         self._log_task = None
 
@@ -775,6 +814,14 @@ class MissionControl:
         if not self.mission:
             raise ValueError("load a mission first")
         m = self.mission
+        if m.fence:
+            # First: PX4 checks each waypoint against the fence it already holds
+            home = self.home()
+            if not home:
+                raise RuntimeError("no home position yet (the fence is measured from it)")
+            if not self.on_fence:
+                raise RuntimeError("this station can't upload a geofence")
+            await self.on_fence(fence_corners(m.fence, home), m.fence["ceiling"])
 
         async def one(i):
             link, dm = self.links[i], m.drones[i]
@@ -1089,6 +1136,7 @@ def main(argv=None):
 
     from .airframe import airframe_of
     from .fleet import load_fleet
+    from .safety import fence_check
 
     here = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(
@@ -1119,6 +1167,12 @@ def main(argv=None):
         print(f"Mission {mission.name}: north/east from "
               f"{'where each drone is at upload' if mission.origin == 'start' else 'home'}, "
               f"here {args.origin[0]:.6f}, {args.origin[1]:.6f}")
+        fence = fence_corners(mission.fence, tuple(args.origin)) if mission.fence else None
+        if fence:
+            ceiling = mission.fence["ceiling"]
+            print(f"Fence: {len(fence)} corners, ceiling "
+                  + (f"{ceiling:g} m" if ceiling else "from the safety settings") + ": "
+                  + "; ".join(f"{lat:.6f},{lon:.6f}" for lat, lon in fence))
         for i in sorted(mission.drones):
             dm = mission.drones[i]
             airframe = airframe_of(models[i])
@@ -1142,6 +1196,14 @@ def main(argv=None):
             for specs in zooms.values():  # on the last step: once the mission is complete
                 for spec in specs:
                     print("      zoom " + _zoom_text(spec) + " (the ground station, at the end)")
+            if fence:
+                outside = [p for p in dm.route if not fence_check(fence, *p[:2])[0]]
+                if outside:
+                    raise ValueError(f"{dm.name}: {len(outside)} waypoint(s) outside the fence, "
+                                     f"first {outside[0][0]:.6f},{outside[0][1]:.6f}")
+                if mission.fence["ceiling"] and dm.max_alt > mission.fence["ceiling"]:
+                    raise ValueError(f"{dm.name} flies at {dm.max_alt:g} m, above the fence "
+                                     f"ceiling ({mission.fence['ceiling']:g} m)")
     except ValueError as err:
         print(f"error: {err}", file=sys.stderr)
         return 1

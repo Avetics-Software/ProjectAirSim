@@ -192,6 +192,7 @@ drones:
 | `speed` | Metres/second; fleet default, per-drone override, or a step |
 | `record` | `true` (or a list of drones): in the sim, record each run frame by frame for tracking experiments (video, the drone's metadata, true boxes); see [MOT experiments](mot-experiments.md) |
 | `actors` | The sim's moving actors for this mission (a file like `config_moving_actors.yml`, relative to the mission), spawned afresh at each `mission start` |
+| `fence` | Optional geofence for the mission: `corners` (3 or more, `{lat, lon}` or `{north, east}` metres from home) and optional `ceiling` (metres above home; replaces the safety settings' `fence_max_alt_m`). `mission upload` sends it to every drone, with the safety settings' fence action, before the mission items, as PX4 refuses waypoints outside the fence it holds; if a drone doesn't take it, the mission isn't uploaded. It stays in force afterwards (`fence clear` removes it), and so does its ceiling. `python -m gcs.mission` reports a waypoint outside it or above its ceiling as a mistake |
 | `takeoff` | Height above home, first step only; skipped if uploaded airborne. If omitted on the ground, takeoff to the configured default height is inserted |
 | `goto` | `{north, east, alt}` in metres, or `{lat, lon, alt}`. Height is above each aircraft's home; omitted height keeps the previous step's height |
 | `heading` | Aircraft heading in degrees clockwise from north, kept for later steps until another `heading`; `travel` lets PX4 face the way it flies. Without `goto`, turn at the previous waypoint |
