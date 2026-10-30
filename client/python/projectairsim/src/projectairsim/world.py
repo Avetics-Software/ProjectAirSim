@@ -1084,7 +1084,40 @@ class World(object):
         }
         status = self.client.request(set_light_color_req)
         return status
-        
+
+    def set_object_color(
+        self,
+        object_name: str,
+        color_rgb: List[float],
+        parameter_name: str = "BaseColor",
+        slot_filter: str = "",
+    ) -> List[str]:
+        """Set a colour parameter on an object's materials, for static and
+        skeletal meshes alike (e.g. repaint a spawned car)
+
+        Args:
+            object_name (str): name of the object
+            color_rgb (List[float]): [red, green, blue] values (range: 0.0 - 1.0)
+            parameter_name (str): the materials' vector parameter to set
+            slot_filter (str): only material slots whose slot or material name
+                contains this (e.g. "Body"); empty for every slot
+
+        Returns:
+            List[str]: the material slots changed; empty if none has the
+                parameter (the sim log then lists the parameters they have)
+        """
+        set_color_req: Dict = {
+            "method": f"{self.parent_topic}/SetObjectColor",
+            "params": {
+                "object_name": object_name,
+                "color_rgb": color_rgb,
+                "parameter_name": parameter_name,
+                "slot_filter": slot_filter,
+            },
+            "version": 1.0,
+        }
+        return self.client.request(set_color_req)
+
     def set_light_object_radius(self, object_name: str, new_radius: float) -> bool:
         """Set a light object's atteniation radius (only affects point and spot lights)
         Args:

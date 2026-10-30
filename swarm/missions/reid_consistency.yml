@@ -1,0 +1,49 @@
+# ReID data collection: two drones 100 m apart at 150 m, cameras straight
+# down, watch four differently coloured cars (scenarios/reid_vehicles.yml)
+# lap crossing circuits on the runway for 5 minutes, then return home.
+#
+# The companions run ByteTrack only (no onboard ReID) and log every frame's
+# detections and tracks (X's MOT_LOG_DIR); the sim records each drone's
+# frames, pose and the cars' true identities (record: true; start the sim
+# with --ground-truth for labelled frames). The same car crossing the overlap
+# of the two views, and re-appearing after crossings and occlusions, is the
+# data a central ReID needs.
+#
+#   mission load reid_consistency   then   mission upload   then   mission start
+#
+# Geometry: the drones sit over the runway's centreline (heading 033), 50 m
+# either side of the circuit's centre (Drone1 the north-east point, Drone2
+# the south-west one, so their climbs from the spawn line don't cross),
+# facing across the runway (123) so each image's long side runs along it.
+# Each camera covers about 178 x 100 m
+# (ZR10 at 1x, 61.5 x 37 deg, from 150 m), about 9 cm per pixel (a car is
+# about 48 px long), and the two views overlap over the middle 78 m.
+#
+# Timeline from `mission start`: the cars set off at once; the drones climb
+# to 40 m, fly about 450 m up the runway while climbing to 150 m (about a
+# minute), point straight down and hold for 300 s, then return home.
+#
+# Needs the geofence ceiling above 150 m (config.yml safety: fence_max_alt_m).
+mission: reid_consistency
+origin: home
+speed: 10
+record: true
+actors: scenarios/reid_vehicles.yml
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 40
+      - goto: {lat: 1.417023, lon: 103.867705, alt: 150}
+        heading: 123
+      - gimbal: {pitch: -90}
+        hold: 300
+      - rtl: true
+  Drone2:
+    steps:
+      - takeoff: 40
+      - goto: {lat: 1.416271, lon: 103.867214, alt: 150}
+        heading: 123
+      - gimbal: {pitch: -90}
+        hold: 300
+      - rtl: true

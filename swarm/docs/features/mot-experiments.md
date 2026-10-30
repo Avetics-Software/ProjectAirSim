@@ -40,6 +40,7 @@ mission start 1
 | `mot_convoy` | 5 identical cars nose to tail, about 10 m gaps, 12 m/s | The drone flies beside the road at 9 m/s, camera fixed sideways. The cars drift through the frame at 3 m/s relative, about 30 s each, all five together for about 10 s: close identical targets |
 | `mot_junction` | Two streams of 4 identical cars interleaving through a four-way junction | The drone watches the junction with the camera on a fixed compass heading, then crosses past it. Boxes cross and overlap |
 | `mot_drone_motion` | 8 identical cars, 8 m/s, about 105 m long | The drone yaws ±45° at about 40°/s, dashes to 15 m/s and stops hard, then climbs to 57 m, with the camera fixed to the nose, while the convoy is in view (about 60–87 s). Stresses camera motion compensation |
+| `reid_consistency` | 4 cars of different colours (red, blue, green, yellow) lapping crossing circuits on the runway, 6–10 m/s (`reid_vehicles.yml`) | Two drones 100 m apart at 150 m, cameras straight down, hold for 5 min. Several cars per frame, crossings and occlusions, and the same car in both cameras where the views overlap (the middle 78 m): data for a central ReID. Needs the geofence ceiling above 150 m |
 
 Each mission names its own traffic (`actors:`), respawned at `mission start`.
 The cars wait in formation along their route (`start_at_m`, `stop_short_m`)
