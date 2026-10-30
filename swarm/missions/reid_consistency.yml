@@ -9,7 +9,9 @@
 # of the two views, and re-appearing after crossings and occlusions, is the
 # data a central ReID needs.
 #
-#   mission load reid_consistency   then   mission upload   then   mission start
+#   ./run_cesium_sim.sh --qgc --ground-truth --mission reid_consistency
+#   then, once it says World ready:   mission start
+#   (or without --mission: mission load reid_consistency, mission upload, mission start)
 #
 # Geometry: the drones sit over the runway's centreline (heading 033), 50 m
 # either side of the circuit's centre (Drone1 the north-east point, Drone2

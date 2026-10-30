@@ -254,6 +254,12 @@ def parse_args():
         "one from --lat/--lon",
     )
     parser.add_argument(
+        "--mission",
+        metavar="NAME",
+        help="with --qgc: once the world is ready, load this mission (a file, or a name "
+        "in missions/) and upload it, so 'mission start' is all that's left",
+    )
+    parser.add_argument(
         "--time",
         metavar="HH:MM|now",
         help="time of day at the site, which places the sun (default: the map's "
@@ -269,7 +275,10 @@ def parse_args():
         default=DEFAULT_TIMEZONE,
         help=f"the site's time zone, for --time and `sim time` (default {DEFAULT_TIMEZONE})",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.mission and not args.qgc:
+        parser.error("--mission needs --qgc (without it the sim flies its scripted demo)")
+    return args
 
 
 def lookup_ground_alt(lat, lon):
@@ -1437,6 +1446,12 @@ async def main():
                 + (", or type commands here (e.g. 'all takeoff', 'help')" if args.drones > 1 else "")
                 + ". Type 'goto LAT LON [HEADING]' to move. Ctrl+C here or close the sim to stop."
             )
+            if args.mission:
+                # As if typed: then `mission start` is all that's left
+                for line in (f"mission load {args.mission}", "mission upload"):
+                    station.commands.put_nowait((line, False))
+                projectairsim_log().info(f"Mission {args.mission}: loading and uploading; "
+                                         "type 'mission start' to fly it")
             await wait_while_sim_alive(session)
         elif args.drones == 1 and not session.aircraft[0].capabilities.hovers:
             projectairsim_log().info("The scripted demo is a quadrotor's; fly the "

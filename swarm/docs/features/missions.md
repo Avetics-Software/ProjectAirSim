@@ -65,6 +65,9 @@ mission upload               # to every drone in the file (mission upload 1: Dro
 mission start                # arms, flies it; mission start 1: Drone1 only
 ```
 
+Or have the sim load and upload it once the world is ready, so only `mission
+start` is left to type: `./run_cesium_sim.sh --qgc --mission my_mission`.
+
 Several drones, or a mix of aircraft: list each drone in the mission file by
 name and give it its `model:` in `config.yml` (see [aircraft](aircraft.md)).
 

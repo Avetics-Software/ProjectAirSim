@@ -132,6 +132,7 @@ and mission are cleared: PX4 keeps both on disk across restarts.
 | `--gt-rate HZ` | 2 | Labelled frames saved per second per drone |
 | `--tile-wait SEC` | 90 | Longest time to wait for the ground under the drone to load |
 | `--scene FILE` | | Load a scene from `sim_config/` as-is instead of building one from `--lat/--lon` |
+| `--mission NAME` | | With `--qgc`: once the world is ready, `mission load NAME` and `mission upload`, so only `mission start` is left ([missions](features/missions.md)) |
 | `--time HH:MM\|now`, `--date YYYY-MM-DD` | the map's sun, today | Time of day at the site, which places the sun ([Time of day](#time-of-day)) |
 | `--timezone ZONE` | `Asia/Singapore` | The site's time zone (IANA name) for `--time` and `sim time` |
 
