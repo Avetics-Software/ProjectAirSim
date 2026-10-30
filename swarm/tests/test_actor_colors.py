@@ -73,5 +73,40 @@ class ReidScenarioTests(unittest.TestCase):
             self.assertGreaterEqual(len(opts["waypoints"]), 3)
 
 
+class ReidScenarioTimingTests(unittest.TestCase):
+    """The cars have no traffic logic: they are timed never to meet. Run them
+    as the sim does (constant speed along their waypoints, looping, in the
+    sim's own metres) and check no two ever come close."""
+
+    MIN_GAP_M = 6.0  # centre to centre; cars are 4.5 m long
+
+    def test_the_cars_never_meet(self):
+        import itertools
+        import math
+
+        import numpy as np
+        from projectairsim.utils import geo_to_ned_coordinates
+
+        home = {"latitude": 1.413425, "longitude": 103.865, "altitude": 12.0}
+        with open(os.path.join(SWARM, "missions", "scenarios", "reid_vehicles.yml")) as f:
+            actors = expand_actors(yaml.safe_load(f))
+        times = np.arange(0.0, 600.0, 0.05)
+        tracks = {}
+        for _, opts in actors:
+            path = [geo_to_ned_coordinates(home, [lat, lon, 12.0])[:2]
+                    for lat, lon in opts["waypoints"]]
+            path.append(path[0])  # a loop
+            legs = [math.dist(p, q) for p, q in zip(path, path[1:])]
+            ends = np.cumsum(legs)
+            arc = (float(opts["speed"]) * times) % ends[-1]
+            leg = np.searchsorted(ends, arc, side="right").clip(max=len(legs) - 1)
+            frac = (arc - (ends[leg] - np.array(legs)[leg])) / np.array(legs)[leg]
+            p, q = np.array(path[:-1])[leg], np.array(path[1:])[leg]
+            tracks[opts["name"]] = p + (q - p) * frac[:, None]
+        for a, b in itertools.combinations(tracks, 2):
+            gap = np.min(np.linalg.norm(tracks[a] - tracks[b], axis=1))
+            self.assertGreater(gap, self.MIN_GAP_M, f"{a} and {b} come within {gap:.1f} m")
+
+
 if __name__ == "__main__":
     unittest.main()

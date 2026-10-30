@@ -1,70 +1,83 @@
 # ReID scenario: four cars of different colours lapping crossing circuits on
 # Seletar's runway 03/21 (43 m wide, heading 033), 450 m up it from the spawn,
 # so that the drones of missions/reid_consistency.yml (60 m apart at 150 m,
-# cameras straight down at 2x) see several cars at once, crossing and
-# overtaking, and the same car in both cameras where their views overlap.
+# cameras straight down at 2x) see several cars at once, crossing, and the
+# same car in both cameras where their views overlap.
 #
 # Positions are along/across the runway's OpenStreetMap centreline from the
 # circuit's centre (1.416647, 103.867459): along -65..65 m (south-west to
-# north-east), across -15..15 m (north-west to south-east). At 2x each camera
+# north-east), across -17..17 m (north-west to south-east). At 2x each camera
 # sees about 89 m along the runway by 50 m across; together they cover
 # -74..74 m and overlap over the middle 29 m, so every car stays in view.
 #
-# Straight legs (follow_roads: false) on the runway pavement. Cars don't avoid
-# each other: at crossings they pass through each other, which in the image
-# is an occlusion. `mission start` respawns them at their first waypoint, so
-# every run starts the same.
+# The cars have no traffic logic, so they are timed not to meet: every car
+# laps in exactly 34 s (red and blue once, green and yellow twice), so the
+# whole pattern repeats every 34 s, and each starts at the point of its
+# circuit (its first waypoint) where no two are ever closer than about 7 m,
+# centre to centre (checked over 30 minutes, with the sim's own geo-to-metres
+# conversion). Each speed is its circuit's length in the sim / 34 s: change a
+# waypoint or a speed and the timing no longer holds. The plan was computed by
+# searching the four starting points for the largest closest approach.
+#
+# Straight legs (follow_roads: false) on the runway pavement. `mission start`
+# respawns the cars at their first waypoint, so every run is the same.
 defaults:
   vehicle: {asset: SKM_SportsCar, length: 4.5, align_to_ground: true, follow_roads: false}
 
 actors:
-# Red: the big circuit round the whole area (along -65..65, across -12..12), 10 m/s
+# Red: the big circuit round the whole area (along -65..65, across -12..12),
+# once per 34 s
 - name: RedCar
   kind: vehicle
   color: red
-  speed: 10
+  speed: 9.020054
   mode: loop
   waypoints:
-  - [1.416217, 103.86705]
-  - [1.417195, 103.867689]
-  - [1.417077, 103.867869]
-  - [1.416099, 103.86723]
+  - [1.4162175, 103.8670495]
+  - [1.4171948, 103.8676889]
+  - [1.4170768, 103.8678694]
+  - [1.4160995, 103.86723]
 
-# Blue: a bow-tie across the area; crosses itself in the middle (where both
-# cameras see it) and the red circuit near each end, 8 m/s
+# Blue: a bow-tie across the area (along -58..58, across -15..15); crosses
+# itself in the middle, where both cameras see it, and the red circuit near
+# each end; once per 34 s
 - name: BlueCar
   kind: vehicle
   color: blue
-  speed: 8
+  speed: 8.777581
   mode: loop
   waypoints:
-  - [1.416285, 103.867061]
-  - [1.417009, 103.867858]
-  - [1.417157, 103.867632]
-  - [1.416137, 103.867287]
+  - [1.4169777, 103.8678227]
+  - [1.4170094, 103.8678576]
+  - [1.4171569, 103.867632]
+  - [1.4161373, 103.867287]
+  - [1.4162848, 103.8670614]
 
-# Green: a small loop in the south-west half (along -50..-10, its north-east
-# side in the shared view), cutting across the red and blue paths, 6 m/s
+# Green: a small loop in the south-west half (along -50..-10, across -17..17),
+# its north-east side in the shared view, cutting across the red and blue
+# paths; twice per 34 s
 - name: GreenCar
   kind: vehicle
   color: green
-  speed: 6
+  speed: 8.675845
   mode: loop
   waypoints:
-  - [1.416345, 103.867101]
-  - [1.416197, 103.867326]
-  - [1.416498, 103.867523]
-  - [1.416646, 103.867297]
+  - [1.4162478, 103.8672494]
+  - [1.4161876, 103.8673414]
+  - [1.4164884, 103.8675381]
+  - [1.4166555, 103.8672824]
+  - [1.4163548, 103.8670857]
 
 # Yellow: a small loop in the north-east half (along 10..50), the other way
-# round from green, 7 m/s
+# round from green; twice per 34 s
 - name: YellowCar
   kind: vehicle
   color: yellow
-  speed: 7
+  speed: 8.675467
   mode: loop
   waypoints:
-  - [1.416796, 103.867396]
-  - [1.417097, 103.867593]
-  - [1.416949, 103.867818]
-  - [1.416649, 103.867621]
+  - [1.4167104, 103.8676834]
+  - [1.4166387, 103.8676365]
+  - [1.4168059, 103.8673808]
+  - [1.4171066, 103.8675776]
+  - [1.4169394, 103.8678332]
