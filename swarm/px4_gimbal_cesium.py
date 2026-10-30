@@ -6,7 +6,7 @@ Flies a PX4 quadrotor with a gimbaled payload camera in a real-world location
 (Google Photorealistic 3D Tiles streamed through Cesium for Unreal). The default
 spawn is Seletar Airport's runway, Singapore.
 
-- The GimbalCam is published as RTSP (rtsp://127.0.0.1:8554/gimbal by default)
+- The GimbalCam is published as RTSP (rtsp://127.0.0.1:8554/gimbal1 by default)
   and announced to QGroundControl as a MAVLink camera, so QGC shows the video
   and its zoom controls work.
 - The gimbal can be steered from QGC, or from the dashboard window: W/A/S/D to
@@ -17,7 +17,7 @@ spawn is Seletar Airport's runway, Singapore.
   camera_properties.json; zooming moves along the lens's focal-length range.
 - --spotter opens a window to spawn and walk a human around the world.
 - --drones N flies a swarm: N PX4 drones side by side, each with its own
-  PX4, gimbal camera and RTSP stream (/gimbal, /gimbal2, ...). Fly them from
+  PX4, gimbal camera and RTSP stream (/gimbal1, /gimbal2, ...). Fly them from
   QGC (one UDP link, servers 127.0.0.1:18570, 18571, ...) or from this
   terminal (`all takeoff`, `2 goto LAT LON ALT`, `all search ...`; see help).
   Keys 1-9 in the dashboard pick which drone it shows and steers.
@@ -204,12 +204,13 @@ def parse_args():
     parser.add_argument(
         "--rtsp-url",
         default="rtsp://127.0.0.1:8554/gimbal",
-        help="where to publish the GimbalCam video",
+        help="where to publish the GimbalCam video: drone N at this plus N "
+        "(rtsp://127.0.0.1:8554/gimbal1, .../gimbal2, ...)",
     )
     parser.add_argument(
         "--rtsp-advertise-url",
         help="video URL announced to QGC and companion computers, if different "
-        "from --rtsp-url (e.g. this laptop's LAN address)",
+        "from --rtsp-url (e.g. this laptop's LAN address); drone N's is this plus N",
     )
     parser.add_argument("--no-rtsp", action="store_true", help="don't publish video")
     parser.add_argument(
@@ -1253,8 +1254,8 @@ def quiet_terminal(verbose):
 
 
 def drone_url(url, index):
-    """Drone 1 streams at the URL given, drone N at the same path plus N."""
-    return url if index == 0 or not url else f"{url}{index + 1}"
+    """Drone N streams at the URL given plus N: /gimbal1, /gimbal2, ..."""
+    return f"{url}{index + 1}" if url else url
 
 
 class SimFaults:

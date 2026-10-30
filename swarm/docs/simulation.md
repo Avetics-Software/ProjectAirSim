@@ -56,7 +56,7 @@ These are handled by `run_cesium_sim.sh`; everything else goes to
 | Option | Default | Meaning |
 |---|---|---|
 | `--px4-params FILE` | | Extra PX4 parameters applied at boot, after the model's own (`px4_params.parm` for `quad_px4`). Accepts `NAME VALUE` lines (like ArduPilot `.parm` files, `#` comments allowed) or a QGC `.params` export. Repeatable; later files win |
-| `--pi-ip IP` | | Also send MAVLink to a companion computer at `IP`, and announce the video at `rtsp://<this laptop's LAN IP>:8554/gimbal` |
+| `--pi-ip IP` | | Also send MAVLink to a companion computer at `IP`, and announce drone N's video at `rtsp://<this laptop's LAN IP>:8554/gimbalN` |
 | `--pi-ports P1,P2` | 15540,15541 | Companion-computer MAVLink UDP ports (as `--serial1/2` in the old ArduPilot scripts) |
 | `--config FILE` | `config.yml` | The drones, their companions and the ground station's settings (see [The config file](#the-config-file)); `--drones`, `--pi-ip` and `--layer-step` override it. `--fleet` is the same. (see [Companions on several drones](#companions-on-several-drones)). Replaces `--drones` and `--pi-ip` |
 
@@ -125,7 +125,7 @@ and mission are cleared: PX4 keeps both on disk across restarts.
 | `--camera-props FILE` | `camera_properties.json` | GimbalCam resolution, sensor and zoom lens |
 | `--spotter` | off | Open the spotter window |
 | `--qgc` | off | Manual mode instead of the scripted demo |
-| `--rtsp-url URL` | `rtsp://127.0.0.1:8554/gimbal` | Where the GimbalCam video is published |
+| `--rtsp-url URL` | `rtsp://127.0.0.1:8554/gimbal` | Where the GimbalCam video is published: drone N at this plus N (`/gimbal1`, `/gimbal2`, ...) |
 | `--rtsp-advertise-url URL` | same as `--rtsp-url` | Video address announced to QGC and the Pi (set by `--pi-ip`) |
 | `--no-rtsp` | off | Don't publish video |
 | `--ground-truth [DIR]` | off (`datasets/sim_gt/` in the ProjectAirSim checkout) | Save labelled GimbalCam frames from every drone (see [Labelled frames](#labelled-frames-for-detection-tracking-and-reid)) |
@@ -367,7 +367,7 @@ saves the Cesium tiles' custom-depth pass.
 
 starts Drone1 at the spawn point and Drone2, Drone3 in a line to its right
 (`--drone-spacing`), each with its own PX4 instance, gimbal camera, MAVLink
-camera and RTSP stream (`/gimbal`, `/gimbal2`, `/gimbal3`). Without `--qgc`,
+camera and RTSP stream (`/gimbal1`, `/gimbal2`, `/gimbal3`). Without `--qgc`,
 the swarm flies a hands-off demo: takeoff, a search of a box ahead of the
 spawn, return and land.
 
@@ -627,9 +627,9 @@ The spotter's control and POV windows stay separate.
 **Video stream:** the GimbalCam is published once and served two ways:
 
 - **WebRTC** (lowest latency, always the newest frame): open
-  `http://127.0.0.1:8889/gimbal` in a browser.
-- **RTSP**: `rtsp://127.0.0.1:8554/gimbal` (H.264 at the camera's resolution),
-  for QGC, the Pi or `cv2.VideoCapture("rtsp://127.0.0.1:8554/gimbal")`. In
+  `http://127.0.0.1:8889/gimbal1` in a browser (drone N: `/gimbalN`).
+- **RTSP**: `rtsp://127.0.0.1:8554/gimbal1` (H.264 at the camera's resolution),
+  for QGC, the Pi or `cv2.VideoCapture("rtsp://127.0.0.1:8554/gimbal1")`. In
   QGC, turn on *Low Latency Mode* under Application Settings → Video.
 
 **QGroundControl:** add a manual link under Application Settings → Comm Links:
@@ -717,7 +717,7 @@ sideways, hold Shift to run. The view comes from an invisible camera robot
 With `--pi-ip`, PX4 sends MAVLink to the Pi on UDP 15540 and 15541 (like the
 old ArduPilot `--serial1/2 udpclient:` links). The Pi can:
 
-- read video from `rtsp://<laptop LAN IP>:8554/gimbal` (printed at startup)
+- read video from `rtsp://<laptop LAN IP>:8554/gimbalN` for drone N (printed at startup)
 - steer the gimbal through PX4's gimbal manager (`MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE`,
   then `GIMBAL_MANAGER_SET_ATTITUDE` to PX4 1/1)
 - zoom with `MAV_CMD_SET_CAMERA_ZOOM` to the camera component (1/100)
@@ -728,7 +728,7 @@ Allow UDP 15540-15541 and TCP 8554 through any firewall between the two.
 
 X's `rknn-sim-<airframe>-<autopilot>` profiles (branch `swarm-sim`) run X
 against this sim instead of a real camera and gimbal: they read
-`rtsp://<laptop>:8554/gimbal`, steer the sim gimbal through the autopilot's
+`rtsp://<laptop>:8554/gimbalN`, steer the sim gimbal through the autopilot's
 gimbal manager and zoom the sim camera. Run the one matching the drone's
 `model:` (its [aircraft](features/aircraft.md)); the sim logs which, per drone:
 
@@ -752,8 +752,12 @@ ssh radxa@192.168.199.99 'ln -sfn ../X_quad/venv ~/Code/X_sim_fw_ardupilot/venv'
 cd ~/Code/X_sim_fw_ardupilot && venv/bin/python main.py
 ```
 
-The profiles' `INPUT_RTSP` names the laptop's address (192.168.199.98); edit
-it in the profile's `config_cv.yml` if that changes.
+The profiles' `INPUT_RTSP` names the laptop's address (192.168.199.98) and a
+stream: set it to the drone's own, `/gimbal1` for Drone1, `/gimbal2` for
+Drone2 (the X repo's profiles still say `/gimbal`, the name before every drone
+was numbered). A board reading another drone's stream tracks that drone's view
+in its own Tracker. `deploy.sh` copies the profile from the X repo, so check
+`INPUT_RTSP` on the board after every deploy.
 
 The dashboard's main pane then always shows **Tracker**, X's annotated video
 (`rtsp://<radxa>:8554/tracker`), with GimbalCam (or ChaseCam, picked with View
@@ -804,7 +808,7 @@ drones:
 ```
 
 Drone N's PX4 sends MAVLink to its companion on UDP 15540 and 15541, and its
-video is `rtsp://<laptop>:8554/gimbalN` (`/gimbal` for Drone1), so each Radxa's
+video is `rtsp://<laptop>:8554/gimbalN` (`/gimbal1` for Drone1), so each Radxa's
 `INPUT_RTSP` must name its own drone's stream. The dashboard shows the selected
 drone's Tracker (keys 1-9 pick the drone). The sim reads only how many drones
 there are and their companions; the rest of the file is for real drones.
@@ -813,7 +817,7 @@ there are and their companions; the rest of the file is for real drones.
 
 [Ports](ports.md) lists every port per drone, for PX4 and ArduPilot, and what
 a companion computer needs: X listens on UDP 15540 and 15541 for MAVLink, takes
-the camera from `rtsp://<laptop>:8554/gimbal[N]`, and the dashboard reaches it
+the camera from `rtsp://<laptop>:8554/gimbalN`, and the dashboard reaches it
 on UDP 5556. The simulator API is TCP 8989/8990, RTSP is TCP 8554.
 
 ## Logs and disk space

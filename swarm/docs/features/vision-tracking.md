@@ -18,7 +18,7 @@ drones:
 ```
 
 In the sim, each Radxa runs X's `rknn-sim-*` profile for its drone's model, whose `INPUT_RTSP` must
-name its own drone's stream: `rtsp://<laptop>:8554/gimbal` for Drone1,
+name its own drone's stream: `rtsp://<laptop>:8554/gimbal1` for Drone1,
 `/gimbal2` for Drone2, and so on. The sim's PX4 for that drone sends it
 MAVLink on UDP 15540/15541. Deploying and running X is in the
 [simulation guide](../simulation.md#x-vision-pipeline-on-a-radxa-a5x_rpi_release-rknn-sim--profiles).

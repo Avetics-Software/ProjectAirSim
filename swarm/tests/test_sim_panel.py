@@ -159,5 +159,18 @@ class SimPanelTests(unittest.TestCase):
         self.assertIn("noise      2.0 levels", self.panel._camera_now.cget("text"))
 
 
+
+class StreamNameTests(unittest.TestCase):
+    def test_every_drone_is_numbered_from_1(self):
+        try:
+            from px4_gimbal_cesium import drone_url
+        except ImportError as err:
+            self.skipTest(f"px4_gimbal_cesium won't import: {err}")
+        base = "rtsp://192.168.199.98:8554/gimbal"
+        self.assertEqual([drone_url(base, i) for i in range(3)],
+                         [base + "1", base + "2", base + "3"])
+        self.assertEqual(drone_url("", 0), "")  # --no-rtsp: none
+
+
 if __name__ == "__main__":
     unittest.main()

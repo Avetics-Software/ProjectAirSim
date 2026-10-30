@@ -18,7 +18,7 @@ This is the short version for the Pi. The rest of the page is the detail.
 |---|---|---|
 | autopilot → Pi | UDP **15540** | MAVLink telemetry (X's `TELEMETRY_MAVLINK_PORT`) |
 | autopilot → Pi | UDP **15541** | MAVLink for the gimbal (X's `GIMBAL_MAVLINK_PORT`) |
-| Pi pulls from laptop | TCP **8554** | the sim camera: `rtsp://<laptop LAN IP>:8554/gimbal` for Drone1, `/gimbal2` for Drone2, ... (X's `INPUT_RTSP`) |
+| Pi pulls from laptop | TCP **8554** | the sim camera: `rtsp://<laptop LAN IP>:8554/gimbal1` for Drone1, `/gimbal2` for Drone2, ... (X's `INPUT_RTSP`) |
 | ground station → Pi | UDP **5556** | click-to-track, control and heartbeat (X's `GCS_INPUT_PORT`) |
 | laptop pulls from Pi | TCP **8554** | X's annotated video, `rtsp://<Pi IP>:8554/tracker` (the Pi's own MediaMTX) |
 
@@ -75,7 +75,7 @@ Drone1 `quad_px4`, Drone2 `quad_arducopter`, Drone3 `x8_arduplane`, each with a 
 | Payload link (swarm script) | UDP 14030 | UDP 14031 | UDP 14032 |
 | QGC | server 127.0.0.1:18570 | to 14550 | to 14550 |
 | Companion MAVLink | 14590/14591 → Pi 15540/15541 | → Pi 15540/15541 | → Pi 15540/15541 |
-| Sim camera for its Pi | `rtsp://<laptop>:8554/gimbal` | `.../gimbal2` | `.../gimbal3` |
+| Sim camera for its Pi | `rtsp://<laptop>:8554/gimbal1` | `.../gimbal2` | `.../gimbal3` |
 
 ## Shared by the whole sim
 
@@ -83,8 +83,8 @@ Drone1 `quad_px4`, Drone2 `quad_arducopter`, Drone3 `x8_arduplane`, each with a 
 |---|---|
 | TCP **8989** | Project AirSim topics (images, poses), from Unreal |
 | TCP **8990** | Project AirSim services (load scene, spawn objects, ...), from Unreal |
-| TCP **8554** | MediaMTX RTSP on the laptop: `/gimbal`, `/gimbal2`, ... (`mediamtx_rtsp.yml`); run_cesium_sim.sh reuses one already running |
-| TCP **8889** | MediaMTX WebRTC, for watching in a browser: `http://127.0.0.1:8889/gimbal` |
+| TCP **8554** | MediaMTX RTSP on the laptop: `/gimbal1`, `/gimbal2`, ... (`mediamtx_rtsp.yml`); run_cesium_sim.sh reuses one already running |
+| TCP **8889** | MediaMTX WebRTC, for watching in a browser: `http://127.0.0.1:8889/gimbal1` |
 | UDP **14550** | QGC listens; ArduPilot drones send to it, PX4 drones are reached through their 18570 + N servers |
 
 At start, run_cesium_sim.sh refuses to run if 8989, 8990 or any PX4 drone's

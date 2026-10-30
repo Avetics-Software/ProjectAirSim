@@ -29,7 +29,7 @@ drones:
 | Settings | The same `swarm:`, `deconfliction:`, `safety:` and `controls:` sections | the same |
 | Drones | One PX4 SITL per drone, named Drone1, Drone2, ... | Your PX4s; each needs its own `MAV_SYS_ID` |
 | MAVLink | Each PX4 on its own UDP port (14030 + N) | One shared link (radio, mesh, mavlink-router), or one per drone |
-| Video | The sim's GimbalCam over RTSP (`/gimbal`, `/gimbal2`, ...) | Each drone's `video:` stream; `chase_video:` for a second camera |
+| Video | The sim's GimbalCam over RTSP (`/gimbal1`, `/gimbal2`, ...) | Each drone's `video:` stream; `chase_video:` for a second camera |
 | Companions | `companion:` (PX4 sends it MAVLink on 15540/15541) | `companion:` |
 | Zoom | The sim's camera field of view | `MAV_CMD_SET_CAMERA_ZOOM` to the drone's MAVLink camera |
 | Extra | Objects, moving actors, `goto` a new location | |

@@ -24,7 +24,7 @@
 # --list). px4_gimbal_cesium.py's --model sets it for drones without one.
 #   --pi-ip IP             also send MAVLink to a companion computer at IP, on
 #                          UDP ports --pi-ports (default 15540,15541), and
-#                          announce the video at rtsp://<this laptop>:8554/gimbal
+#                          announce the video at rtsp://<this laptop>:8554/gimbalN
 #   --pi-ports P1[,P2...]  companion-computer MAVLink ports
 #   --config FILE          the drones, their companions and the ground station's
 #                          settings [config.yml next to this script]; the same
@@ -217,13 +217,12 @@ print(count, ",".join(companions.get(i, "-") for i in range(count)))
         SCRIPT_ARGS=(--rtsp-advertise-url "rtsp://$LAN_IP:8554/gimbal" ${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"})
         n=1
         for ip in ${COMPANIONS//,/ }; do
-            suffix=$([ $n -gt 1 ] && echo $n || true)
-            [ "$ip" != "-" ] && echo "Drone$n companion computer $ip: MAVLink on UDP $PI_PORTS, video at rtsp://$LAN_IP:8554/gimbal$suffix"
+            [ "$ip" != "-" ] && echo "Drone$n companion computer $ip: MAVLink on UDP $PI_PORTS, video at rtsp://$LAN_IP:8554/gimbal$n"
             n=$((n + 1))
         done
     fi
 
-    echo "GimbalCam video: rtsp://127.0.0.1:8554/gimbal (QGC, Pi) or http://127.0.0.1:8889/gimbal (browser, WebRTC)"
+    echo "GimbalCam video: rtsp://127.0.0.1:8554/gimbal1 (QGC, Pi) or http://127.0.0.1:8889/gimbal1 (browser, WebRTC)"
     [ "$DRONES" -gt 1 ] && echo "  drone N of the swarm: .../gimbalN (e.g. http://127.0.0.1:8889/gimbal2)"
 
     # --- Simulator ---------------------------------------------------------------

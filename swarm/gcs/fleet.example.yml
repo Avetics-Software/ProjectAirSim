@@ -5,8 +5,7 @@
 #                ../config.yml). The sim reads the drones' models, companions
 #                and the settings; it makes one autopilot per drone (Drone1,
 #                Drone2, ...) and sets their MAVLink, system ids and video
-#                itself (drone N: system id N, rtsp://<laptop>:8554/gimbalN,
-#                with /gimbal for drone 1).
+#                itself (drone N: system id N, rtsp://<laptop>:8554/gimbalN).
 
 # MAVLink link that carries every drone (each with its own system id): a
 # telemetry radio, a mesh, or mavlink-router. Any pymavlink connection string,
