@@ -90,7 +90,9 @@ class CameraWindows:
     the gimbal. X ignores them while it tracks, so W/A/S/D, G and C drop the
     track first.
     STRIKE (top right) arms X's strike on the selected drone; pressed again
-    it releases it.
+    it releases it. The Track object ID field seeds the tracker on the ID:<n>
+    label X draws on its video, so a known object can be selected without
+    clicking it.
 
     It is a Tk window: OpenCV's Qt windows zoom the whole image on the mouse
     wheel, which can't be turned off.
@@ -323,6 +325,23 @@ class CameraWindows:
             b.pack(side=tk.LEFT, padx=2)
             HoverTip(b, tip)
 
+        # Row 2c: seed X's tracker on a known MOT object id (the ID:<n> label
+        # on the tracker video) instead of clicking the target.
+        row = tk.Frame(bar, bg=self.BG)
+        row.pack(fill=tk.X, padx=8, pady=2)
+        label(row, "Track object ID").pack(side=tk.LEFT)
+        self._object_id_var = tk.StringVar()
+        id_entry = tk.Entry(row, textvariable=self._object_id_var, width=8,
+                            bg=self.FIELD, fg=self.FG, insertbackground=self.FG,
+                            relief=tk.FLAT)
+        id_entry.pack(side=tk.LEFT, padx=(6, 4))
+        id_entry.bind("<Return>", lambda e: self._track_by_id())
+        id_button = button(row, "Track ID", self._track_by_id)
+        id_button.pack(side=tk.LEFT, padx=2)
+        HoverTip(id_entry, "Object ID from the ID:<n> label on X's video: seed the "
+                           "pixel tracker without clicking (Enter sends it)")
+        HoverTip(id_button, "Track that object (sends TRACK:<id> to X)")
+
         # Row 3: grid search of an area drawn on the map
         row = tk.Frame(bar, bg=self.BG)
         row.pack(fill=tk.X, padx=8, pady=2)
@@ -434,6 +453,27 @@ class CameraWindows:
         else:
             self._strike_button.configure(text="STRIKE OFF", state=tk.NORMAL, bg=self.DANGER,
                                           activebackground="#d04040")
+
+    def _track_by_id(self):
+        c = self.companion
+        if not c:
+            self.log("Track ID: the selected drone has no companion computer")
+            return
+        text = self._object_id_var.get().strip()
+        try:
+            track_id = int(text)
+            if track_id < 0:
+                raise ValueError
+        except ValueError:
+            self.log(f"Track ID {text!r} is not a non-negative number")
+            return
+        if c.mission_active:
+            self.log(f"{self.drone_name(self.selected)} is flying a mission that "
+                     "holds the camera: not tracking")
+            return
+        c.track_id(track_id)
+        self.log(f"Track: object ID {track_id}")
+        self._seq += 1
 
     def toggle_drawer(self, show=None):
         """Open or close the safety drawer at the right of the cameras."""

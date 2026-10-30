@@ -13,6 +13,8 @@ detects and tracks targets, and steers the gimbal itself. This side does what X'
   - shows the companion's annotated video (rtsp://<ip>:8554/tracker)
   - CLICK:x,y (in that video's pixels) to pick a target, after BOX:<size>
     for a dragged box (X has no DRAG), CANCEL to drop it
+  - TRACK:<id> to seed the tracker on a known MOT object id (the ID:<n> label
+    X draws on its video), so no click is needed
   - PITCH:/YAW: jog, ZOOM:IN/OUT/STOP and GIMBAL:CENTER, since the companion
     owns the gimbal while it runs
   - STRIKE:START / STRIKE:STOP to arm and release X's strike, in which X flies
@@ -60,7 +62,8 @@ class CompanionLink:
     # Commands
 
     def send(self, text):
-        if self.mission_active and text.startswith(("CLICK:", "BOX:", "PITCH:", "YAW:", "GIMBAL:")):
+        if self.mission_active and text.startswith(
+                ("CLICK:", "BOX:", "TRACK:", "PITCH:", "YAW:", "GIMBAL:")):
             return
         if not text.startswith("HEARTBEAT"):
             log.debug(f"{self.name} <- {text}")  # what the operator sent, for the log
@@ -92,6 +95,19 @@ class CompanionLink:
     def cancel(self):
         self.send("CANCEL")
         self.tracking, self.track_point = False, None
+
+    def track_id(self, track_id):
+        """Seed X's tracker on a known MOT object id (the ID:<n> overlay label).
+
+        X retries the id for a couple of seconds, so a track that is confirmed
+        a frame or two after the request still initialises. No click is
+        involved, and the object does not have to be on screen when the
+        operator types the id.
+        """
+        if self.mission_active:
+            return
+        self.tracking, self.track_point = True, None
+        self.send(f"TRACK:{int(track_id)}")
 
     def nudge(self, dx, dy):
         """Move the tracked point by (dx, dy) tracker pixels."""

@@ -767,6 +767,7 @@ or V) in the small pane beside it. It talks to X like its ground station
 | Input (Tracker pane) | Sends |
 |---|---|
 | Click a target / drag a box around it | `CLICK:x,y` / `BOX:size` then `CLICK` at the box centre (tracker-video pixels) |
+| **Track object ID** field, or `track ID [N]` | `TRACK:<id>`: seed X's tracker on a confirmed MOT track (the `ID:<n>` label on the tracker video) without clicking |
 | Right-click, or Esc | `CANCEL` |
 | Arrow keys | Nudge the tracked point by 8 px |
 | W / S, A / D (hold) | `PITCH:UP/DOWN`, `YAW:LEFT/RIGHT`, then `…:STOP` on release (cancels a track first) |
@@ -779,8 +780,10 @@ whichever view is shown. X ignores manual gimbal and zoom commands while it is
 tracking, so W/A/S/D and G cancel the track before steering; zoom does nothing
 until the track ends. A heartbeat goes out every 0.2 s, and the status panel shows whether
 the tracker video is arriving. `--companion IP` sets the companion without
-`--pi-ip`. Drone control is off in the `rknn-sim-*` profiles for now, so X
-ignores the STRIKE button there; fly the drone from the dashboard or QGC.
+`--pi-ip`. Drone control is enabled in the `rknn-sim-*` profiles: X owns the
+sticks only while STRIKE is armed; otherwise the swarm flies the drone. The
+track-by-ID command needs X's `OBJECT_TRACKER: bytetrack` (the sim profiles
+have it), because the number is the ByteTrack `ID:<n>` shown on the video.
 
 While a ground-station [mission](features/missions.md) holds the camera, X
 stands down (`MAVLINK_STAND_DOWN_IN_MISSION`): it keeps detecting and

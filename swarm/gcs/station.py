@@ -44,6 +44,8 @@ STATION_HELP = """  select N                              show and steer drone N
   zoom PERCENT [N]                      set the zoom (0 = widest, 100 = longest focal length)
   strike on|off [N]                     arm / release X's strike on drone N (needs its
                                         companion) [the selected drone]
+  track ID [N]                          seed X's tracker on a known MOT object id (the
+                                        ID:<n> label) [the selected drone]
 Safety (F2 opens the safety panel; Ctrl+H holds every drone):
   alerts                                list active alerts
   ack [all]                             acknowledge the most urgent alert, or all
@@ -634,6 +636,26 @@ class GroundStation:
                 print(f"{name} strike {'ARMED' if on else 'released'}")
             else:
                 print(f"{name} is flying a mission that holds the camera: not striking")
+        elif word == "track" and len(parts) in (2, 3):
+            try:
+                track_id = int(parts[1])
+                if track_id < 0:
+                    raise ValueError
+                index = int(parts[2]) - 1 if len(parts) == 3 else self.selected
+                if index < 0:
+                    raise IndexError
+                name = self.links[index].name
+            except (ValueError, IndexError):
+                print("Usage: track ID [DRONE]")
+                return
+            companion = self.companions.get(index)
+            if not companion:
+                print(f"{name} has no companion computer to track with")
+            elif companion.mission_active:
+                print(f"{name} is flying a mission that holds the camera: not tracking")
+            else:
+                companion.track_id(track_id)
+                print(f"{name} tracking object ID {track_id}")
         elif await self._safety_command(word, parts):
             pass
         elif await self.missions.run_command(parts):

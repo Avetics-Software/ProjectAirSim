@@ -75,6 +75,7 @@ The same dashboard and commands as the sim (see the sim guide's *Swarm* and
   steer the gimbal through PX4's gimbal manager and the zoom keys send
   `MAV_CMD_SET_CAMERA_ZOOM` to the drone's MAVLink camera (component 100).
 - **Companions:** with `companion:`, the Tracker view, click-to-track, the
+  Track object ID field (`TRACK:<id>` for the `ID:<n>` label X draws), the
   gimbal keys and the STRIKE button go to X on that drone, as in the sim.
 
 ## Before flying it for real

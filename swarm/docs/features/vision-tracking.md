@@ -34,6 +34,7 @@ the track drawn on it. GimbalCam or ChaseCam goes in the small pane beside it
 |---|---|
 | Click a target | Track it (`CLICK:x,y`) |
 | Drag a box around a target | Track that box: `BOX:size`, then `CLICK` at its centre |
+| Enter an object ID | Track the confirmed MOT track with that `ID:<n>` (`TRACK:<id>`), no click |
 | Right-click or Esc | Stop tracking (`CANCEL`) |
 | Arrow keys | Move the tracked point 8 px |
 | W/A/S/D (hold) | Jog the gimbal; stops on release. Cancels a track first |
