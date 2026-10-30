@@ -1,0 +1,76 @@
+# Strike test, fixed wing: straight passes at the target, back and forth.
+#
+# Instead of circling the target (strike_fw_r300_h120), the X8 flies a 2 km
+# straight line through TargetVehicle along the runway's heading (033/213),
+# 1 km either side of it, turns around beyond each end and flies back along
+# the same line: every pass runs straight at the target, which stays ahead of
+# the nose until the X8 passes over it. 120 m above home, 18 m/s (its cruise
+# airspeed): about 111 s a pass plus the turn. X has the camera from the
+# `track` step on.
+#
+# 30 passes (about 65 min), then it lands. Mission files can't repeat forever
+# yet (that needs a DO_JUMP step); `mission stop` (it then circles where it
+# is) or RTL ends it sooner.
+#
+#   ./run_cesium_sim.sh --qgc --config config_strike_fw.yml --mission strike_fw_passes_h120
+#   then, about a minute after World ready (ArduPilot's start-up):   mission start
+#   (with X's rknn-sim-fw-ardupilot profile on the companion, INPUT_RTSP .../gimbal1)
+#
+# The line: TargetVehicle 1.415268, 103.866441 (205 m N, 160 m E of home);
+# north-east end 1.422785, 103.871361, south-west end 1.407751, 103.861521.
+mission: strike_fw_passes_h120
+origin: home
+speed: 18
+actors: scenarios/strike_targets.yml
+# Uploaded by `mission upload`, before the mission: the line with 300 m beyond
+# each end and 400 m either side for the X8's turnarounds, the launch and the
+# landing approach (400 m back along 213 from home). The ceiling is the
+# config's; keep it above 120 m plus fence_margin_m (10 m).
+fence:
+  corners:                  # metres north/east of home
+    - {north: -1150, east: -900}
+    - {north: 1550, east: -900}
+    - {north: 1550, east: 1250}
+    - {north: -1150, east: 1250}
+  ceiling: 170
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 60
+      - look_at: {lat: 1.415268, lon: 103.866441, alt: 12}
+      - track: {target: TargetVehicle, tracker: x}   # arm STRIKE from here on
+      # Out along the line past the target, climbing to 120 m
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 1: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 2: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 3: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 4: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 5: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 6: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 7: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 8: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 9: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 10: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 11: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 12: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 13: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 14: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 15: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 16: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 17: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 18: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 19: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 20: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 21: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 22: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 23: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 24: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 25: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 26: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 27: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 28: to the north-east end
+      - goto: {lat: 1.407751, lon: 103.861521, alt: 120}   # pass 29: to the south-west end
+      - goto: {lat: 1.422785, lon: 103.871361, alt: 120}   # pass 30: to the north-east end
+      - land: {lat: 1.413425, lon: 103.865000, heading: 33,
+               approach_m: 400, approach_alt: 30}

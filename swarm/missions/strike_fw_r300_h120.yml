@@ -1,0 +1,55 @@
+# Strike test, fixed wing: circle the target, 120 m up.
+#
+# The X8's version of strike_quad_d200_h120 (a 200 m stand-off, 120 m up). A
+# fixed wing can't hold, so it flies to TargetVehicle and circles it for
+# 210 s at its own loiter radius, 150 m (WP_LOITER_RAD in
+# aircraft/params/x8_arduplane.param), 120 m above home: a steady bank of
+# about 12 deg, the target at about 185 m slant range all the way round, the
+# camera looking down about 36 deg. About 52 s a lap at 18 m/s, 4 laps. X has
+# the camera from the `track` step on; it pans the gimbal to hold the target.
+#
+# (Named r300 for the 300 m orbit it was planned with. A mission `hold` can't
+# set the radius: ArduPilot's NAV_LOITER_TIME always uses WP_LOITER_RAD. An
+# earlier version flew a 300 m ring of 16 waypoints instead, but the X8 rolled
+# hard at every waypoint; a smooth 300 m circle needs an `orbit` step,
+# NAV_LOITER_TURNS, not written yet.)
+#
+# At 1x a car is about 39 px long from 185 m (the quad's d200_h120: 32 px).
+#
+#   ./run_cesium_sim.sh --qgc --config config_strike_fw.yml
+#   mission load strike_fw_r300_h120
+#   mission upload
+#   mission start
+#   (with X's rknn-sim-fw-ardupilot profile on the companion, INPUT_RTSP .../gimbal1)
+#   or: ./run_cesium_sim.sh --qgc --config config_strike_fw.yml --mission strike_fw_r300_h120
+#
+# Arm STRIKE during the circling; the land step only runs if the strike has
+# not taken the aircraft out of AUTO.
+mission: strike_fw_r300_h120
+origin: home
+speed: 18
+actors: scenarios/strike_targets.yml
+# Uploaded by `mission upload`, before the mission: the circle (target 205 m
+# N, 160 m E of home, radius 150 m), the launch and the landing approach (400
+# m back along 213 from home), with room to spare for the X8's turns. The
+# ceiling is the config's; keep it above the circling height plus
+# fence_margin_m (10 m).
+fence:
+  corners:                  # metres north/east of home
+    - {north: -450, east: -330}
+    - {north: 610, east: -330}
+    - {north: 610, east: 570}
+    - {north: -450, east: 570}
+  ceiling: 170
+
+drones:
+  Drone1:
+    steps:
+      - takeoff: 60
+      - look_at: {lat: 1.415268, lon: 103.866441, alt: 12}
+      - track: {target: TargetVehicle, tracker: x}   # arm STRIKE from here on
+      # Circle the target at the X8's 150 m loiter radius, climbing to 120 m
+      - goto: {lat: 1.415268, lon: 103.866441, alt: 120}
+        hold: 210
+      - land: {lat: 1.413425, lon: 103.865000, heading: 33,
+               approach_m: 400, approach_alt: 30}
